@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*/__pycache__/
+*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+celerybeat-schedule
+celerybeat-schedule-shm
+celerybeat-schedule-wal
+
+dump.rdb
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.env
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+git_commands.txt
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Trading specific
+*.log
+*.log.*
+*.csv
+*.xlsx
+*.json
+/data/
+/backtest_results/
+/trading_results/
+/config/
+credentials.py
+api_keys.py
+secrets.py.DS_Store

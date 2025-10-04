@@ -1,0 +1,40 @@
+# Shared requirements for TradingBoost-Strategy monorepo
+# Install with: pip install -r requirements.txt
+
+# Web Framework
+fastapi==0.109.0
+uvicorn[standard]==0.25.0
+python-multipart==0.0.6
+
+# Async & Concurrency
+aiohttp==3.9.1
+celery==5.3.4
+redis==5.0.1
+
+# Database
+sqlalchemy==2.0.23
+aiosqlite==0.19.0
+
+# Trading & Exchange
+ccxt==4.2.7
+
+# Data Processing
+pandas==2.1.4
+numpy==1.26.2
+
+# Telegram Bot
+python-telegram-bot==20.7
+
+# Configuration
+python-dotenv==1.0.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Utilities
+pytz==2023.3.post1
+requests==2.31.0
+websockets==12.0
+bcrypt==4.1.2
+
+# Technical Indicators
+ta==0.11.0

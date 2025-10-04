@@ -1,0 +1,289 @@
+import traceback
+import time
+import json
+import hmac
+import hashlib
+import base64
+import requests
+import asyncio
+from datetime import datetime, timezone
+from HYPERRSI.src.api.dependencies import get_user_api_keys
+from HYPERRSI.src.core.database import redis_client
+class TriggerCancelClient:
+    def __init__(self, api_key, secret_key, passphrase, base_url="https://www.okx.com"):
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self.passphrase = passphrase
+        self.base_url = base_url
+        # 서버 시간 캐싱을 위한 변수 추가
+        self.server_time_offset = None  # 서버 시간과 로컬 시간의 차이
+        self.last_server_time_fetch = 0  # 마지막으로 서버 시간을 가져온 시간
+        self.server_time_cache_duration = 300  # 캐시 유효 시간(초)
+
+    def get_server_timestamp(self):
+        """
+        서버의 타임스탬프를 가져온 후,
+        만약 타임스탬프에 "T"가 포함되어 있지 않으면 (즉, 밀리초 형식이면)
+        ISO8601 형식 (예: "2025-02-04T11:59:58.512Z")으로 변환하여 반환합니다.
+        
+        서버 시간 요청을 최소화하기 위해 오프셋을 캐싱합니다.
+        """
+        current_time = time.time()
+        
+        # 캐시된 오프셋이 있고, 캐시 유효 시간 내라면 로컬 시간 기반으로 서버 시간 계산
+        if self.server_time_offset is not None and (current_time - self.last_server_time_fetch) < self.server_time_cache_duration:
+            # 로컬 시간 + 오프셋으로 서버 시간 추정
+            dt = datetime.fromtimestamp(current_time + self.server_time_offset, tz=timezone.utc)
+            return dt.isoformat("T", "milliseconds").replace("+00:00", "Z")
+        
+        # 캐시된 오프셋이 없거나 캐시가 만료되었으면 서버에서 새로 가져옴
+        max_retries = 3
+        retry_delay = 2  # 초 단위 초기 지연 시간
+        
+        for retry in range(max_retries):
+            try:
+                response = requests.get(f'{self.base_url}/api/v5/public/time')
+                
+                # 요청 한도 초과 확인
+                if response.status_code == 429 or "Too Many Requests" in response.text:
+                    if retry < max_retries - 1:  # 마지막 시도가 아니면 재시도
+                        wait_time = retry_delay * (2 ** retry)  # 지수 백오프
+                        print(f"서버 시간 조회: API 요청 한도 초과. {wait_time}초 후 재시도 ({retry+1}/{max_retries})...")
+                        time.sleep(wait_time)
+                        continue
+                
+                if response.status_code == 200:
+                    ts = response.json()['data'][0]['ts']
+                    
+                    # ts가 문자열이고 "T"가 있으면 ISO8601 형식으로 간주
+                    if isinstance(ts, str) and "T" in ts:
+                        server_time_str = ts
+                        # ISO8601 문자열에서 timestamp로 변환
+                        server_time = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+                    else:
+                        # 밀리초 형식이면 ISO8601으로 변환
+                        if isinstance(ts, str):
+                            ts = int(ts)
+                        server_time = ts / 1000  # 밀리초를 초로 변환
+                        dt = datetime.fromtimestamp(server_time, tz=timezone.utc)
+                        server_time_str = dt.isoformat("T", "milliseconds").replace("+00:00", "Z")
+                    
+                    # 서버 시간과 로컬 시간의 차이(오프셋) 계산 및 저장
+                    self.server_time_offset = server_time - current_time
+                    self.last_server_time_fetch = current_time
+                    #print(f"서버 시간 오프셋 업데이트: {self.server_time_offset:.3f}초")
+                    
+                    return server_time_str
+                
+                raise Exception(f"Failed to get server time: {response.text}")
+            except Exception as e:
+                if "Too Many Requests" in str(e) and retry < max_retries - 1:
+                    wait_time = retry_delay * (2 ** retry)  # 지수 백오프
+                    print(f"서버 시간 조회: API 요청 한도 초과. {wait_time}초 후 재시도 ({retry+1}/{max_retries})...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"Error getting server timestamp: {e}")
+                    # 캐시된 오프셋이 있으면 로컬 시간 기반으로 서버 시간 계산 시도
+                    if self.server_time_offset is not None:
+                        print("캐시된 서버 시간 오프셋을 사용합니다.")
+                        dt = datetime.fromtimestamp(current_time + self.server_time_offset, tz=timezone.utc)
+                        return dt.isoformat("T", "milliseconds").replace("+00:00", "Z")
+                    raise
+                    
+        print(f"서버 시간 조회: 최대 재시도 횟수({max_retries})를 초과했습니다.")
+        # 캐시된 오프셋이 있으면 로컬 시간 기반으로 서버 시간 계산 시도
+        if self.server_time_offset is not None:
+            print("캐시된 서버 시간 오프셋을 사용합니다.")
+            dt = datetime.fromtimestamp(current_time + self.server_time_offset, tz=timezone.utc)
+            return dt.isoformat("T", "milliseconds").replace("+00:00", "Z")
+        raise Exception("서버 시간 조회 실패: 최대 재시도 횟수 초과")
+
+    def _generate_signature(self, timestamp, method, request_path, body):
+        """
+        OKX API 인증 서명 생성:
+          prehash = timestamp + method + request_path + body
+          HMAC SHA256로 암호화 후 Base64 인코딩하여 반환
+        """
+        message = timestamp + method + request_path + body
+        mac = hmac.new(
+            self.secret_key.encode('utf-8'),
+            message.encode('utf-8'),
+            hashlib.sha256
+        )
+        return base64.b64encode(mac.digest()).decode()
+    
+    async def fetch_algo_orders(self, inst_id, ord_type):
+        max_retries = 3
+        retry_delay = 2  # 초 단위 초기 지연 시간
+        
+        for retry in range(max_retries):
+            try:
+                method = "GET"
+                request_path = f"/api/v5/trade/orders-algo-pending?instId={inst_id}&ordType={ord_type}"
+                url = self.base_url + request_path
+
+                # GET 요청이므로 body는 빈 문자열
+                body = ""
+
+                # 요청 직전에 서버 타임스탬프(ISO8601 형식)를 가져옴
+                timestamp = self.get_server_timestamp()
+                signature = self._generate_signature(timestamp, method, request_path, body)
+
+                headers = {
+                    "Content-Type": "application/json",
+                    "OK-ACCESS-KEY": self.api_key,
+                    "OK-ACCESS-SIGN": signature,
+                    "OK-ACCESS-TIMESTAMP": timestamp,
+                    "OK-ACCESS-PASSPHRASE": self.passphrase
+                }
+
+                response = requests.get(url, headers=headers)
+                response_data = response.json()
+                
+                # 요청 한도 초과 확인
+                if response_data.get('code') == '50011':  # Too Many Requests
+                    if retry < max_retries - 1:  # 마지막 시도가 아니면 재시도
+                        wait_time = retry_delay * (2 ** retry)  # 지수 백오프
+                        print(f"API 요청 한도 초과. {wait_time}초 후 재시도 ({retry+1}/{max_retries})...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                
+                return response_data
+
+            except Exception as e:
+                if "Too Many Requests" in str(e) and retry < max_retries - 1:
+                    wait_time = retry_delay * (2 ** retry)  # 지수 백오프
+                    print(f"API 요청 한도 초과. {wait_time}초 후 재시도 ({retry+1}/{max_retries})...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    print(f"Error in fetch_algo_orders: {str(e)}")
+                    traceback.print_exc()
+                    return None
+        
+        print(f"최대 재시도 횟수({max_retries})를 초과했습니다.")
+        return None
+
+    async def cancel_all_trigger_orders(self, inst_id, side : str = None, algo_type: str = "trigger", user_id : str = None):
+        """
+        인스턴스 ID에 해당하는 trigger 주문들을 모두 취소합니다.
+        side 파라미터가 주어지면, 해당 side("buy" 혹은 "sell")의 주문만 취소합니다.
+        """
+        try:
+            
+            order_side = side
+            if side == "long":
+                side = "buy"
+                order_side = "sell"
+            elif side == "short":
+                side = "sell"
+                order_side = "buy"
+            elif side == "buy":
+                side = "buy"
+                order_side = "sell"
+            elif side == "sell":
+                side = "sell"
+                order_side = "buy"
+            print(f"inst_id : {inst_id}, side : {side}, order_side : {order_side}, algo_type : {algo_type}")
+            # Fetch active trigger orders
+            active_orders = await self.fetch_algo_orders(inst_id=inst_id, ord_type=algo_type)
+            print("active_orders : ", active_orders)
+            
+            # active_orders가 None인 경우 처리
+            if active_orders is None:
+                print("Failed to fetch active orders: API 요청 한도 초과 또는 연결 오류")
+                return
+                
+            if active_orders.get('code') != '0':
+                print(f"Failed to fetch active orders: {active_orders.get('msg')}")
+                return
+
+            # Extract algoIds from active orders
+            algo_orders = active_orders.get('data', [])
+            if not algo_orders:
+                print("No active trigger orders found.")
+                # 주문이 없는 경우에도 성공 응답 반환 (code: 0, 성공)
+                return {
+                    'code': '0',
+                    'msg': 'No active orders to cancel',
+                    'data': []
+                }
+            #print(f"algo_orders: {algo_orders}")
+            if order_side is not None:
+                algo_orders = [
+                    order for order in algo_orders
+                    if order.get('side', '').lower() == order_side.lower()
+                ]
+                if not algo_orders:
+                    print(f"No active trigger orders found for side: {order_side}")
+                    # 특정 방향의 주문이 없는 경우에도 성공 응답 반환
+                    return {
+                        'code': '0',
+                        'msg': f'No active orders to cancel for side: {order_side}',
+                        'data': []
+                    }
+            # Prepare cancellation requests
+            cancel_requests = [
+                {"instId": inst_id, "algoId": order['algoId']}
+                for order in algo_orders
+            ]
+            
+            for order in algo_orders:
+                monitor_key = f"monitor:user:{user_id}:{inst_id}:{order['algoId']}"
+                await redis_client.delete(monitor_key)
+
+
+            # Send cancellation request
+            method = "POST"
+            request_path = "/api/v5/trade/cancel-algos"
+            url = self.base_url + request_path
+            body = json.dumps(cancel_requests)
+            timestamp = self.get_server_timestamp()
+            signature = self._generate_signature(timestamp, method, request_path, body)
+
+            headers = {
+                "Content-Type": "application/json",
+                "OK-ACCESS-KEY": self.api_key,
+                "OK-ACCESS-SIGN": signature,
+                "OK-ACCESS-TIMESTAMP": timestamp,
+                "OK-ACCESS-PASSPHRASE": self.passphrase
+            }
+
+            #print(f"Server timestamp: {timestamp}")
+            #print(f"Request URL: {url}")
+            #print(f"Request Headers: {headers}")
+            #print(f"Request Body: {body}")
+
+            response = requests.post(url, headers=headers, data=body)
+
+            #print(f"Response Status Code: {response.status_code}")
+            #print(f"Response Headers: {dict(response.headers)}")
+
+            response_data = response.json()
+            #print(f"Response Body: {json.dumps(response_data, indent=2)}")
+        
+            return response_data
+
+        except Exception as e:
+            print(f"Error in cancel_all_trigger_orders: {str(e)}")
+            traceback.print_exc()
+            return None
+
+async def main():
+    try:
+        api_keys = await get_user_api_keys("1709556958")
+        
+        client = TriggerCancelClient(
+            api_key=api_keys['api_key'],
+            secret_key=api_keys['api_secret'],
+            passphrase=api_keys['passphrase']
+        )
+        
+        result = await client.cancel_all_trigger_orders(inst_id = "BTC-USDT-SWAP", side = "short", algo_type="trigger", user_id="1709556958")
+        print(json.dumps(result, indent=4))
+
+    except Exception as e:
+        print(f"Error in main: {str(e)}")
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    asyncio.run(main())

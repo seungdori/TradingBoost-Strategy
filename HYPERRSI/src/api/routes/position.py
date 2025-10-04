@@ -1,0 +1,730 @@
+from fastapi import APIRouter, HTTPException, Path, Body
+from typing import Dict, List, Optional
+from datetime import datetime
+import logging
+import traceback
+import time
+import ccxt.async_support as ccxt
+from HYPERRSI.src.core.database import redis_client  # Redis 클라이언트 가져오기
+from pydantic import BaseModel, Field, field_validator
+from HYPERRSI.src.core.error_handler import log_error
+from shared.dtos.trading import OpenPositionRequest, ClosePositionRequest, PositionResponse
+import json
+logger = logging.getLogger(__name__)
+
+# ✅ FastAPI 라우터 설정
+router = APIRouter(prefix="/position", tags=["Position Management"])
+
+# ✅ Pydantic 모델 정의
+class Info(BaseModel):
+    adl: Optional[str]
+    avgPx: Optional[float]
+    instId: Optional[str]
+    instType: Optional[str]
+    lever: Optional[float]
+    mgnMode: Optional[str]
+    pos: Optional[float]
+    upl: Optional[float]
+    uplRatio: Optional[float]
+
+class Position(BaseModel):
+    info: Info
+    id: str
+    symbol: str
+    notional: Optional[float]
+    marginMode: str
+    liquidationPrice: Optional[float]
+    entryPrice: Optional[float]
+    unrealizedPnl: Optional[float]
+    realizedPnl: Optional[float]
+    percentage: Optional[float]
+    contracts: Optional[float]
+    contractSize: Optional[float]
+    markPrice: Optional[float]
+    side: str
+    timestamp: int
+    datetime: str
+    lastUpdateTimestamp: Optional[int]
+    maintenanceMargin: Optional[float]
+    maintenanceMarginPercentage: Optional[float]
+    collateral: Optional[float]
+    initialMargin: Optional[float]
+    initialMarginPercentage: Optional[float]
+    leverage: Optional[float]
+    marginRatio: Optional[float]
+    stopLossPrice: Optional[float]
+    takeProfitPrice: Optional[float]
+
+class ApiResponse(BaseModel):
+    timestamp: str
+    logger: str
+    message: str
+    data: List[Position]
+    position_qty: float
+
+
+class LeverageRequest(BaseModel):
+    leverage: float = Field(
+        default=10, 
+        ge=1, 
+        le=125, 
+        description="설정할 레버리지 값 (1-125)"
+    )
+    marginMode: str = Field(
+        default="cross",
+        description="마진 모드 (cross 또는 isolated)"
+    )
+    posSide: Optional[str] = Field(
+        default="long",
+        description="포지션 방향 (long/short/net). isolated 모드에서만 필요"
+    )
+
+    @field_validator('marginMode')
+    @classmethod
+    def validate_margin_mode(cls, v: str) -> str:
+        if v not in ['cross', 'isolated']:
+            raise ValueError('marginMode must be either "cross" or "isolated"')
+        return v
+
+    @field_validator('posSide')
+    @classmethod
+    def validate_pos_side(cls, v: str) -> str:
+        if v not in ['long', 'short', 'net']:
+            raise ValueError('posSide must be one of "long", "short", or "net"')
+        return v
+class LeverageResponse(BaseModel):
+    timestamp: str
+    message: str
+    symbol: str
+    leverage: float
+    marginMode: str
+    posSide: Optional[str]
+    status: str
+
+from HYPERRSI.src.trading.trading_service import TradingService
+
+
+# ----------------------------
+# 요청(Request) / 응답(Response) 모델
+# ----------------------------
+
+# Trading DTOs are now imported from shared.dtos.trading
+
+
+
+# ✅ Redis에서 사용자 API 키 가져오기
+async def get_okx_uid_from_telegram_id(telegram_id: str) -> str:
+    """
+    텔레그램 ID를 OKX UID로 변환하는 함수
+    
+    Args:
+        telegram_id: 텔레그램 ID
+        
+    Returns:
+        str: OKX UID
+    """
+    try:
+        # 텔레그램 ID로 OKX UID 조회
+        okx_uid = await redis_client.get(f"user:{telegram_id}:okx_uid")
+        if okx_uid:
+            return okx_uid.decode() if isinstance(okx_uid, bytes) else okx_uid
+        return None
+    except Exception as e:
+        logger.error(f"텔레그램 ID를 OKX UID로 변환 중 오류: {str(e)}")
+        return None
+
+async def get_identifier(user_id: str) -> str:
+    """
+    입력된 식별자가 텔레그램 ID인지 OKX UID인지 확인하고 적절한 OKX UID를 반환
+    
+    Args:
+        user_id: 텔레그램 ID 또는 OKX UID
+        
+    Returns:
+        str: OKX UID
+    """
+    # 11글자 이하면 텔레그램 ID로 간주하고 변환
+    if len(str(user_id)) <= 11:
+        okx_uid = await get_okx_uid_from_telegram_id(user_id)
+        if not okx_uid:
+            raise HTTPException(status_code=404, detail=f"텔레그램 ID {user_id}에 대한 OKX UID를 찾을 수 없습니다")
+        return okx_uid
+    # 12글자 이상이면 이미 OKX UID로 간주
+    return user_id
+
+async def get_user_api_keys(user_id: str) -> Dict[str, str]:
+    """
+    사용자 ID를 기반으로 Redis에서 OKX API 키를 가져오는 함수
+    """
+    try:
+        # 텔레그램 ID인지 OKX UID인지 확인하고 변환
+        okx_uid = await get_identifier(user_id)
+        
+        api_key_format = f"user:{okx_uid}:api:keys"
+        api_keys = await redis_client.hgetall(api_key_format)
+        
+        if not api_keys:
+            raise HTTPException(status_code=404, detail="API keys not found in Redis")
+        return api_keys
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_error(
+            error=e,
+            user_id=user_id,
+            additional_info={
+                "function": "get_user_api_keys",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+        logger.error(f"1API 키 조회 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching API keys: {str(e)}")
+
+
+# ✅ FastAPI 엔드포인트
+@router.get("/{user_id}/{symbol}", response_model=ApiResponse, include_in_schema=False)
+async def fetch_okx_position_with_symbol(
+    user_id: str = Path(..., example="1709556958", description="사용자 ID (텔레그램 ID 또는 OKX UID)"),
+    symbol: str = Path(..., example="BTC-USDT-SWAP")
+):
+    """리다이렉션 용도로만 사용되는 레거시 엔드포인트"""
+    return await fetch_okx_position(user_id, symbol)
+
+@router.get("/{user_id}", response_model=ApiResponse)
+async def fetch_okx_position(
+    user_id: str = Path(..., example="1709556958", description="사용자 ID (텔레그램 ID 또는 OKX UID)"),
+    symbol: str = None
+):
+    """
+    특정 사용자의 OKX 포지션 정보를 조회하는 API 엔드포인트
+
+    Args:
+        user_id (str): 사용자 ID (텔레그램 ID 또는 OKX UID)
+        symbol (str, optional): 심볼 (예: 'BTC-USDT-SWAP'). 미지정 시 모든 포지션 조회
+
+    Returns:
+        ApiResponse: OKX 포지션 정보
+    """
+    client = None
+    try:
+        # user_id를 OKX UID로 변환
+        okx_uid = await get_identifier(user_id)
+        
+        # ✅ Redis에서 API 키 가져오기        
+        api_keys = await get_user_api_keys(okx_uid)
+        # ✅ OKX 클라이언트 생성
+        client = ccxt.okx({
+            'apiKey': api_keys.get('api_key'),
+            'secret': api_keys.get('api_secret'),
+            'password': api_keys.get('passphrase'),
+            'enableRateLimit': True,
+            'options': {'defaultType': 'swap'}
+        })
+
+        await client.load_markets()
+
+        # ✅ 포지션 조회 (symbol 파라미터가 None이면 모든 포지션 조회)
+        if symbol:
+            positions = await client.fetch_positions([symbol], params={'instType': 'SWAP'})
+        else:
+            positions = await client.fetch_positions(params={'instType': 'SWAP'})
+        
+        try:
+            await client.close()  # CCXT 클라이언트 리소스 해제
+        except Exception as e:
+            log_error(
+                error=e,
+                user_id=okx_uid,
+                additional_info={
+                    "function": "close_client",
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+            logger.warning(f"CCXT 클라이언트 종료 중 오류 발생: {str(e)}")
+
+        # 포지션이 없거나 비어있는 경우 처리
+        if not positions or all(float(pos.get('info', {}).get('pos', 0)) == 0 for pos in positions):
+            if symbol:
+                # 특정 심볼에 대한 포지션이 없는 경우, Redis에 저장된 해당 종목 포지션 키(long, short)를 삭제
+                for side in ['long', 'short']:
+                    redis_key = f"user:{okx_uid}:position:{symbol}:{side}"
+                    await redis_client.delete(redis_key)
+                position_state_key = f"user:{okx_uid}:position:{symbol}:position_state"
+                current_state = await redis_client.get(position_state_key)
+                if current_state and int(current_state) != 0:
+                    await redis_client.set(position_state_key, "0")
+            return ApiResponse(
+                timestamp=str(datetime.utcnow()),
+                logger="root",
+                message="포지션이 없습니다",
+                data=[],
+                position_qty=0.0
+            )
+
+        # 유효한 포지션만 필터링
+        valid_positions = []
+        symbols_to_update = set()
+        
+        for pos in positions:
+            try:
+                # 심볼 정보 추출 (Redis 업데이트를 위해)
+                pos_symbol = pos.get('symbol')
+                if pos_symbol:
+                    symbols_to_update.add(pos_symbol)
+                
+                # None 값을 기본값으로 대체
+                pos.setdefault('notional', 0.0)
+                pos.setdefault('entryPrice', 0.0)
+                pos.setdefault('unrealizedPnl', 0.0)
+                pos.setdefault('realizedPnl', 0.0)
+                pos.setdefault('percentage', 0.0)
+                pos.setdefault('markPrice', 0.0)
+                pos.setdefault('side', 'none')
+                pos.setdefault('collateral', 0.0)
+                pos.setdefault('initialMargin', 0.0)
+                pos.setdefault('initialMarginPercentage', 0.0)
+                pos.setdefault('leverage', 0.0)
+                pos.setdefault('marginRatio', 0.0)
+
+                # info 객체 내부의 빈 문자열을 0으로 변환
+                if 'info' in pos:
+                    info = pos['info']
+                    for key in ['avgPx', 'lever', 'upl', 'uplRatio']:
+                        if key in info and info[key] == '':
+                            info[key] = 0.0
+
+                valid_position = Position(**pos)
+                valid_positions.append(valid_position)
+            except Exception as e:
+                log_error(
+                    error=e,
+                    user_id=okx_uid,
+                    additional_info={
+                        "function": "validate_position",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                )   
+                logger.warning(f"포지션 데이터 변환 중 오류 발생: {str(e)}")
+                continue
+
+        # === Redis 업데이트 로직 ===
+        symbols_to_process = [symbol] if symbol else symbols_to_update
+        
+        for curr_symbol in symbols_to_process:
+            # 해당 심볼에 대한 유효한 포지션 필터링
+            symbol_positions = [p for p in valid_positions if p.symbol == curr_symbol]
+            
+            # 양 방향("long", "short")에 대해, Redis에 저장된 포지션과 조회된 포지션을 비교하여 업데이트 또는 삭제
+            for side in ['long', 'short']:
+                redis_key = f"user:{okx_uid}:position:{curr_symbol}:{side}"
+                # 조회된 포지션 중 해당 side에 해당하는 포지션 찾기
+                fetched_position = next((p for p in symbol_positions if p.side.lower() == side), None)
+                # Redis에 저장된 데이터 가져오기 (hash 형식)
+                redis_data = await redis_client.hgetall(redis_key)
+                if fetched_position:
+                    # 조회된 포지션이 있는 경우
+                    new_position_info = fetched_position.json()
+                    # redis_data가 없거나 기존에 저장된 정보와 다르면 업데이트
+                    if not redis_data or redis_data.get("position_info") != new_position_info:
+                        position_data = {
+                            "position_info": new_position_info,
+                            "entry_price": str(fetched_position.entryPrice),
+                            "size": str(fetched_position.contracts),
+                            "leverage": str(fetched_position.leverage),
+                            "liquidation_price": str(fetched_position.liquidationPrice),
+                        }
+                        # 기존 initial_size와 last_entry_size 보존
+                        if redis_data:
+                            if "initial_size" in redis_data:
+                                position_data["initial_size"] = redis_data["initial_size"]
+                            if "last_entry_size" in redis_data:
+                                position_data["last_entry_size"] = redis_data["last_entry_size"]
+                        await redis_client.hset(redis_key, mapping=position_data)
+                else:
+                    # 조회된 포지션이 없는 경우, Redis에 해당 키가 있다면 삭제
+                    if redis_data:
+                        await redis_client.delete(redis_key)
+            
+            # === 추가 로직: position_state 업데이트 ===
+            position_state_key = f"user:{okx_uid}:position:{curr_symbol}:position_state"
+            current_state = await redis_client.get(position_state_key)
+            try:
+                position_state = int(current_state) if current_state is not None else 0
+            except Exception:
+                position_state = 0
+
+            # 존재하는 포지션 여부
+            long_exists = any(p for p in symbol_positions if p.side.lower() == "long")
+            short_exists = any(p for p in symbol_positions if p.side.lower() == "short")
+
+            # 조건 1: position_state > 1 인데 long 포지션이 없고 short 포지션만 있을 경우 -> -1로 업데이트
+            if position_state > 1 and (not long_exists) and short_exists:
+                position_state = -1
+            # 조건 2: position_state < -1 인데 short 포지션이 없고 long 포지션만 있을 경우 -> 1로 업데이트
+            elif position_state < -1 and (not short_exists) and long_exists:
+                position_state = 1
+            # 조건 3: position_state가 0이 아닌데, 양쪽 모두 포지션이 없으면 -> 0으로 업데이트
+            elif position_state != 0 and (not long_exists and not short_exists):
+                position_state = 0
+
+            await redis_client.set(position_state_key, str(position_state))
+        # ==============================
+        
+        return ApiResponse(
+            timestamp=str(datetime.utcnow()),
+            logger="root",
+            message="OKX 포지션 조회 결과",
+            data=valid_positions,
+            position_qty=len(valid_positions)
+        )
+
+    except Exception as e:
+        log_error(
+            error=e,
+            user_id=okx_uid,
+            additional_info={
+                "function": "fetch_okx_position",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+        if client is not None:
+            await client.close()
+        logger.error(f"포지션 조회 실패 ({symbol or '전체'}): {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching position: {str(e)}")
+    
+# API 엔드포인트 추가
+@router.post("/{user_id}/{symbol}/leverage", response_model=LeverageResponse)
+async def set_position_leverage(
+    user_id: str = Path(..., example="1709556958", description="사용자 ID (텔레그램 ID 또는 OKX UID)"),
+    symbol: str = Path(..., example="BTC-USDT-SWAP", description="거래 심볼"),
+    request: LeverageRequest = Body(..., description="레버리지 설정 요청")
+):
+    """
+    특정 심볼의 레버리지를 변경하는 API 엔드포인트
+
+    Args:
+        user_id: 사용자 ID (텔레그램 ID 또는 OKX UID)
+        symbol: 거래 심볼 (예: BTC-USDT-SWAP)
+        request: 레버리지 설정 정보
+
+    Returns:
+        LeverageResponse: 레버리지 설정 결과
+    """
+    client = None
+    try:
+        # user_id를 OKX UID로 변환
+        okx_uid = await get_identifier(user_id)
+        
+        # Redis에서 API 키 가져오기
+        api_keys = await get_user_api_keys(okx_uid)
+        
+        # OKX 클라이언트 생성
+        client = ccxt.okx({
+            'apiKey': api_keys.get('api_key'),
+            'secret': api_keys.get('api_secret'),
+            'password': api_keys.get('passphrase'),
+            'enableRateLimit': True,
+            'options': {'defaultType': 'swap'}
+        })
+
+        await client.load_markets()
+
+        # 레버리지 설정
+        params = {
+            'marginMode': request.marginMode
+        }
+        
+        if request.marginMode == 'cross' and request.posSide:
+            params['posSide'] = request.posSide
+
+        await client.set_leverage(request.leverage, symbol, params)
+
+        return LeverageResponse(
+            timestamp=str(datetime.utcnow()),
+            message="레버리지 설정이 완료되었습니다",
+            symbol=symbol,
+            leverage=request.leverage,
+            marginMode=request.marginMode,
+            posSide=request.posSide,
+            status="success"
+        )
+
+    except Exception as e:
+        logger.error(f"레버리지 설정 실패 ({symbol}): {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "레버리지 설정 실패",
+                "error": str(e),
+                "symbol": symbol
+            }
+        )
+    finally:
+        if client:
+            try:
+                await client.close()
+            except Exception as e:
+                logger.warning(f"CCXT 클라이언트 종료 중 오류 발생: {str(e)}")
+                
+                
+@router.post(
+    "/open",
+    response_model=PositionResponse,
+    summary="포지션 오픈(롱/숏)",
+    description="""
+주어진 심볼에 대해 '롱' 또는 '숏' 포지션을 오픈합니다.
+- `take_profit`, `stop_loss` 값이 있으면 TP/SL 주문도 같이 생성합니다.
+- `is_DCA`가 True면 DCA 모드로, 기존 TP/SL를 취소 후 재생성할 수 있습니다.
+""",
+   responses={
+       200: {
+           "description": "포지션 생성 성공",
+           "content": {
+               "application/json": {
+                   "example": {
+                       "symbol": "BTC-USDT-SWAP",
+                       "side": "long", 
+                       "size": 0.01,
+                       "entry_price": 45000.0,
+                       "leverage": 10.0,
+                       "sl_price": 44000.0,
+                       "tp_prices": [46000.0, 47000.0],
+                       "order_id": "1234567890"
+                   }
+               }
+           }
+       },
+       400: {
+           "description": "잘못된 요청",
+           "content": {
+               "application/json": {
+                   "example": {
+                       "detail": "주문에 필요한 잔고가 부족합니다"
+                   }
+               }
+           }
+       },
+       401: {
+           "description": "인증 실패 - 잘못된 API 인증 정보",
+           "content": {
+               "application/json": {
+                   "example": {
+                       "detail": "유효하지 않은 API 키입니다"
+                   }
+               }
+           }
+       },
+       500: {
+           "description": "서버 내부 오류",
+           "content": {
+               "application/json": {
+                   "example": {
+                       "detail": "거래소 연결 오류"
+                   }
+               }
+           }
+       }
+   }
+)
+async def open_position_endpoint(
+    req: OpenPositionRequest = Body(
+        ...,
+        examples={
+            "basic_example": {
+                "summary": "기본 포지션 생성 예시",
+                "value": {
+                    "user_id": 1709556958,
+                    "symbol": "BTC-USDT-SWAP",
+                    "direction": "long",
+                    "size": 0.1,
+                    "leverage": 10,
+                    "stop_loss": 89520.0,
+                    "take_profit": [96450.6, 96835.6, 97124.4],
+                    "is_DCA": True,
+                    "order_concept": "",
+                    "is_hedge": False,
+                    "hedge_tp_price": 0,
+                    "hedge_sl_price": 0
+                }
+            }
+        },
+        description="포지션 생성 매개변수"
+    )
+):
+    """
+    지정된 매개변수로 새로운 트레이딩 포지션을 생성합니다.
+
+    매개변수:
+    - user_id (int): API 키 조회를 위한 사용자 식별자
+    - symbol (str): 거래 쌍 심볼 (예: "BTC-USDT-SWAP")
+    - direction (str): 포지션 방향 - "long" 또는 "short"
+    - size (float): 기준 화폐 단위의 포지션 크기
+    - leverage (float, 선택): 포지션 레버리지, 기본값 10.0
+    - stop_loss (float, 선택): 손절가 설정
+    - take_profit (float, 선택): 이익실현가 설정
+    - is_DCA (bool, 선택): DCA 모드 활성화 여부, 기본값 False
+
+    반환값:
+    - 생성된 포지션 상세 정보가 담긴 PositionResponse 객체
+
+    발생 가능한 예외:
+    - HTTPException(400): 잘못된 매개변수 또는 불충분한 잔고
+    - HTTPException(401): 잘못된 API 인증 정보
+    - HTTPException(500): 거래소 연결 오류
+    """
+    try:
+        # user_id를 OKX UID로 변환
+        okx_uid = await get_identifier(str(req.user_id))
+        req.user_id = int(okx_uid)  # req.user_id를 변환된 okx_uid로 업데이트
+        
+        client = await TradingService.create_for_user(req.user_id)
+        
+        try:
+            is_dca = req.is_DCA
+        except:
+            is_dca = False
+        
+        try:
+            is_hedge = req.is_hedge
+        except:
+            is_hedge = False
+        
+        try:
+            hedge_tp_price = req.hedge_tp_price
+        except:
+            hedge_tp_price = None
+            
+        try:
+            hedge_sl_price = req.hedge_sl_price
+        except:
+            hedge_sl_price = None
+        
+        try:
+            position_result = await client.open_position(
+                user_id=req.user_id,
+                symbol=req.symbol,
+                direction=req.direction,
+                size=req.size,
+                leverage=req.leverage,
+                stop_loss=req.stop_loss,
+                take_profit=req.take_profit,
+                is_DCA=is_dca,
+                is_hedge=is_hedge,
+                hedge_tp_price=hedge_tp_price,
+                hedge_sl_price=hedge_sl_price
+            )
+        except Exception as e:
+            error_msg = str(e)
+            # 자금 부족 에러 감지
+            if "자금 부족" in error_msg or "Insufficient" in error_msg:
+                # 503 Service Unavailable 상태 코드를 사용하여 일시적인 불가용성을 나타냄
+                raise HTTPException(
+                    status_code=503, 
+                    detail=error_msg,
+                    headers={"Retry-After": "300"}  # 5분 후 재시도 가능함을 나타냄
+                )
+            raise HTTPException(status_code=400, detail=error_msg)
+        # position_result가 문자열인 경우 처리
+        if isinstance(position_result, str):
+            # 자금 부족 에러 감지
+            if "자금 부족" in position_result or "Insufficient" in position_result:
+                raise HTTPException(
+                    status_code=503,
+                    detail=position_result,
+                    headers={"Retry-After": "300"}
+                )
+            raise ValueError(position_result)
+            
+        # position_result가 딕셔너리인 경우 처리
+        if isinstance(position_result, dict):
+            return PositionResponse(
+                symbol=position_result.get('symbol', req.symbol),
+                side=position_result.get('side', req.direction),
+                size=position_result.get('size', req.size),
+                entry_price=position_result.get('entry_price', 0.0),
+                leverage=position_result.get('leverage', req.leverage),
+                sl_price=position_result.get('sl_price', req.stop_loss),
+                tp_prices=position_result.get('tp_prices', req.take_profit),
+                order_id=position_result.get('order_id', ''),
+                last_filled_price=position_result.get('last_filled_price', 0.0)
+            )
+            
+        # Position 객체인 경우 처리
+        return PositionResponse(
+            symbol=position_result.symbol,
+            side=position_result.side,
+            size=position_result.size,
+            entry_price=position_result.entry_price,
+            leverage=position_result.leverage,
+            sl_price=position_result.sl_price,
+            tp_prices=position_result.tp_prices,
+            order_id=position_result.order_id,
+            last_filled_price=position_result.last_filled_price
+        )
+    except Exception as e:
+        log_error(
+            error=e,
+            user_id=req.user_id,
+            additional_info={
+                "function": "open_position_endpoint",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+        logger.error(f"[open_position] Error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post(
+    "/close",
+    summary="포지션 청산(전체/부분)",
+    description="""
+포지션을 청산합니다.  
+- `percent` (0~100)으로 부분 청산 가능  
+- `size`로도 청산량을 직접 지정할 수 있습니다 (percent와 중복되지 않도록).  
+- `side`를 명시하지 않으면 Service 측에서 심볼의 롱/숏 포지션 여부를 보고 자동 결정합니다.
+"""
+)
+async def close_position_endpoint(req: ClosePositionRequest):
+    """
+    TradingService.close_position() 호출 → 포지션 청산
+    """
+    print("close_position_endpoint", req)
+    try:
+        # user_id를 OKX UID로 변환
+        okx_uid = await get_identifier(str(req.user_id))
+        req.user_id = int(okx_uid)  # req.user_id를 변환된 okx_uid로 업데이트
+        
+        client = await TradingService.create_for_user(req.user_id)
+        
+        # size가 None이고 percent가 지정된 경우에만 percent 사용
+        if (req.size is None or req.size == 0) and req.percent > 0:
+            use_size = None  # trading_service가 percent를 사용하도록 함
+        else:
+            use_size = req.size
+            
+        success = await client.close_position(
+            user_id=req.user_id,
+            symbol=req.symbol,
+            percent=req.percent,
+            size=use_size,
+            comment=req.comment,
+            side=req.side
+        )
+        
+        if not success:
+            raise HTTPException(
+                status_code=404, 
+                detail="포지션 청산 실패 혹은 활성화된 포지션이 없습니다."
+            )
+        return {"success": True, "message": "Position closed successfully."}
+    except Exception as e:
+        log_error(
+            error=e,
+            user_id=req.user_id,
+            additional_info={
+                "function": "close_position_endpoint",
+                "timestamp": datetime.now().isoformat()
+            }
+        )   
+        logger.error(f"[close_position] Error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=400, detail=str(e))

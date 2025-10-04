@@ -1,0 +1,131 @@
+from datetime import datetime, timedelta
+
+from shared.exchange_apis import exchange_store
+from shared.helpers.cache_helper import cache_expired
+
+CACHE_TIME_SECONDS = 25
+
+bitget_futures_account_balance_cache = None
+bitget_futures_account_balance_cache_expiry = datetime.now()
+bitget_futures_mark_price_cache = None
+bitget_futures_mark_price_cache_expiry = datetime.now()
+
+
+def revalidate_bitget_cache():
+    global bitget_futures_account_balance_cache, bitget_futures_account_balance_cache_expiry, bitget_futures_mark_price_cache, bitget_futures_mark_price_cache_expiry
+
+    bitget_futures_account_balance_cache = None
+    bitget_futures_account_balance_cache_expiry = datetime.now()
+    bitget_futures_mark_price_cache = None
+    bitget_futures_mark_price_cache_expiry = datetime.now()
+
+
+# 비트겟 선물 계좌 잔고 정보
+# 비트겟 선물 계좌 잔고 정보
+async def get_bitget_futures_account_balance():
+    # Todo: refactor after
+    global bitget_futures_account_balance_cache, bitget_futures_account_balance_cache_expiry
+
+    bitget_client = exchange_store.get_bitget_instance()
+
+    try:
+        if ((not cache_expired(bitget_futures_account_balance_cache_expiry))
+                and (bitget_futures_account_balance_cache is not None)):
+            return bitget_futures_account_balance_cache
+        else:
+            futures_account_balance = await bitget_client.fetch_balance(params={})
+            bitget_futures_account_balance_cache = futures_account_balance
+            bitget_futures_account_balance_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
+            return futures_account_balance
+    except Exception as e:
+        print('[EXCEPTION get_bitget_balances]', e)
+        raise ValueError(f"비트겟 계좌를 불러오지 못했습니다. {e}")
+
+    finally:
+        if bitget_client is not None:
+            await bitget_client.close()
+
+
+async def get_bitget_wallet():
+    try:
+        balance_info = await get_bitget_futures_account_balance()
+        total_balance = balance_info['USDT']['total']  # 총 잔액
+        wallet_balance = balance_info['free']['USDT']
+        total_unrealized_profit = float(
+            balance_info['info'][0]['unrealizedPL'] if balance_info['info'][0]['unrealizedPL'] else 0)
+        return total_balance, wallet_balance, total_unrealized_profit
+    except Exception as e:
+        print("bitget", f"선물 계좌 잔고 정보 업데이트 중 오류 발생: {e}")
+        raise e
+
+
+async def get_bitget_tickers():
+    # Todo: refactor after
+    global bitget_futures_mark_price_cache, bitget_futures_mark_price_cache_expiry
+
+    client = exchange_store.get_bitget_instance()
+
+    try:
+        if ((not cache_expired(bitget_futures_mark_price_cache_expiry))
+                and (bitget_futures_mark_price_cache is not None)):
+            return bitget_futures_mark_price_cache
+        else:
+            tickers = await client.fetch_tickers(params={'productType': 'USDT-FUTURES'})
+            bitget_futures_mark_price_cache = tickers
+            bitget_futures_mark_price_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
+            return tickers
+    except Exception as e:
+        raise ValueError(f"비트겟 마켓 정보를 불러오지 못했습니다. {e}")
+    finally:
+        if client is not None:
+            await client.close()
+
+
+async def fetch_bitget_positions():
+    print('[FETCH BITGET POSITIONS]')
+    exchange = exchange_store.get_bitget_instance()
+    positions = []
+
+    try:
+        balance = await get_bitget_futures_account_balance()
+        mark_price_data = await get_bitget_tickers()
+
+        if (balance is None) or (mark_price_data is None):
+            return positions
+
+        position_info_data = balance['info']['positions']
+
+        for position in position_info_data:
+            symbol = position['symbol']
+            if not symbol.endswith('USDT_UMCBL'):
+                continue
+
+            entry_price = float(position['averageOpenPrice'])
+            quantity = float(position['total'])
+            leverage = float(position['leverage'])
+            mark_price = mark_price_data.get(symbol, {}).get('last', None)
+
+            if mark_price is None or entry_price == 0:
+                profit_percent = 0
+                value = 0
+            else:
+                value = abs(quantity) * mark_price
+                profit_percent = ((mark_price - entry_price) / entry_price * 100 * leverage) if quantity > 0 else (
+                        (entry_price - mark_price) / entry_price * 100 * leverage)
+
+            if quantity != 0:
+                positions.append({
+                    'symbol': symbol,
+                    'entry_price': entry_price,
+                    'quantity': quantity,
+                    'mark_price': mark_price,
+                    'value': value,
+                    'profit_percent': profit_percent,
+                })
+
+        return positions
+    except Exception as e:
+        print('[FETCH BITGET POSITION ERROR]', e)
+        raise e
+    finally:
+        await exchange.close()

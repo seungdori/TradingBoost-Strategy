@@ -1,0 +1,95 @@
+.
+├── configs
+│   └── exchange_configs.py
+├── constants
+│   ├── default_settings.py
+│   ├── enterstrategy.py
+│   ├── error.py
+│   ├── exchange.py
+│   ├── message.py
+│   └── redis_pattern.py
+├── requirements.txt
+├── src
+│   ├── __init__.py
+│   ├── api
+│   │   ├── __init__.py
+│   │   ├── dependencies.py
+│   │   ├── exchange
+│   │   │   ├── __init__.py
+│   │   │   ├── base.py
+│   │   │   ├── models.py
+│   │   │   └── okx
+│   │   ├── middleware.py
+│   │   ├── routes
+│   │   │   ├── chart.py
+│   │   │   └── trading.py
+│   │   └── trading
+│   │       ├── market_state_handler.py
+│   │       └── trend_state_calculator.py
+│   ├── bot
+│   │   ├── __init__.py
+│   │   ├── command
+│   │   │   ├── __init__.py
+│   │   │   ├── account.py
+│   │   │   ├── basic.py
+│   │   │   ├── generic.py
+│   │   │   ├── register.py
+│   │   │   ├── settings.py
+│   │   │   └── trading.py
+│   │   ├── commandsOld.py
+│   │   ├── handlers.py
+│   │   ├── keyboards
+│   │   │   └── settings_keyboard.py
+│   │   ├── states
+│   │   │   └── states.py
+│   │   ├── strategy_service.py
+│   │   ├── task.py
+│   │   ├── user_state.py
+│   │   └── utils
+│   │       ├── __init__.py
+│   │       └── validator.py
+│   ├── config.py
+│   ├── core
+│   │   ├── __init__.py
+│   │   ├── celery_task.py
+│   │   ├── config.py
+│   │   ├── database.py
+│   │   ├── database_dir
+│   │   │   ├── __init__.py
+│   │   │   └── base.py
+│   │   ├── logger.py
+│   │   ├── models
+│   │   │   ├── __init__.py
+│   │   │   ├── bot_state.py
+│   │   │   ├── database.py
+│   │   │   ├── trading_data.py
+│   │   │   └── user.py
+│   │   └── shutdown.py
+│   ├── data_collector
+│   │   ├── celeryconfig.py
+│   │   ├── check.py
+│   │   ├── indicators.py
+│   │   ├── plot_candle.py
+│   │   ├── requirements.txt
+│   │   └── tasks.py
+│   ├── helpers
+│   │   ├── __init__.py
+│   │   └── state_sync.py
+│   ├── services
+│   │   ├── __init__.py
+│   │   ├── candle_service.py
+│   │   ├── redis_service.py
+│   │   ├── strategy_service.py
+│   │   └── trading_service.py
+│   ├── tasks
+│   │   ├── __init__.py
+│   │   ├── market_tasks.py
+│   │   └── trading_tasks.py
+│   ├── trading
+│   │   ├── executor
+│   │   │   ├── order.py
+│   │   │   └── position.py
+│   │   └── strategy
+│   │       └── base.py
+└── main.py
+

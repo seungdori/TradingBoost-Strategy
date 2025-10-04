@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Trading Chart</title>
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.min.js"></script>
+    <style>
+        body {
+            background-color: #131722;
+            margin: 0;
+            padding: 20px;
+            color: #d1d4dc;
+        }
+
+        #controls {
+            margin-bottom: 20px;
+        }
+
+        select,
+        button {
+            background: #1e222d;
+            color: #d1d4dc;
+            border: 1px solid #363c4e;
+            padding: 5px;
+            margin-right: 10px;
+        }
+
+        #indicators {
+            margin: 10px 0;
+        }
+
+        .indicator-control {
+            margin-right: 15px;
+            color: #d1d4dc;
+        }
+
+        #chart-container {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            height: calc(100vh - 140px);
+        }
+
+        #main-chart {
+            flex: 3;
+            width: 100%;
+        }
+
+        #rsi-chart {
+            flex: 1;
+            width: 100%;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="controls">
+        <select id="symbol-select">
+            <option value="BTC-USDT-SWAP">BTC-USDT</option>
+            <option value="ETH-USDT-SWAP">ETH-USDT</option>
+            <option value="SOL-USDT-SWAP">SOL-USDT</option>
+        </select>
+        <select id="timeframe-select">
+            <option value="1m">1m</option>
+            <option value="5m">5m</option>
+            <option value="15m">15m</option>
+            <option value="30m">30m</option>
+            <option value="1h">1h</option>
+            <option value="4h">4h</option>
+        </select>
+    </div>
+    <div id="indicators">
+        <label class="indicator-control">
+            <input type="checkbox" id="sma5" checked> SMA 5
+        </label>
+        <label class="indicator-control">
+            <input type="checkbox" id="sma20" checked> SMA 20
+        </label>
+        <label class="indicator-control">
+            <input type="checkbox" id="sma50"> SMA 50
+        </label>
+        <label class="indicator-control">
+            <input type="checkbox" id="sma100"> SMA 100
+        </label>
+        <label class="indicator-control">
+            <input type="checkbox" id="sma200"> SMA 200
+        </label>
+        <label class="indicator-control">
+            <input type="checkbox" id="jma5"> JMA 5
+        </label>
+        <label class="indicator-control">
+            <input type="checkbox" id="jma10"> JMA 10
+        </label>
+        <label class="indicator-control">
+            <input type="checkbox" id="jma20"> JMA 20
+        </label>
+    </div>
+    <div id="chart-container">
+        <div id="main-chart"></div>
+        <div id="rsi-chart"></div>
+    </div>
+    <script>
+        // 라이브러리 로드 확인
+        function initChart() {
+            if (typeof LightweightCharts === 'undefined') {
+                console.error('LightweightCharts 라이브러리가 로드되지 않았습니다.');
+                // 1초 후에 다시 시도
+                setTimeout(initChart, 1000);
+                return;
+            }
+            
+            console.log('LightweightCharts 라이브러리 로드됨, 차트 초기화 시작');
+            
+            // 차트 초기화 완료 플래그
+            let chartsInitialized = false;
+            
+            // 메인 차트 생성
+            const mainChart = LightweightCharts.createChart(document.getElementById('main-chart'), {
+                width: window.innerWidth - 40,
+                height: (window.innerHeight - 140) * 0.75, // 75% 높이 할당
+                layout: {
+                    background: { color: '#131722' },
+                    textColor: '#d1d4dc',
+                },
+                grid: {
+                    vertLines: { color: '#1e222d' },
+                    horzLines: { color: '#1e222d' },
+                },
+                rightPriceScale: {
+                    borderColor: '#1e222d',
+                    visible: true,
+                    scaleMargins: {
+                        top: 0.1,
+                        bottom: 0.2,
+                    },
+                },
+                timeScale: {
+                    borderColor: '#1e222d',
+                    timeVisible: true,
+                    secondsVisible: false,
+                    tickMarkFormatter: (time, tickMarkType, locale) => {
+                        // UTC → KST 변환 (UTC+9)
+                        const date = new Date(time * 1000 + 9 * 60 * 60 * 1000);
+                        return date.getUTCHours() + ':' + (date.getUTCMinutes() < 10 ? '0' : '') + date.getUTCMinutes();
+                    },
+                },
+                localization: {
+                    timeFormatter: (time) => {
+                        // 십자선용 시간 포맷터 (KST)
+                        const date = new Date(time * 1000 + 9 * 60 * 60 * 1000);
+                        const hours = date.getUTCHours();
+                        const minutes = date.getUTCMinutes();
+                        const seconds = date.getUTCSeconds();
+                        return `${hours}:${minutes < 10 ? '0' + minutes : minutes}:${seconds < 10 ? '0' + seconds : seconds}`;
+                    },
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                    vertLine: {
+                        color: 'rgba(224, 227, 235, 0.5)', // 더 투명하게 변경
+                        width: 1,
+                        style: 1, // 점선으로 변경
+                        visible: true,
+                        labelVisible: true,
+                    },
+                    horzLine: {
+                        color: 'rgba(224, 227, 235, 0.5)', // 더 투명하게 변경
+                        width: 1,
+                        style: 1, // 점선으로 변경
+                        visible: true,
+                        labelVisible: true,
+                    },
+                },
+            });
+            
+            // RSI 차트 생성
+            const rsiChart = LightweightCharts.createChart(document.getElementById('rsi-chart'), {
+                width: window.innerWidth - 40,
+                height: (window.innerHeight - 140) * 0.25, // 25% 높이 할당
+                layout: {
+                    background: { color: '#131722' },
+                    textColor: '#d1d4dc',
+                },
+                grid: {
+                    vertLines: { color: '#1e222d' },
+                    horzLines: { color: '#1e222d' },
+                },
+                rightPriceScale: {
+                    borderColor: '#1e222d',
+                    scaleMargins: {
+                        top: 0.1,
+                        bottom: 0.1,
+                    },
+                    visible: true,
+                },
+                timeScale: {
+                    borderColor: '#1e222d',
+                    timeVisible: true,
+                    secondsVisible: false,
+                    borderVisible: true,
+                    tickMarkFormatter: (time, tickMarkType, locale) => {
+                        // UTC → KST 변환 (UTC+9)
+                        const date = new Date(time * 1000 + 9 * 60 * 60 * 1000);
+                        return date.getUTCHours() + ':' + (date.getUTCMinutes() < 10 ? '0' : '') + date.getUTCMinutes();
+                    },
+                },
+                localization: {
+                    timeFormatter: (time) => {
+                        // 십자선용 시간 포맷터 (KST)
+                        const date = new Date(time * 1000 + 9 * 60 * 60 * 1000);
+                        const hours = date.getUTCHours();
+                        const minutes = date.getUTCMinutes();
+                        const seconds = date.getUTCSeconds();
+                        return `${hours}:${minutes < 10 ? '0' + minutes : minutes}:${seconds < 10 ? '0' + seconds : seconds}`;
+                    },
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                    vertLine: {
+                        color: 'rgba(224, 227, 235, 0.5)', // 더 투명하게 변경
+                        width: 1,
+                        style: 1, // 점선으로 변경
+                        visible: true,
+                        labelVisible: true,
+                    },
+                    horzLine: {
+                        color: 'rgba(224, 227, 235, 0.5)', // 더 투명하게 변경
+                        width: 1,
+                        style: 1, // 점선으로 변경
+                        visible: true,
+                        labelVisible: true,
+                    },
+                },
+            });
+            
+            // 메인 차트에서 RSI 차트로의 단방향 동기화만 유지 (문제가 되는 반대 방향은 제거)
+            mainChart.timeScale().subscribeVisibleTimeRangeChange(timeRange => {
+                // null 체크 추가
+                if (timeRange !== null) {
+                    try {
+                        // 메인 차트의 시간 범위가 변경되면 RSI 차트도 같은 범위로 설정
+                        rsiChart.timeScale().setVisibleRange(timeRange);
+                    } catch (error) {
+                        console.error('RSI 차트 시간범위 설정 오류:', error);
+                    }
+                }
+            });
+            
+            mainChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+                // null 체크 추가
+                if (range !== null) {
+                    try {
+                        // 메인 차트의 스크롤 위치가 변경되면 RSI 차트의 스크롤 위치도 변경
+                        rsiChart.timeScale().setVisibleLogicalRange(range);
+                    } catch (error) {
+                        console.error('RSI 차트 논리범위 설정 오류:', error);
+                    }
+                }
+            });
+            
+            // RSI 차트에서 메인 차트로의 동기화 추가 (양방향 동기화)
+            rsiChart.timeScale().subscribeVisibleTimeRangeChange(timeRange => {
+                // null 체크 추가
+                if (timeRange !== null && chartsInitialized) {  // 초기화 완료 플래그 확인
+                    try {
+                        // RSI 차트의 시간 범위가 변경되면 메인 차트도 같은 범위로 설정
+                        mainChart.timeScale().setVisibleRange(timeRange);
+                    } catch (error) {
+                        console.error('메인 차트 시간범위 설정 오류:', error);
+                    }
+                }
+            });
+            
+            rsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+                // null 체크 추가
+                if (range !== null && chartsInitialized) {  // 초기화 완료 플래그 확인
+                    try {
+                        // RSI 차트의 스크롤 위치가 변경되면 메인 차트의 스크롤 위치도 변경
+                        mainChart.timeScale().setVisibleLogicalRange(range);
+                    } catch (error) {
+                        console.error('메인 차트 논리범위 설정 오류:', error);
+                    }
+                }
+            });
+            
+            // 차트 옵션 동기화 - 두 차트의 타임스케일 옵션을 동일하게 설정
+            const sharedTimeScaleOptions = {
+                rightOffset: 12,
+                barSpacing: 6,
+                fixLeftEdge: true,
+                lockVisibleTimeRangeOnResize: true,
+                rightBarStaysOnScroll: true,
+                borderVisible: false,
+                borderColor: '#1e222d',
+                visible: true,
+                timeVisible: true,
+                secondsVisible: false,
+                tickMarkFormatter: (time, tickMarkType, locale) => {
+                    const date = new Date(time * 1000 + 9 * 60 * 60 * 1000);
+                    return date.getUTCHours() + ':' + (date.getUTCMinutes() < 10 ? '0' : '') + date.getUTCMinutes();
+                }
+            };
+            
+            // 공통 타임스케일 옵션 적용
+            mainChart.timeScale().applyOptions(sharedTimeScaleOptions);
+            rsiChart.timeScale().applyOptions(sharedTimeScaleOptions);
+            
+            const candleSeries = mainChart.addCandlestickSeries({
+                upColor: '#26a69a',
+                downColor: '#ef5350',
+                borderVisible: false,
+                wickUpColor: '#26a69a',
+                wickDownColor: '#ef5350',
+                priceFormat: {
+                    type: 'price',
+                    precision: 2,
+                    minMove: 0.01,
+                },
+                lastValueVisible: true,
+                priceLineVisible: true,
+            });
+            
+            // 지표 시리즈 저장용 객체
+            const indicatorSeries = {
+                sma5: mainChart.addLineSeries({ color: '#2196F3', lineWidth: 1 }),
+                sma20: mainChart.addLineSeries({ color: '#FF9800', lineWidth: 1 }),
+                sma50: mainChart.addLineSeries({ color: '#9C27B0', lineWidth: 1 }),
+                sma100: mainChart.addLineSeries({ color: '#00BCD4', lineWidth: 1 }),
+                sma200: mainChart.addLineSeries({ color: '#4CAF50', lineWidth: 1 }),
+                jma5: mainChart.addLineSeries({ color: '#E91E63', lineWidth: 1 }),
+                jma10: mainChart.addLineSeries({ color: '#FFEB3B', lineWidth: 1 }),
+                jma20: mainChart.addLineSeries({ color: '#795548', lineWidth: 1 })
+            };
+        
+            const volumeSeries = mainChart.addHistogramSeries({
+                color: '#26a69a',
+                priceFormat: {
+                    type: 'volume',
+                },
+                priceScaleId: '', // 별도의 스케일 사용
+                scaleMargins: {
+                    top: 0.8,
+                    bottom: 0,
+                },
+            });
+            
+            // RSI 패널 생성
+            const rsiSeries = rsiChart.addLineSeries({
+                color: '#f5f5f5',
+                lineWidth: 1,
+                title: 'RSI(14)',
+                priceFormat: {
+                    type: 'price',
+                    precision: 2,
+                    minMove: 0.01,
+                },
+                lastValueVisible: true,
+                priceLineVisible: true,
+                crosshairMarkerVisible: true,
+                autoscaleInfoProvider: () => ({
+                    priceRange: {
+                        minValue: 0,
+                        maxValue: 100,
+                    },
+                    margins: {
+                        above: 5,
+                        below: 5,
+                    },
+                }),
+            });
+
+            // RSI 오버솔드/오버바웃 라인 추가 (70과 30)
+            const rsiOverbought = rsiChart.addLineSeries({
+                color: 'rgba(255, 0, 0, 0.5)',
+                lineWidth: 1,
+                priceLineVisible: false,
+                lastValueVisible: false,
+            });
+            
+            const rsiOversold = rsiChart.addLineSeries({
+                color: 'rgba(0, 255, 0, 0.5)',
+                lineWidth: 1,
+                priceLineVisible: false,
+                lastValueVisible: false,
+            });
+            
+            // RSI 중간값(50) 선 추가
+            const rsiMiddle = rsiChart.addLineSeries({
+                color: 'rgba(255, 255, 255, 0.3)',
+                lineWidth: 1,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                lineStyle: 1, // 점선
+            });
+            
+            // RSI 레벨 라인 데이터 설정
+            const currentTime = new Date().getTime() / 1000;
+            const startTime = currentTime - 30 * 24 * 60 * 60; // 30일 전
+            rsiOverbought.setData([
+                { time: startTime, value: 70 },
+                { time: currentTime, value: 70 }
+            ]);
+            
+            rsiOversold.setData([
+                { time: startTime, value: 30 },
+                { time: currentTime, value: 30 }
+            ]);
+            
+            rsiMiddle.setData([
+                { time: startTime, value: 50 },
+                { time: currentTime, value: 50 }
+            ]);
+            
+            let ws;
+            let lastCandle = null;
+            let pollingInterval = null;
+            
+            // 웹소켓 연결 대신 폴링 방식 사용
+            function startDataPolling() {
+                // 기존 폴링 중지
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                }
+                
+                // 즉시 업데이트 실행하지 않고 5초 후에 첫 업데이트 시작
+                console.log('데이터 폴링 시작 (5초 간격)');
+                pollingInterval = setInterval(updateLatestData, 2000);
+                
+                // 초기 즉시 업데이트 제거 (이 부분이 문제의 원인일 수 있음)
+                // updateLatestData();
+            }
+            
+            // 최신 데이터 가져오기
+            async function updateLatestData() {
+                const symbol = document.getElementById('symbol-select').value;
+                const timeframe = document.getElementById('timeframe-select').value;
+                
+                try {
+                    // 업데이트 전 현재 차트 시간 범위 저장
+                    const currentRange = mainChart.timeScale().getVisibleRange();
+                    const currentLogicalRange = mainChart.timeScale().getVisibleLogicalRange();
+                    
+                    const response = await fetch(`/api/candles/${symbol}/${timeframe}?limit=5`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    
+                    const data = await response.json();
+                    if (data.length === 0) return;
+                    
+                    // 가장 최근 캔들 가져오기
+                    const newData = data[data.length - 1];
+                    
+                    // 캔들 업데이트 여부 확인
+                    if (lastCandle && lastCandle.time === newData.timestamp) {
+                        // 현재 캔들 업데이트
+                        candleSeries.update({
+                            time: newData.timestamp,
+                            open: lastCandle.open,  // 시가는 고정
+                            high: Math.max(lastCandle.high, newData.close),
+                            low: Math.min(lastCandle.low, newData.close),
+                            close: newData.close
+                        });
+
+                        // 거래량 업데이트
+                        volumeSeries.update({
+                            time: newData.timestamp,
+                            value: newData.volume,
+                            color: newData.close >= lastCandle.open ? '#26a69a' : '#ef5350'
+                        });
+                    } else {
+                        // 새로운 캔들
+                        candleSeries.update({
+                            time: newData.timestamp,
+                            open: newData.open,
+                            high: newData.high,
+                            low: newData.low,
+                            close: newData.close
+                        });
+
+                        // 새로운 거래량
+                        volumeSeries.update({
+                            time: newData.timestamp,
+                            value: newData.volume,
+                            color: newData.close >= newData.open ? '#26a69a' : '#ef5350'
+                        });
+                    }
+
+                    // 지표 업데이트
+                    Object.keys(indicatorSeries).forEach(indicator => {
+                        if (newData[indicator] !== null && newData[indicator] !== undefined) {
+                            indicatorSeries[indicator].update({
+                                time: newData.timestamp,
+                                value: newData[indicator]
+                            });
+                        }
+                    });
+                    
+                    // RSI 업데이트
+                    if (newData.rsi !== null && newData.rsi !== undefined) {
+                        rsiSeries.update({
+                            time: newData.timestamp,
+                            value: newData.rsi
+                        });
+                    }
+
+                    lastCandle = {
+                        time: newData.timestamp,
+                        open: newData.open,
+                        high: newData.high,
+                        low: newData.low,
+                        close: newData.close
+                    };
+                    
+                    // 저장해둔 범위로 다시 설정 (자동 확대/이동 방지)
+                    // Lightweight Charts 버그 때문에 setTimeout으로 지연 적용
+                    setTimeout(() => {
+                        if (currentLogicalRange) {
+                            mainChart.timeScale().setVisibleLogicalRange(currentLogicalRange);
+                        } else if (currentRange) {
+                            mainChart.timeScale().setVisibleRange(currentRange);
+                        }
+                    }, 10);
+                    
+                } catch (error) {
+                    console.error('Error updating data:', error);
+                }
+            }
+            
+            // 웹소켓 연결 시도 중단 (백엔드에서 지원하지 않음)
+            function connectWebSocket() {
+                console.log('웹소켓 지원되지 않음, 폴링 방식으로 전환');
+                startDataPolling();
+                
+                /* 원래 웹소켓 코드 주석 처리
+                const symbol = document.getElementById('symbol-select').value;
+                const timeframe = document.getElementById('timeframe-select').value;
+
+                if (ws) {
+                    ws.close();
+                }
+
+                // localhost가 아닌 현재 호스트 이름을 사용
+                const host = window.location.host;
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                ws = new WebSocket(`${wsProtocol}//${host}/ws/${symbol}/${timeframe}`);
+
+                ws.onopen = function () {
+                    console.log('WebSocket Connected');
+                };
+
+                ws.onmessage = function (event) {
+                    const newData = JSON.parse(event.data);
+                    // 캔들 업데이트
+                    if (lastCandle && lastCandle.timestamp === newData.timestamp) {
+                        // 현재 캔들 업데이트
+                        candleSeries.update({
+                            time: newData.timestamp,
+                            open: lastCandle.open,  // 시가는 고정
+                            high: Math.max(lastCandle.high, newData.close),
+                            low: Math.min(lastCandle.low, newData.close),
+                            close: newData.close
+                        });
+
+                        // 거래량 업데이트
+                        volumeSeries.update({
+                            time: newData.timestamp,
+                            value: newData.volume,
+                            color: newData.close >= lastCandle.open ? '#26a69a' : '#ef5350'
+                        });
+                    } else {
+                        // 새로운 캔들
+                        candleSeries.update({
+                            time: newData.timestamp,
+                            open: newData.open,
+                            high: newData.high,
+                            low: newData.low,
+                            close: newData.close
+                        });
+
+                        // 새로운 거래량
+                        volumeSeries.update({
+                            time: newData.timestamp,
+                            value: newData.volume,
+                            color: newData.close >= newData.open ? '#26a69a' : '#ef5350'
+                        });
+                        lastCandle = newData;
+                    }
+
+                    // 지표 업데이트
+                    Object.keys(indicatorSeries).forEach(indicator => {
+                        if (newData[indicator] !== null && newData[indicator] !== undefined) {
+                            indicatorSeries[indicator].update({
+                                time: newData.timestamp,
+                                value: newData[indicator]
+                            });
+                        }
+                    });
+                    
+                    // RSI 업데이트
+                    if (newData.rsi !== null && newData.rsi !== undefined) {
+                        rsiSeries.update({
+                            time: newData.timestamp,
+                            value: newData.rsi
+                        });
+                    }
+
+                    lastCandle = {
+                        time: newData.timestamp,
+                        open: newData.open,
+                        high: newData.high,
+                        low: newData.low,
+                        close: newData.close
+                    };
+                };
+
+                ws.onclose = function () {
+                    console.log('WebSocket Closed. Reconnecting...');
+                    setTimeout(connectWebSocket, 3000);
+                };
+
+                ws.onerror = function (err) {
+                    console.error('WebSocket Error:', err);
+                    ws.close();
+                };
+                */
+            }
+
+            // 초기 데이터 로드 후 차트 범위 고정
+            let initialRangeSet = false;
+
+            async function loadChartData() {
+                const symbol = document.getElementById('symbol-select').value;
+                const timeframe = document.getElementById('timeframe-select').value;
+
+                try {
+                    const response = await fetch(`/api/candles/${symbol}/${timeframe}`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    const data = await response.json();
+
+                    // 캔들 데이터 설정
+                    const candleData = data.map(d => ({
+                        time: d.timestamp,
+                        open: d.open,
+                        high: d.high,
+                        low: d.low,
+                        close: d.close
+                    }));
+                    candleSeries.setData(candleData);
+
+                    // 거래량 데이터 설정
+                    const volumeData = data.map(d => ({
+                        time: d.timestamp,
+                        value: d.volume,
+                        color: d.close >= d.open ? '#26a69a' : '#ef5350'
+                    }));
+                    volumeSeries.setData(volumeData);
+
+                    // 지표 데이터 설정
+                    Object.keys(indicatorSeries).forEach(indicator => {
+                        const indicatorData = data.map(d => ({
+                            time: d.timestamp,
+                            value: d[indicator]
+                        })).filter(d => d.value != null);
+
+                        indicatorSeries[indicator].setData(indicatorData);
+                    });
+                    
+                    // RSI 데이터 설정
+                    const rsiData = data.map(d => ({
+                        time: d.timestamp,
+                        value: d.rsi
+                    })).filter(d => d.value != null);
+                    
+                    rsiSeries.setData(rsiData);
+
+                    // 체크박스 상태에 따라 지표 표시/숨김 설정
+                    updateIndicatorVisibility();
+
+                    // 마지막 캔들 저장
+                    if (candleData.length > 0) {
+                        lastCandle = candleData[candleData.length - 1];
+                        
+                        // 적절한 시간 범위 설정 (마지막 100개 캔들 표시)
+                        const dataLength = candleData.length;
+                        if (dataLength > 50) {
+                            const fromIndex = Math.max(0, dataLength - 100);
+                            const toIndex = dataLength - 1;
+                            
+                            // 시간 범위 설정
+                            mainChart.timeScale().setVisibleRange({
+                                from: candleData[fromIndex].time,
+                                to: candleData[toIndex].time
+                            });
+                            
+                            // RSI 차트에도 동일한 범위 직접 설정
+                            rsiChart.timeScale().setVisibleRange({
+                                from: candleData[fromIndex].time,
+                                to: candleData[toIndex].time
+                            });
+                            
+                            // 2초 후에 차트 동기화 초기화 완료 플래그 설정
+                            setTimeout(() => {
+                                chartsInitialized = true;
+                                console.log('차트 동기화 활성화됨');
+                            }, 2000);
+                        }
+                    }
+
+                } catch (error) {
+                    console.error('차트 데이터 로드 오류:', error);
+                }
+            }
+
+            // 체크박스 이벤트 처리 추가
+            function updateIndicatorVisibility() {
+                Object.keys(indicatorSeries).forEach(indicator => {
+                    const checkbox = document.getElementById(indicator);
+                    if (checkbox) {
+                        indicatorSeries[indicator].applyOptions({
+                            visible: checkbox.checked
+                        });
+                    }
+                });
+            }
+
+            // 체크박스 이벤트 리스너 추가
+            Object.keys(indicatorSeries).forEach(indicator => {
+                const checkbox = document.getElementById(indicator);
+                if (checkbox) {
+                    checkbox.addEventListener('change', updateIndicatorVisibility);
+                }
+            });
+
+            // 초기 데이터 로드 및 웹소켓 연결
+            loadChartData().then(() => {
+                connectWebSocket();
+            });
+
+            // 심볼이나 타임프레임 변경 시 데이터 리로드 및 웹소켓 재연결
+            document.getElementById('symbol-select').addEventListener('change', () => {
+                loadChartData().then(() => {
+                    connectWebSocket();
+                });
+            });
+
+            document.getElementById('timeframe-select').addEventListener('change', () => {
+                loadChartData().then(() => {
+                    connectWebSocket();
+                });
+            });
+
+            // 차트 리사이즈
+            window.addEventListener('resize', () => {
+                mainChart.applyOptions({
+                    width: window.innerWidth - 40,
+                    height: (window.innerHeight - 140) * 0.75,
+                });
+                
+                rsiChart.applyOptions({
+                    width: window.innerWidth - 40,
+                    height: (window.innerHeight - 140) * 0.25,
+                });
+            });
+
+            // RSI 패널 추가 스타일링
+            rsiChart.applyOptions({
+                watermark: {
+                    visible: true,
+                    text: 'RSI (14)',
+                    color: 'rgba(255, 255, 255, 0.1)',
+                    fontSize: 24,
+                    horzAlign: 'center',
+                    vertAlign: 'center',
+                }
+            });
+
+            // 페이지 종료 시 폴링 종료
+            window.addEventListener('beforeunload', () => {
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                }
+            });
+        }
+
+        // 페이지 로드 완료 후 차트 초기화 실행
+        window.addEventListener('DOMContentLoaded', initChart);
+    </script>
+</body>
+
+</html>
