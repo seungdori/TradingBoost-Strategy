@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from version import __version__
+from GRID.version import __version__
 
 router = APIRouter(prefix="/utils", tags=["utils"])
 

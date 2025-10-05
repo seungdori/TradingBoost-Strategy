@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request
 from shared.dtos.response import ResponseDto
 from shared.dtos.bot_state import BotStateDto, BotStateKeyDto
-from services import bot_state_service
+from GRID.services import bot_state_service
 
 router = APIRouter(prefix="/state", tags=["state"])
 

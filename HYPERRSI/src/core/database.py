@@ -11,10 +11,10 @@ from celery import Celery
 import logging
 from threading import Lock
 import time
-from tenacity import retry, stop_after_attempt, wait_exponential
 from prometheus_client import Counter, Histogram
 from pydantic_settings import BaseSettings
 from shared.database import RedisConnectionManager
+from shared.utils import retry_decorator
 
 # 로거 설정
 logger = logging.getLogger(__name__)
@@ -283,7 +283,7 @@ class Cache:
                 cls._instance = super().__new__(cls)
             return cls._instance
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry_decorator(max_retries=3, delay=4.0, backoff=2.0)
     async def set(self, key: str, value: Any, expire: int = 3600) -> bool:
         with self.cache_operation_duration.time():
             try:
@@ -298,7 +298,7 @@ class Cache:
                 logger.error(f"Cache set error: {e}")
                 raise
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry_decorator(max_retries=3, delay=4.0, backoff=2.0)
     async def get(self, key: str) -> Optional[Any]:
         with self.cache_operation_duration.time():
             try:

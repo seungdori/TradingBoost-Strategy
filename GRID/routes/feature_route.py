@@ -5,20 +5,20 @@ import traceback
 from typing import Any, List
 from fastapi import APIRouter, Request, BackgroundTasks, Depends, FastAPI
 import redis
-from GRID.grid_process import start_grid_main_in_process, stop_grid_main_process, get_running_users, update_user_data
-from GRID.redis_database import get_user_key, save_running_symbols, reset_user_data
-from dtos.feature import  StartFeatureDto, TestFeatureDto, CoinSellFeatureDto, StopFeatureDto, \
+from GRID.strategies.grid_process import start_grid_main_in_process, stop_grid_main_process, get_running_users, update_user_data
+from GRID.database.redis_database import get_user_key, save_running_symbols, reset_user_data
+from GRID.dtos.feature import  StartFeatureDto, TestFeatureDto, CoinSellFeatureDto, StopFeatureDto, \
     CoinSellAllFeatureDto, CoinDto
 from shared.dtos.response import ResponseDto
 from shared.dtos.bot_state import BotStateDto, BotStateKeyDto
-from services import bot_state_service
-import GRID.grid as grid
-import GRID.strategy as strategy
-import GRID.redis_database as redis_database
+from GRID.services import bot_state_service
+import GRID.strategies.grid as grid
+import GRID.strategies.strategy as strategy
+import GRID.database.redis_database as redis_database
 import uvicorn
 router = APIRouter(prefix="/feature", tags=["feature"])
 import json
-from shared_state import user_keys 
+from GRID.trading.shared_state import user_keys 
 import asyncio
 import socket
 import redis.asyncio as aioredis

@@ -1,5 +1,5 @@
-from apilist import telegram_store
-from dtos.telegram import TelegramTokenDto
+from GRID.api.apilist import telegram_store
+from GRID.dtos.telegram import TelegramTokenDto
 
 
 def set_telegram_id(telegram_id: str):

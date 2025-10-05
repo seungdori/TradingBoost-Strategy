@@ -1,7 +1,7 @@
 import json
 from typing import List
 
-from dtos.symbol import AccessListDto
+from GRID.dtos.symbol import AccessListDto
 from shared.utils import path_helper
 import aiosqlite
 

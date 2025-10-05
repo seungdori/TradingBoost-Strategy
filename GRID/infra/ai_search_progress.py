@@ -1,4 +1,4 @@
-from dtos.ai_search import AiSearchProgress
+from GRID.dtos.ai_search import AiSearchProgress
 
 
 class AiSearchProgressStore:

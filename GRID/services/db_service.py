@@ -1,6 +1,6 @@
-from infra import database
-import redis_database
-import user_database
+from GRID.infra import database
+from GRID.database import redis_database
+from GRID.database import user_database
 
 # services/db_service.py 수정
 async def init_database(exchange_names):

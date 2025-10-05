@@ -2,7 +2,7 @@ from typing import Any, List
 from fastapi import APIRouter
 from shared.dtos.exchange import ExchangeApiKeyDto, WalletDto, ApiKeys
 from shared.dtos.response import ResponseDto
-from services import exchange_service, api_key_service
+from GRID.services import exchange_service, api_key_service
 
 router = APIRouter(prefix="/exchange", tags=["exchange"])
 

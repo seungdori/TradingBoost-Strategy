@@ -5,6 +5,7 @@ import json
 from HYPERRSI.src.core.database import redis_client
 from HYPERRSI.src.trading.models import tf_mapping
 import ccxt.async_support as ccxt
+from shared.utils import safe_float, convert_symbol_to_okx_instrument
 
 
 logger = get_logger(__name__)
@@ -79,12 +80,7 @@ async def round_to_qty(size: float, symbol: str) -> float:
     except Exception as e:
         logger.error(f"Error in round_to_qty: {e}")
         return max(0.01, size)
-def convert_symbol_to_okx_instrument(symbol: str) -> str:
-    """
-    심볼을 OKX 인스트루먼트 ID로 변환합니다.
-    예: 'BTC/USDT:USDT' -> 'BTC-USDT-SWAP'
-    """
-    return symbol.replace('/', '-').replace(':', '-')
+# convert_symbol_to_okx_instrument is now imported from shared.utils
 
 
 
@@ -212,10 +208,4 @@ async def round_to_tick_size(value: float, current_price: Optional[float] = None
     rounded = value.quantize(Decimal(decimals), rounding=ROUND_HALF_UP)
     return float(rounded)  # 최종 변환
 
-def safe_float(value, default=0.0):
-    try:
-        if value is None or value == '':
-            return default
-        return float(value)
-    except (ValueError, TypeError):
-        return default
+# safe_float is now imported from shared.utils

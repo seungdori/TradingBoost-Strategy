@@ -1,6 +1,6 @@
-from dtos.ai_search import AiSearchProgress
-from dtos.feature import AiSearchStartFeatureDto
-from repositories import ai_search_repository
+from GRID.dtos.ai_search import AiSearchProgress
+from GRID.dtos.feature import AiSearchStartFeatureDto
+from GRID.repositories import ai_search_repository
 
 
 def get_progress(exchange_name: str, enter_strategy: str) -> AiSearchProgress:

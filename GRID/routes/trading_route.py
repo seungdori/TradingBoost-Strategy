@@ -2,13 +2,13 @@ import asyncio
 from typing import List, Any, Dict
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, Body
 from pydantic import Field
-from dtos.feature import CoinDto
+from GRID.dtos.feature import CoinDto
 from shared.dtos.response import ResponseDto
-from dtos.symbol import AccessListDto
+from GRID.dtos.symbol import AccessListDto
 
-from routes.connection_manager import ConnectionManager
+from GRID.routes.connection_manager import ConnectionManager
 from shared.dtos.trading import WinrateDto
-from services import trading_data_service, trading_service
+from GRID.services import trading_data_service, trading_service
 import aiosqlite
 router = APIRouter(prefix="/trading", tags=["trading"])
 import logging

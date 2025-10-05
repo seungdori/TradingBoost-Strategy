@@ -1,6 +1,6 @@
-from dtos.auth import LoginDto, SignupDto
-from dtos.user import UserWithoutPasswordDto, UserCreateDto
-from services import user_service
+from GRID.dtos.auth import LoginDto, SignupDto
+from GRID.dtos.user import UserWithoutPasswordDto, UserCreateDto
+from GRID.services import user_service
 import bcrypt
 
 

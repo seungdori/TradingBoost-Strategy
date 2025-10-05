@@ -1,4 +1,4 @@
-import GRID.strategy as strategy
+from GRID.strategies import strategy
 
 
 # Pop all data from queue.

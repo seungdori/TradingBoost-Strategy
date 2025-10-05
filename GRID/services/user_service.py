@@ -1,6 +1,6 @@
-from dtos.user import UserDto, UserExistDto, UserCreateDto
-from repositories import user_repository
-import redis_database
+from GRID.dtos.user import UserDto, UserExistDto, UserCreateDto
+from GRID.repositories import user_repository
+from GRID.database import redis_database
 from typing import Optional, List
 #async def create_user(dto: UserCreateDto) -> UserDto:
 #    return await user_repository.create_user(dto)

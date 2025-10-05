@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query, HTTPException, WebSocket, WebSocketDisconnect
-from dtos import user
-from version import __version__
-from routes.connection_manager import ConnectionManager, RedisMessageManager
+from GRID.dtos import user
+from GRID.version import __version__
+from GRID.routes.connection_manager import ConnectionManager, RedisMessageManager
 import os
 import redis.asyncio as aioredis
 import json

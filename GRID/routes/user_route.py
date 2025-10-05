@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from shared.dtos.response import ResponseDto
 from shared.dtos.user import UserExistDto, UserWithoutPasswordDto
-from services import user_service
+from GRID.services import user_service
 from typing import Optional, Union
 router = APIRouter(prefix="/user", tags=["user"])
 

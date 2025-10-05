@@ -3,8 +3,8 @@ from typing import List
 import asyncio
 import shared.exchange_apis
 from shared.dtos.trading import TradingDataDto, WinrateDto
-from repositories import trading_data_repository, trading_log_repository
-import grid
+from GRID.repositories import trading_data_repository, trading_log_repository
+from GRID.strategies import grid
 
 
 async def fetch_trading_data(exchange_name: str, symbols: List[str]) -> List[TradingDataDto]:

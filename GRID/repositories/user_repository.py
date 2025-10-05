@@ -4,9 +4,9 @@ import os
 import redis
 from shared.utils import path_helper
 from shared.dtos.user import UserDto, UserExistDto, UserCreateDto
-import redis_database
-import user_database
-from shared_state import user_keys
+from GRID.database import redis_database
+from GRID.database import user_database
+from GRID.trading.shared_state import user_keys
 db_path = str(path_helper.logs_dir / 'users.db')
 #print('USER_DB_ABS_PATH', db_path)
 from typing import Optional, List

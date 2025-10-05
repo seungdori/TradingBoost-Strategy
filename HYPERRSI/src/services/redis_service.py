@@ -5,8 +5,8 @@ import json
 import logging
 from threading import Lock
 from typing import Optional, Dict, Any
-from tenacity import retry, stop_after_attempt, wait_exponential
 from prometheus_client import Counter, Histogram
+from shared.utils import retry_decorator
 from shared.constants.default_settings import (
     DEFAULT_PARAMS_SETTINGS,
     SETTINGS_CONSTRAINTS,
@@ -120,7 +120,7 @@ class RedisService:
             logger.error(f"Redis 연결 상태 확인 중 오류: {str(e)}")
             return False
     
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry_decorator(max_retries=3, delay=4.0, backoff=2.0)
     async def get_user_settings(self, user_id: str) -> Optional[Dict]:
         with self.operation_duration.time():
             try:

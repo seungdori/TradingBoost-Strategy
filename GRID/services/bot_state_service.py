@@ -6,9 +6,9 @@ from shared.constants.exchange import Exchange
 from shared.constants.enterstrategy import EnterStrategy
 from shared.dtos.bot_state import BotStateDto, BotStateKeyDto
 
-from infra import bot_state_store
-import redis_database
-from shared_state import user_keys
+from GRID.infra import bot_state_store
+from GRID.database import redis_database
+from GRID.trading.shared_state import user_keys
 
 import redis.asyncio as aioredis
 from redis.exceptions import RedisError

@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from shared.dtos.response import ResponseDto
 from shared.dtos.telegram import TelegramTokenDto
-from services import telegram_service
+from GRID.services import telegram_service
 
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 

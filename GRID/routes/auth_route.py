@@ -2,8 +2,8 @@ from fastapi import APIRouter
 from shared.dtos.auth import LoginDto, SignupDto
 from shared.dtos.response import ResponseDto
 from shared.dtos.user import UserWithoutPasswordDto
-from services import auth_service
-import user_database
+from GRID.services import auth_service
+from GRID.database import user_database
 from fastapi import HTTPException
 router = APIRouter(prefix="/auth", tags=["auth"])
 
