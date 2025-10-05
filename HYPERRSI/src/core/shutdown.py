@@ -2,7 +2,7 @@
 from HYPERRSI.src.core.database import redis_client
 from HYPERRSI.src.core.config import settings
 
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 import asyncio
 import logging
 

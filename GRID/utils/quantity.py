@@ -1,6 +1,6 @@
 """수량 계산 유틸리티"""
 
-from GRID.trading.get_minimum_qty import get_lot_sizes, get_perpetual_instruments
+from shared.utils import get_lot_sizes, get_perpetual_instruments
 
 
 async def calculate_order_quantity(symbol, initial_capital_list, current_price, redis=None):

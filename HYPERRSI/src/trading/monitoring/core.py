@@ -14,7 +14,7 @@ import sys
 import time
 import traceback
 from datetime import datetime
-from HYPERRSI.src.core.logger import get_logger, log_order
+from shared.logging import get_logger, log_order
 from HYPERRSI.src.core.database import redis_client, check_redis_connection, reconnect_redis
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 from HYPERRSI.src.api.dependencies import get_exchange_context

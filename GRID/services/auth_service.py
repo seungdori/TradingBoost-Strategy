@@ -1,15 +1,69 @@
+"""
+Auth Service - Migrated to New Infrastructure
+
+Manages password hashing and authentication with structured logging.
+"""
+
+import bcrypt
+
+from shared.logging import get_logger
+from shared.errors import ValidationException
+
 from GRID.dtos.auth import LoginDto, SignupDto
 from GRID.dtos.user import UserWithoutPasswordDto, UserCreateDto
 from GRID.services import user_service
-import bcrypt
+
+logger = get_logger(__name__)
 
 
-# Hash a password using bcrypt
-def hash_password(raw_password):
-    pwd_bytes = raw_password.encode('utf-8')
-    salt = bcrypt.gensalt()
-    hashed_password = bcrypt.hashpw(password=pwd_bytes, salt=salt)
-    return hashed_password
+def hash_password(raw_password: str) -> bytes:
+    """
+    Hash a password using bcrypt.
+
+    Args:
+        raw_password: Plain text password
+
+    Returns:
+        Hashed password bytes
+
+    Raises:
+        ValidationException: Invalid password format
+
+    Example:
+        >>> hashed = hash_password("myPassword123")
+        >>> print(type(hashed))  # <class 'bytes'>
+    """
+    if not raw_password or not isinstance(raw_password, str):
+        raise ValidationException(
+            "Password cannot be empty",
+            details={"password_provided": bool(raw_password)}
+        )
+
+    if len(raw_password) < 8:
+        raise ValidationException(
+            "Password must be at least 8 characters",
+            details={"length": len(raw_password)}
+        )
+
+    try:
+        logger.debug("Hashing password")
+
+        pwd_bytes = raw_password.encode('utf-8')
+        salt = bcrypt.gensalt()
+        hashed_password = bcrypt.hashpw(password=pwd_bytes, salt=salt)
+
+        logger.debug("Password hashed successfully")
+        return hashed_password
+
+    except Exception as e:
+        logger.error(
+            "Failed to hash password",
+            exc_info=True
+        )
+        raise ValidationException(
+            f"Password hashing failed: {str(e)}",
+            details={"error": str(e)}
+        )
 
 
 ## Check if the provided password matches the stored password (hashed)

@@ -5,7 +5,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from HYPERRSI.src.core.database import redis_client
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 import json
 import aiohttp
 from HYPERRSI.src.core.config import settings

@@ -1,3 +1,7 @@
+# Auto-configure PYTHONPATH for monorepo structure
+from shared.utils.path_config import configure_pythonpath
+configure_pythonpath()
+
 from celery import Celery
 from shared.config import settings
 import os

@@ -4,7 +4,7 @@ import asyncio
 import json
 import traceback
 from datetime import datetime
-from HYPERRSI.src.core.logger import get_logger, setup_error_logger
+from shared.logging import get_logger, setup_error_logger
 from HYPERRSI.src.core.database import redis_client
 
 logger = get_logger(__name__)

@@ -5,7 +5,7 @@ from aiogram import types, Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import ErrorEvent
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from shared.constants.default_settings import (
     DEFAULT_PARAMS_SETTINGS,
     SETTINGS_CONSTRAINTS,
@@ -19,10 +19,10 @@ from shared.constants.default_settings import (
     ENTRY_AMOUNT_UNITS
 )
 import json
-from ..states.states import SettingStates
+from HYPERRSI.src.bot.states.states import SettingStates
 from HYPERRSI.src.services.redis_service import RedisService
-from ..keyboards.settings_keyboard import get_settings_keyboard
-import src.bot.utils.validator as validator
+from HYPERRSI.src.bot.keyboards.settings_keyboard import get_settings_keyboard
+from HYPERRSI.src.bot.utils import validator
 import traceback  # 상단에 추가
 from aiogram.exceptions import TelegramBadRequest
 

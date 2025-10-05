@@ -10,11 +10,11 @@ import time
 import traceback
 from datetime import datetime
 from typing import Dict, List
-from HYPERRSI.src.core.logger import get_logger, log_order
+from shared.logging import get_logger, log_order
 from HYPERRSI.src.core.database import redis_client
 from HYPERRSI.src.api.dependencies import get_exchange_context
 from HYPERRSI.src.api.routes.order import get_order_detail, get_algo_order_info, close_position, ClosePositionRequest
-from HYPERRSI.src.helpers.order_helper import contracts_to_qty
+from shared.utils import contracts_to_qty
 from .telegram_service import get_identifier, send_telegram_message
 from .utils import order_status_cache, ORDER_STATUS_CACHE_TTL, get_actual_order_type, is_true_value
 from .position_validator import check_position_exists, verify_and_handle_position_closure, check_and_cleanup_orders

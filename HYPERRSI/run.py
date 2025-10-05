@@ -2,7 +2,7 @@ import subprocess
 import sys
 import signal
 import time
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

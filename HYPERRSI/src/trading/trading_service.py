@@ -16,7 +16,7 @@ import traceback
 import httpx
 from HYPERRSI.telegram_message import send_telegram_message
 from HYPERRSI.src.trading.error_message import map_exchange_error
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 import asyncio
 import contextlib
 import time
@@ -25,10 +25,10 @@ import ccxt.async_support as ccxt
 from HYPERRSI.src.core.database import redis_client, TradingCache
 from HYPERRSI.src.api.dependencies import get_exchange_client as get_okx_client, get_exchange_context
 
-from HYPERRSI.src.trading.services.calc_utils import round_to_tick_size, safe_float, convert_symbol_to_okx_instrument, get_tick_size_from_redis, get_minimum_qty, round_to_qty, get_contract_size as get_contract_size_from_module, convert_bool_to_string, convert_bool_to_int
+from shared.utils import round_to_tick_size, safe_float, convert_symbol_to_okx_instrument, get_tick_size_from_redis, get_minimum_qty, round_to_qty, get_contract_size as get_contract_size_from_module, convert_bool_to_string, convert_bool_to_int
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 from HYPERRSI.src.trading.services.order_utils import get_order_info as get_order_info_from_module, try_send_order, InsufficientMarginError
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from HYPERRSI.src.trading.models import get_timeframe
 
 

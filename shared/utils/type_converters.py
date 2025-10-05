@@ -245,3 +245,57 @@ def is_true_value(value: Any) -> bool:
         True
     """
     return parse_bool(value)
+
+
+# ============================================================================
+# 딕셔너리 데이터 변환 함수들
+# ============================================================================
+
+def convert_bool_to_string(data_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    딕셔너리 내 부울 값을 문자열로 변환하는 헬퍼 함수
+
+    Args:
+        data_dict: 변환할 딕셔너리
+
+    Returns:
+        Dict: 부울이 문자열로 변환된 딕셔너리
+
+    Examples:
+        >>> convert_bool_to_string({"active": True, "value": 10})
+        {'active': 'true', 'value': 10}
+        >>> convert_bool_to_string({"enabled": False, "count": 5})
+        {'enabled': 'false', 'count': 5}
+    """
+    converted_dict = {}
+    for key, value in data_dict.items():
+        if isinstance(value, bool):
+            converted_dict[key] = str(value).lower()  # 'true' 또는 'false'로 변환
+        else:
+            converted_dict[key] = value
+    return converted_dict
+
+
+def convert_bool_to_int(data_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    딕셔너리 내 부울 값을 정수로 변환하는 헬퍼 함수
+
+    Args:
+        data_dict: 변환할 딕셔너리
+
+    Returns:
+        Dict: 부울이 정수로 변환된 딕셔너리
+
+    Examples:
+        >>> convert_bool_to_int({"active": True, "value": 10})
+        {'active': 1, 'value': 10}
+        >>> convert_bool_to_int({"enabled": False, "count": 5})
+        {'enabled': 0, 'count': 5}
+    """
+    converted_dict = {}
+    for key, value in data_dict.items():
+        if isinstance(value, bool):
+            converted_dict[key] = 1 if value else 0  # 1 또는 0으로 변환
+        else:
+            converted_dict[key] = value
+    return converted_dict

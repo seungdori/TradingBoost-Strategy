@@ -4,9 +4,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import any_state
 from HYPERRSI.src.core.database import redis_client
 import logging
-from ..states.states import RegisterStates
+from HYPERRSI.src.bot.states.states import RegisterStates
 from shared.constants.message import CANCEL_MESSAGES
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 
 router = Router()
 logger = get_logger(__name__)

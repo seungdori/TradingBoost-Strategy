@@ -1,4 +1,8 @@
 #src/core/celery_task.py
+# Auto-configure PYTHONPATH for monorepo structure
+from shared.utils.path_config import configure_pythonpath
+configure_pythonpath()
+
 #실행 명령어
 
 #celery -A src.core.celery_task worker --loglevel=INFO --concurrency=8
@@ -6,7 +10,7 @@
 #celery -A src.core.celery_task worker --loglevel=WARNING --concurrency=8
 
 
-#비트 사용할 필요 없음. 
+#비트 사용할 필요 없음.
 #celery -A src.core.celery_task beat --loglevel=WARNING
 #celery -A src.core.celery_task flower --port=5555
 

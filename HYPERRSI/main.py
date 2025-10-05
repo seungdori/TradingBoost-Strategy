@@ -1,28 +1,39 @@
+# Auto-configure PYTHONPATH for monorepo structure
+from shared.utils.path_config import configure_pythonpath
+configure_pythonpath()
+
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from HYPERRSI.src.api.routes import trading, account, order, position, telegram, chart, trading_log, settings, stats, status, user, okx
 from HYPERRSI.src.api.middleware import setup_middlewares
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from fastapi.middleware.cors import CORSMiddleware
-from HYPERRSI.src.core.database import init_db
 
+# New infrastructure imports
+from shared.config import settings as app_settings
+from shared.errors import register_exception_handlers
+from shared.errors.middleware import RequestIDMiddleware
+from shared.database.session import init_db as init_new_db, close_db
+from shared.database.redis import init_redis as init_new_redis, close_redis
+from shared.logging import setup_json_logger
+
+# Legacy imports (for backward compatibility)
+from HYPERRSI.src.core.database import init_db
 from HYPERRSI.src.services.redis_service import init_redis
-#from HYPERRSI.src.core.shutdown import deactivate_all_trading
+from HYPERRSI.src.core.error_handler import log_error
+
 import asyncio
 import os
 import signal
 import logging
 from typing import Set
-from HYPERRSI.src.core.error_handler import log_error
 
+# Setup structured logging
+logger_new = setup_json_logger("hyperrsi")
 
-# 로깅 설정
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Legacy logger (for backward compatibility)
 logger = get_logger(__name__)
 
 _is_shutting_down = False
@@ -40,32 +51,49 @@ def handle_exception(loop, context):
 
 async def shutdown(signal_name: str):
     """
-    우아한 종료 처리
+    Graceful shutdown handler with proper cleanup.
+
+    This function is called when the application receives a shutdown signal
+    (e.g., SIGINT from Ctrl+C). It performs cleanup operations and then
+    stops the event loop, allowing cleanup handlers and __del__ methods to run.
+
+    Args:
+        signal_name: Name of the signal that triggered the shutdown
     """
     global _is_shutting_down
     if _is_shutting_down:
         return
-        
+
     _is_shutting_down = True
     logger.info(f"Received exit signal {signal_name}")
-    
-    ## 트레이딩 세션 종료
-    #await deactivate_all_trading()
-    
-    # 실행 중인 태스크 정리
-    current_task = asyncio.current_task()
-    pending_tasks = [t for t in tasks if t is not current_task and not t.done()]
-    
-    if pending_tasks:
-        logger.info(f"Cancelling {len(pending_tasks)} outstanding tasks")
-        for task in pending_tasks:
-            task.cancel()
-        await asyncio.gather(*pending_tasks, return_exceptions=True)
-    
-    logger.info("Shutdown completed")
-    
-    # 서버 종료
-    os._exit(0)
+
+    try:
+        ## Trading session cleanup
+        #await deactivate_all_trading()
+
+        # Cancel all pending tasks
+        current_task = asyncio.current_task()
+        pending_tasks = [t for t in tasks if t is not current_task and not t.done()]
+
+        if pending_tasks:
+            logger.info(f"Cancelling {len(pending_tasks)} outstanding tasks")
+            for task in pending_tasks:
+                task.cancel()
+            # Wait for tasks to complete cancellation
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
+
+        # Close infrastructure connections
+        await close_db()
+        await close_redis()
+
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}", exc_info=True)
+    finally:
+        logger.info("Shutdown completed")
+        # Stop the event loop gracefully instead of os._exit(0)
+        # This allows finally blocks and __del__ methods to run
+        loop = asyncio.get_event_loop()
+        loop.stop()
 
 def handle_signals():
     """시그널 핸들러 설정"""
@@ -82,25 +110,60 @@ def handle_signals():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Application lifespan with new infrastructure integration"""
     try:
-        logger.info("Starting application...")
+        # New infrastructure initialization
+        logger_new.info(
+            "Starting HYPERRSI application",
+            extra={
+                "environment": app_settings.ENVIRONMENT,
+                "debug": app_settings.DEBUG,
+            }
+        )
+
         handle_signals()
+
+        # Initialize new infrastructure
+        await init_new_db()
+        await init_new_redis()
+
+        # Legacy database initialization
         await init_db()
         await init_redis()
+
+        logger_new.info("HYPERRSI application startup complete")
+        logger.info("Starting application...")
+
         yield
+
     finally:
         if not _is_shutting_down:
+            logger_new.info("Shutting down HYPERRSI application")
             logger.info("Shutting down application...")
+
+            # Cleanup new infrastructure
+            await close_db()
+            await close_redis()
+
+            logger_new.info("HYPERRSI application shutdown complete")
 
 # FastAPI 앱 설정
 app = FastAPI(
-    title="Trading Platform API",
-    description="암호화폐 트레이딩 플랫폼 API",
-    version="0.9.0",
+    title="HYPERRSI Trading Strategy API",
+    description="RSI-based trading strategy with trend analysis",
+    version="1.0.0",
+    debug=app_settings.DEBUG,
     lifespan=lifespan,
-    proxy_headers=True,              # <--- 이 줄 추가: X-Forwarded-* 헤더를 사용하도록 설정
-    forwarded_allow_ips="127.0.0.1"  # <--- 이 줄 추가: 로컬호스트(Nginx)에서 오는 프록시 헤더만 신뢰
+    proxy_headers=True,
+    forwarded_allow_ips="127.0.0.1"
 )
+
+# Register exception handlers (new infrastructure)
+register_exception_handlers(app)
+
+# Register Request ID middleware (MUST be first for proper tracking)
+app.add_middleware(RequestIDMiddleware)
+
 # CORS 설정 추가
 app.add_middleware(
     CORSMiddleware,
@@ -177,16 +240,5 @@ async def health_check():
         "status": "healthy"
     }
 
-@app.on_event("startup")
-async def startup_event():
-    """서버 시작 시 실행"""
-    handle_signals()
-    logger.info("Application startup complete")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """서버 종료 시 실행"""
-    global _is_shutting_down
-    if not _is_shutting_down:
-        await shutdown("SHUTDOWN_EVENT")
-    logger.info("Application shutdown complete")
+# Note: @app.on_event decorators are deprecated in FastAPI.
+# All startup/shutdown logic is now handled by the lifespan context manager above.

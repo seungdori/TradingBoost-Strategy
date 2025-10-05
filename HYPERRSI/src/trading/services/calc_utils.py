@@ -1,12 +1,21 @@
-from HYPERRSI.src.core.logger import get_logger
-from decimal import Decimal, ROUND_HALF_UP , ROUND_DOWN
+"""
+Calculation Utilities - Migrated to New Infrastructure
+
+Trading calculation utilities with structured logging and exception handling.
+"""
+
+from decimal import Decimal, ROUND_HALF_UP, ROUND_DOWN
 from typing import Optional
 import json
+
+import ccxt.async_support as ccxt
+
+from shared.utils import safe_float, convert_symbol_to_okx_instrument
+from shared.logging import get_logger
+from shared.errors import DatabaseException, ValidationException
+
 from HYPERRSI.src.core.database import redis_client
 from HYPERRSI.src.trading.models import tf_mapping
-import ccxt.async_support as ccxt
-from shared.utils import safe_float, convert_symbol_to_okx_instrument
-
 
 logger = get_logger(__name__)
 
@@ -34,17 +43,59 @@ def convert_bool_to_int(data_dict):
     return converted_dict
 
 async def get_contract_size(symbol: str) -> float:
+    """
+    Get contract size for symbol from Redis.
+
+    Args:
+        symbol: Trading symbol
+
+    Returns:
+        Contract size (default: 0.01)
+
+    Raises:
+        DatabaseException: Redis operation failed
+    """
     try:
+        logger.debug(
+            "Getting contract size",
+            extra={"symbol": symbol}
+        )
+
         spec_key = await redis_client.get(f"symbol_info:contract_specifications")
+
         if not spec_key:
+            logger.warning(
+                "Contract specifications not found in Redis",
+                extra={"symbol": symbol}
+            )
             return 0.01
+
         spec_json = json.loads(spec_key)
         spec = spec_json.get(symbol)
+
         if not spec:
+            logger.warning(
+                "Symbol specification not found",
+                extra={"symbol": symbol}
+            )
             return 0.01
-        return spec.get("contractSize", 0.01)
+
+        contract_size = spec.get("contractSize", 0.01)
+
+        logger.debug(
+            "Contract size retrieved",
+            extra={"symbol": symbol, "contract_size": contract_size}
+        )
+
+        return contract_size
+
     except Exception as e:
-        logger.error(f"Error in get_contract_size for {symbol}: {str(e)}")
+        logger.error(
+            "Error getting contract size",
+            exc_info=True,
+            extra={"symbol": symbol}
+        )
+        # Return default value instead of raising
         return 0.01
 
 async def round_to_qty(size: float, symbol: str) -> float:

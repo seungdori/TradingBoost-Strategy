@@ -20,35 +20,20 @@ from shared.config.constants import (
     MAX_RECENT_SYMBOLS
 )
 
-# Import settings from parent config.py file
-import sys
-import os
-parent_dir = os.path.dirname(os.path.dirname(__file__))
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+# Import unified settings from settings.py
+from shared.config.settings import settings, get_settings, Settings
 
-# Import from shared.config module (the .py file)
-import importlib.util
-config_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.py')
-spec = importlib.util.spec_from_file_location("_config", config_file)
-_config = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(_config)
-
-settings = _config.settings
-Settings = _config.Settings
-get_settings = _config.get_settings
-
-# Export all variables from config.py
-OKX_API_KEY = _config.OKX_API_KEY
-OKX_SECRET_KEY = _config.OKX_SECRET_KEY
-OKX_PASSPHRASE = _config.OKX_PASSPHRASE
-TELEGRAM_BOT_TOKEN = _config.TELEGRAM_BOT_TOKEN
-OWNER_ID = _config.OWNER_ID
-DATABASE_URL = _config.DATABASE_URL
-REDIS_URL = _config.REDIS_URL
-REDIS_HOST = _config.REDIS_HOST
-REDIS_PORT = _config.REDIS_PORT
-REDIS_PASSWORD = _config.REDIS_PASSWORD
+# Backward compatibility: Export individual config values
+OKX_API_KEY = settings.OKX_API_KEY
+OKX_SECRET_KEY = settings.OKX_SECRET_KEY
+OKX_PASSPHRASE = settings.OKX_PASSPHRASE
+TELEGRAM_BOT_TOKEN = settings.TELEGRAM_BOT_TOKEN
+OWNER_ID = settings.OWNER_ID
+DATABASE_URL = settings.DATABASE_URL
+REDIS_URL = settings.REDIS_URL
+REDIS_HOST = settings.REDIS_HOST
+REDIS_PORT = settings.REDIS_PORT
+REDIS_PASSWORD = settings.REDIS_PASSWORD
 
 __all__ = [
     # Logging

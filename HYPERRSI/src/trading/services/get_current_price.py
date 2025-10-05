@@ -2,8 +2,8 @@
 from HYPERRSI.src.trading.models import get_timeframe
 import ccxt.async_support as ccxt
 from HYPERRSI.src.core.database import redis_client
-from HYPERRSI.src.trading.services.calc_utils import safe_float
-from HYPERRSI.src.core.logger import get_logger
+from shared.utils import safe_float
+from shared.logging import get_logger
 import json
 logger = get_logger(__name__)
 

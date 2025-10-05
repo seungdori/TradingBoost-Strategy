@@ -3,9 +3,9 @@ import json
 from HYPERRSI.src.core.database import redis_client
 from HYPERRSI.src.trading.models import Position
 from datetime import datetime
-from HYPERRSI.src.core.logger import get_logger, log_order
+from shared.logging import get_logger, log_order
 from HYPERRSI.src.api.dependencies import get_exchange_context
-from HYPERRSI.src.trading.services.calc_utils import get_contract_size
+from shared.utils import get_contract_size
 import matplotlib.pyplot as plt
 import pandas as pd
 import tempfile

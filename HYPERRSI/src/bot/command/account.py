@@ -6,9 +6,9 @@ import pytz
 from HYPERRSI.src.core.database import redis_client
 import json
 import httpx
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from HYPERRSI.src.trading.stats import get_trade_history, get_user_trading_statistics, generate_pnl_statistics_image, get_pnl_history
-from HYPERRSI.src.trading.services.calc_utils import get_contract_size
+from shared.utils import get_contract_size
 import os
 logger = get_logger(__name__)
 import matplotlib.pyplot as plt

@@ -37,7 +37,7 @@ import redis.asyncio as aioredis
 
 # ==================== 프로젝트 모듈 ====================
 from GRID.database import redis_database
-from GRID.database.redis_database import get_user_data_from_redis, initialize_user_data
+from GRID.services.user_management_service import get_user_data_from_redis, initialize_user_data
 from GRID.main import periodic_analysis
 from GRID.routes.logs_route import add_log_endpoint as add_user_log
 from GRID.strategies import strategy

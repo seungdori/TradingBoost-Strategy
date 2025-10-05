@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import ccxt.async_support as ccxt
 from fastapi import HTTPException
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from HYPERRSI.src.core.database import redis_client
 
 # API 모델 (Pydantic) 및 Enum

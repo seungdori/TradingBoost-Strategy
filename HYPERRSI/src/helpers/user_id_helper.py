@@ -1,5 +1,6 @@
 import logging
 from HYPERRSI.src.core.database import redis_client
+from HYPERRSI.src.services.timescale_service import TimescaleUserService
 
 from typing import Optional
 
@@ -35,7 +36,7 @@ async def get_telegram_id_from_uid(okx_uid: str) -> Optional[str]: # 반환 타�
     OKX UID를 텔레그램 ID로 변환합니다.
     1. 주요 방식: user:*:okx_uid 키 스캔 및 값 비교 (기존 로직)
     2. 예비 방식: okx_uid_to_telegram:{okx_uid} 키 직접 조회 (새로 추가된 로직)
-    3. 추가 방식: Supabase 데이터베이스에서 조회 (마지막 시도)
+    3. 추가 방식: TimescaleDB에서 조회 (마지막 시도)
 
     Args:
         okx_uid: OKX UID
@@ -132,60 +133,35 @@ async def get_telegram_id_from_uid(okx_uid: str) -> Optional[str]: # 반환 타�
 
     except Exception as e:
         logger.error(f"Error during fallback method for OKX UID {okx_uid_str} using key {fallback_key}: {str(e)}")
-        # 예비 방식 중 에러 발생해도 Supabase 방식으로 넘어감
+        # 예비 방식 중 에러 발생해도 TimescaleDB 방식으로 넘어감
 
-    # --- 3. Supabase에서 조회 (마지막 시도) ---
-    logger.info(f"Attempting to find telegram_id from Supabase for OKX UID {okx_uid_str}")
+    # --- 3. TimescaleDB에서 조회 (마지막 시도) ---
+    logger.info(f"Attempting to find telegram_id from TimescaleDB for OKX UID {okx_uid_str}")
     try:
-        # Supabase 연결 정보
-        SUPABASE_URL = "https://fsobvtcxqndccnekasqw.supabase.co"
-        SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZzb2J2dGN4cW5kY2NuZWthc3F3Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczMDY0MTIyNywiZXhwIjoyMDQ2MjE3MjI3fQ.Pni49lbWfdQBt7azJE_I_-1rM5jjp7Ri1L44I3F_hNQ"
-        
-        import httpx
-        
-        # Supabase API 헤더 설정
-        headers = {
-            "apikey": SUPABASE_SERVICE_KEY,
-            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation"
-        }
-        
-        # 쿼리 URL 구성 - okx_uid로 검색하고 telegram_linked가 true인 사용자 조회
-        url = f"{SUPABASE_URL}/rest/v1/users?okx_uid=eq.{okx_uid_str}&telegram_linked=eq.true&select=*"
-        logger.info(f"Querying Supabase: {url}")
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, headers=headers)
-            
-            # 응답 처리
-            if response.status_code == 200 and response.json():
-                users = response.json()
-                logger.info(f"Supabase returned {len(users)} users for okx_uid={okx_uid_str}")
-                
-                # 첫 번째 일치하는 사용자의 telegram_id 가져오기
-                if users and 'telegram_id' in users[0] and users[0]['telegram_id']:
-                    supabase_telegram_id = str(users[0]['telegram_id'])
-                    
-                    # telegram_id가 유효한지 확인 (숫자형태, 적절한 길이)
-                    if supabase_telegram_id.isdigit() and 6 <= len(supabase_telegram_id) < 15:
-                        logger.info(f"Found telegram_id={supabase_telegram_id} in Supabase for okx_uid={okx_uid_str}")
-                        
-                        # Redis에 결과 캐싱 - 다음 조회 시 빠르게 접근하기 위함
-                        cache_key = f"okx_uid_to_telegram:{okx_uid_str}"
-                        await redis_client.set(cache_key, supabase_telegram_id)
-                        logger.info(f"Cached telegram_id in Redis key: {cache_key}")
-                        
-                        return supabase_telegram_id
-                    else:
-                        logger.warning(f"Found invalid telegram_id format in Supabase: {supabase_telegram_id}")
+        record = await TimescaleUserService.fetch_user(okx_uid_str)
+        if record:
+            timescale_telegram_id = None
+
+            if record.api and record.api.get("telegram_id"):
+                timescale_telegram_id = str(record.api["telegram_id"])
+            elif record.user.get("telegram_id"):
+                timescale_telegram_id = str(record.user["telegram_id"])
+            elif record.user.get("telegram_userid"):
+                timescale_telegram_id = str(record.user["telegram_userid"])
+
+            if timescale_telegram_id and timescale_telegram_id.isdigit() and 6 <= len(timescale_telegram_id) < 15:
+                logger.info(f"Found telegram_id={timescale_telegram_id} in TimescaleDB for okx_uid={okx_uid_str}")
+                cache_key = f"okx_uid_to_telegram:{okx_uid_str}"
+                await redis_client.set(cache_key, timescale_telegram_id)
+                logger.info(f"Cached telegram_id in Redis key: {cache_key}")
+                return timescale_telegram_id
             else:
-                logger.warning(f"No valid user found in Supabase for okx_uid={okx_uid_str}. Status: {response.status_code}")
-                if response.status_code != 200:
-                    logger.error(f"Supabase API error: {response.text}")
+                logger.warning(f"No valid telegram_id found in TimescaleDB for okx_uid={okx_uid_str}")
+        else:
+            logger.warning(f"TimescaleDB returned no user for okx_uid={okx_uid_str}")
 
     except Exception as e:
-        logger.error(f"Error querying Supabase for okx_uid={okx_uid_str}: {str(e)}")
+        logger.error(f"Error querying TimescaleDB for okx_uid={okx_uid_str}: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
     
@@ -230,16 +206,16 @@ logging.basicConfig(
 
 async def test_get_telegram_id():
     """
-    Supabase 연동을 테스트하기 위한 함수
+    TimescaleDB 연동을 테스트하기 위한 함수
     """
-    logger.info("===== Supabase 연동 테스트 시작 =====")
+    logger.info("===== TimescaleDB 연동 테스트 시작 =====")
     
     # 테스트할 OKX UID (실제 존재하는 UID로 변경해주세요)
     test_okx_uid = "587662504768345929"  # 예시 OKX UID
     
     logger.info(f"테스트 OKX UID: {test_okx_uid}")
     
-    # 1. 먼저 Redis 캐시를 비워서 Supabase 호출이 확실히 일어나도록 함
+    # 1. 먼저 Redis 캐시를 비워서 Timescale 조회가 확실히 일어나도록 함
     cache_key = f"okx_uid_to_telegram:{test_okx_uid}"
     await redis_client.delete(cache_key)
     logger.info(f"Redis 캐시 키 {cache_key} 삭제됨")
@@ -262,8 +238,8 @@ async def test_get_telegram_id():
             logger.warning(f"Redis 캐시 키 {cache_key}가 존재하지 않음")
     else:
         logger.error(f"실패: OKX UID {test_okx_uid}에 대한 텔레그램 ID를 찾을 수 없음")
-    
-    logger.info("===== Supabase 연동 테스트 완료 =====")
+
+    logger.info("===== TimescaleDB 연동 테스트 완료 =====")
     
     return telegram_id
 

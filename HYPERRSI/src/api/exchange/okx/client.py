@@ -9,11 +9,11 @@ import json
 import hashlib
 from typing import Dict, List, Optional
 from HYPERRSI.src.core.config import settings
-from HYPERRSI.src.core.logger import get_logger
-from ..base import ExchangeBase
-from ..models import OrderRequest, OrderResponse, Balance, Position, OrderSide
-from .constants import BASE_URL, V5_API, ENDPOINTS, ERROR_CODES
-from .exceptions import OKXAPIException
+from shared.logging import get_logger
+from HYPERRSI.src.api.exchange.base import ExchangeBase
+from HYPERRSI.src.api.exchange.models import OrderRequest, OrderResponse, Balance, Position, OrderSide
+from HYPERRSI.src.api.exchange.okx.constants import BASE_URL, V5_API, ENDPOINTS, ERROR_CODES
+from HYPERRSI.src.api.exchange.okx.exceptions import OKXAPIException
 from fastapi import APIRouter, Depends, HTTPException
 from HYPERRSI.src.api.exchange.models import (
     OrderRequest, OrderResponse, Balance, Position,

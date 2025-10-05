@@ -8,8 +8,8 @@ from shared.constants.default_settings import DEFAULT_TRADING_SETTINGS, DEFAULT_
 import pytz
 from datetime import datetime
 from HYPERRSI.src.core.database import redis_client
-from ..states.states import RegisterStates
-from HYPERRSI.src.core.logger import get_logger
+from HYPERRSI.src.bot.states.states import RegisterStates
+from shared.logging import get_logger
 from HYPERRSI.src.utils.check_invitee import get_uid_from_api_keys
 import traceback
 import json

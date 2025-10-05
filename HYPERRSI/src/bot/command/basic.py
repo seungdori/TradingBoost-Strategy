@@ -5,49 +5,13 @@ from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import any_state
 from HYPERRSI.src.core.database import redis_client
+from HYPERRSI.src.services.timescale_service import TimescaleUserService
 import logging
-import os
-import httpx
-from dotenv import load_dotenv
 
-from ..states.states import RegisterStates  
-
-# 환경변수 로드
-load_dotenv()
-
-# Supabase 연결 정보
-SUPABASE_URL = "https://fsobvtcxqndccnekasqw.supabase.co"
-SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZzb2J2dGN4cW5kY2NuZWthc3F3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzA2NDEyMjcsImV4cCI6MjA0NjIxNzIyN30.kdbn5f89xxeAbDX7SMUF_SX561PX1jDISr1sKTY1ka4"
-SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZzb2J2dGN4cW5kY2NuZWthc3F3Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczMDY0MTIyNywiZXhwIjoyMDQ2MjE3MjI3fQ.Pni49lbWfdQBt7azJE_I_-1rM5jjp7Ri1L44I3F_hNQ"
+from HYPERRSI.src.bot.states.states import RegisterStates  
 
 router = Router()
 logger = logging.getLogger(__name__)
-
-# Supabase API 클라이언트 함수
-async def supabase_api_call(endpoint, method="GET", data=None, auth_key=SUPABASE_SERVICE_KEY):
-    """Supabase API 호출 함수"""
-    headers = {
-        "apikey": auth_key,
-        "Authorization": f"Bearer {auth_key}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation"
-    }
-    
-    url = f"{SUPABASE_URL}/rest/v1/{endpoint}"
-    
-    async with httpx.AsyncClient() as client:
-        if method == "GET":
-            response = await client.get(url, headers=headers)
-        elif method == "POST":
-            response = await client.post(url, json=data, headers=headers)
-        elif method == "PUT":
-            response = await client.put(url, json=data, headers=headers)
-        elif method == "PATCH":
-            response = await client.patch(url, json=data, headers=headers)
-        elif method == "DELETE":
-            response = await client.delete(url, headers=headers)
-        
-        return response
 
 def get_redis_keys(user_id):
     return {
@@ -72,59 +36,30 @@ async def start_command(message: types.Message, state: FSMContext):
    
     # 이미 등록된 UID가 있는지 확인
     okx_uid = await redis_client.get(telegram_uid_key)
-   
+
     if okx_uid:
-        # Supabase에서 사용자 정보 확인
+        if isinstance(okx_uid, bytes):
+            okx_uid = okx_uid.decode()
+
+        display_name = " ".join(filter(None, [message.from_user.first_name, message.from_user.last_name])).strip()
+        username = message.from_user.username
+
         try:
-            # okx_uid로 사용자 확인
-            response = await supabase_api_call(f"users?okx_uid=eq.{okx_uid}", method="GET")
-            
-            if response.status_code == 200 and response.json():
-                # 이미 okx_uid가 등록되어 있는 경우
-                supabase_user = response.json()[0]
-                
-                # telegram_id 업데이트 필요한지 확인
-                if supabase_user.get('telegram_id') != str(user_id):
-                    # telegram_id 업데이트
-                    update_data = {
-                        "telegram_id": str(user_id),
-                        "telegram_linked": True,
-                        "updated_at": "now()"
-                    }
-                    await supabase_api_call(f"users?okx_uid=eq.{okx_uid}", method="PATCH", data=update_data)
-                    supabase_msg = "텔레그램 ID 업데이트됨"
-                else:
-                    supabase_msg = "기존 연결 확인됨"
-                    
-                await message.reply(
-                    f"👋 안녕하세요! 이미 연동이 완료되었습니다.\n\n"
-                    f"연동된 UID: {okx_uid}\n"
-                    f"설정을 초기화하려면 /reset 명령어를 사용하세요."
-                )
-            else:
-                # okx_uid는 Redis에 있지만 Supabase에는 없는 경우
-                user_data = {
-                    "telegram_id": str(user_id),
-                    "okx_uid": str(okx_uid),
-                    "name": message.from_user.first_name or "" + " " + (message.from_user.last_name or ""),
-                    "telegram_linked": True,
-                    "created_at": "now()",
-                    "updated_at": "now()"
-                }
-                await supabase_api_call("users", method="POST", data=user_data)
-                
-                await message.reply(
-                    f"👋 안녕하세요! 이미 연동이 완료되었습니다.\n\n"
-                    f"연동된 UID: {okx_uid}\n"
-                    f"설정을 초기화하려면 /reset 명령어를 사용하세요."
-                )
-        except Exception as e:
-            logger.error(f"Supabase 연결 오류: {str(e)}")
-            await message.reply(
-                f"👋 안녕하세요! 이미 연동이 완료되었습니다.\n\n"
-                f"연동된 UID: {okx_uid}\n"
-                f"설정을 초기화하려면 /reset 명령어를 사용하세요."
+            await TimescaleUserService.set_telegram_link(
+                str(okx_uid),
+                str(user_id),
+                display_name=display_name or None,
+                telegram_username=username,
             )
+            logger.info(f"TimescaleDB link ensured for existing user {okx_uid} (telegram {user_id})")
+        except Exception as exc:
+            logger.error(f"TimescaleDB 링크 처리 중 오류: {exc}")
+
+        await message.reply(
+            f"👋 안녕하세요! 이미 연동이 완료되었습니다.\n\n"
+            f"연동된 UID: {okx_uid}\n"
+            f"설정을 초기화하려면 /reset 명령어를 사용하세요."
+        )
         return
 
     # 등록되지 않은 경우 UID 입력 요청
@@ -154,43 +89,25 @@ async def process_uid(message: types.Message, state: FSMContext):
         # Redis에 UID 저장
         await redis_client.set(telegram_uid_key, okx_uid)
         
-        # Supabase에 사용자 정보 저장
+        display_name = " ".join(filter(None, [message.from_user.first_name, message.from_user.last_name])).strip()
+        username = message.from_user.username
+
+        timescale_status = "TimescaleDB 연동 완료"
         try:
-            # 먼저 okx_uid로 사용자 확인
-            response = await supabase_api_call(f"users?okx_uid=eq.{okx_uid}", method="GET")
-            
-            if response.status_code == 200 and response.json():
-                # okx_uid가 이미 존재하면 telegram_id를 업데이트
-                update_data = {
-                    "telegram_id": str(user_id),
-                    "telegram_linked": True,
-                    "updated_at": "now()"
-                }
-                await supabase_api_call(f"users?okx_uid=eq.{okx_uid}", method="PATCH", data=update_data)
-                supabase_status = "기존 OKX UID에 텔레그램 ID 연결됨"
-                logger.info(f"기존 OKX UID {okx_uid}에 텔레그램 ID {user_id} 연결 성공")
+            record = await TimescaleUserService.set_telegram_link(
+                str(okx_uid),
+                str(user_id),
+                display_name=display_name or None,
+                telegram_username=username,
+            )
+            if record is None:
+                timescale_status = "⚠️ TimescaleDB에 사용자 정보를 생성할 수 없습니다. 관리자에게 문의해주세요."
+                logger.warning(f"TimescaleDB에서 사용자 {user_id} / {okx_uid}를 생성하지 못했습니다.")
             else:
-                # okx_uid가 없으면 새로 생성
-                user_data = {
-                    "telegram_id": str(user_id),
-                    "okx_uid": str(okx_uid),
-                    "name": message.from_user.first_name or "" + " " + (message.from_user.last_name or ""),
-                    "telegram_linked": True,
-                    "created_at": "now()",
-                    "updated_at": "now()"
-                }
-                create_response = await supabase_api_call("users", method="POST", data=user_data)
-                
-                if create_response.status_code in [200, 201]:
-                    supabase_status = "새 사용자로 등록됨"
-                    logger.info(f"신규 사용자 등록: 텔레그램 ID {user_id}, OKX UID {okx_uid}")
-                else:
-                    logger.error(f"Supabase 사용자 생성 실패: {create_response.text}")
-                    supabase_status = f"등록 실패: {create_response.status_code}"
-                    
-        except Exception as e:
-            logger.error(f"Supabase 등록 오류: {str(e)}")
-            supabase_status = f"오류: {str(e)}"
+                logger.info(f"TimescaleDB link established for user {user_id} with OKX UID {okx_uid}")
+        except Exception as exc:
+            timescale_status = f"⚠️ 데이터베이스 연동 중 오류가 발생했습니다: {exc}"
+            logger.error(f"TimescaleDB 등록 오류: {exc}")
         
         # 상태 초기화
         await state.clear()
@@ -215,6 +132,9 @@ async def process_uid(message: types.Message, state: FSMContext):
                 f"✅ UID ({okx_uid}) 등록 완료!\n"
                 "이제 트레이딩 알림을 받으실 수 있습니다.\n"
             )
+
+            if timescale_status.startswith("⚠️"):
+                await message.reply(timescale_status)
         except Exception as e:
             await message.reply(
                 f"⚠️ UID는 등록되었으나 설정 초기화 중 오류가 발생했습니다: {str(e)}\n"
@@ -246,25 +166,22 @@ async def reset_command(message: types.Message):
     # Redis에서 UID 삭제
     await redis_client.delete(telegram_uid_key)
     
-    # Supabase에서 사용자 상태 업데이트
+    # TimescaleDB에서 사용자 상태 업데이트
+    okx_uid_str = okx_uid.decode() if isinstance(okx_uid, bytes) else str(okx_uid)
     try:
-        # telegram_id 필드 비우고 telegram_linked 상태 변경
-        update_data = {
-            "telegram_id": None,  # telegram_id 연결 해제
-            "telegram_linked": False,
-            "updated_at": "now()"
-        }
-        await supabase_api_call(f"users?okx_uid=eq.{okx_uid}", method="PATCH", data=update_data)
-        supabase_status = "✅ 텔레그램 연결 해제됨"
-    except Exception as e:
-        logger.error(f"Supabase 상태 업데이트 오류: {str(e)}")
-        supabase_status = f"❌ 오류: {str(e)}"
+        success = await TimescaleUserService.unlink_telegram(okx_uid_str)
+        timescale_status = "✅ 텔레그램 연결 해제됨" if success else "⚠️ TimescaleDB에서 사용자 정보를 찾을 수 없습니다."
+    except Exception as exc:
+        logger.error(f"TimescaleDB 상태 업데이트 오류: {exc}")
+        timescale_status = f"❌ 오류: {exc}"
     
     await message.reply(
         f"✅ UID ({okx_uid}) 연동이 해제되었습니다.\n"
 
         "다시 등록하려면 /start 명령어를 사용하세요."
     )
+    if timescale_status and timescale_status != "✅ 텔레그램 연결 해제됨":
+        await message.reply(timescale_status)
 
 #@router.message(Command("check"))
 #async def check_command(message: types.Message):

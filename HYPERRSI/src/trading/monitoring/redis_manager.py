@@ -11,7 +11,7 @@ import traceback
 from datetime import datetime, timedelta
 from typing import Dict, List
 import psutil
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from HYPERRSI.src.core.database import redis_client, check_redis_connection, reconnect_redis
 from .telegram_service import get_identifier
 from .utils import order_status_cache, ORDER_STATUS_CACHE_TTL, MEMORY_CLEANUP_INTERVAL

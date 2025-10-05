@@ -8,7 +8,7 @@ import asyncio
 import json
 import traceback
 from typing import Tuple, Dict
-from HYPERRSI.src.core.logger import get_logger, log_order
+from shared.logging import get_logger, log_order
 from HYPERRSI.src.core.database import redis_client
 from HYPERRSI.src.api.dependencies import get_exchange_context
 from HYPERRSI.src.api.routes.order import close_position, ClosePositionRequest

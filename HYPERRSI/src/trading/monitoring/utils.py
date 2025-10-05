@@ -8,7 +8,7 @@ HYPERRSI 모니터링 유틸리티 함수
 """
 
 import time
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from HYPERRSI.src.core.database import redis_client
 
 # shared 모듈에서 공통 유틸리티 import 및 re-export

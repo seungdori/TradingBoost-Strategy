@@ -70,12 +70,7 @@ from GRID.utils.redis_helpers import (
     add_placed_price,
     reset_order_placed,
 )
-from GRID.utils.time import (
-    parse_timeframe,
-    calculate_current_timeframe_start,
-    calculate_next_timeframe_start,
-    calculate_sleep_duration,
-)
+from shared.utils import (parse_timeframe, calculate_current_timeframe_start, calculate_next_timeframe_start, calculate_sleep_duration)
 
 logger = logging.getLogger(__name__)
 

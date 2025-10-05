@@ -1,7 +1,7 @@
 #src/api/routes/order_backend_client.py
 import aiohttp
 from typing import Dict, Optional, List
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from HYPERRSI.src.config import settings
 from fastapi import HTTPException
 

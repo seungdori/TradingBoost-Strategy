@@ -1,6 +1,6 @@
 #src/trading/services/order_wrapper.py
 from typing import Dict, Optional, List
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 import ccxt.async_support as ccxt
 
 logger = get_logger(__name__)

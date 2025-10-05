@@ -3,7 +3,7 @@ import numpy as np
 from typing import Union, Optional, Tuple, Dict
 from functools import lru_cache
 from HYPERRSI.src.core.database import redis_client
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 import json
 from HYPERRSI.src.trading.models import get_timeframe
 logger = get_logger(__name__)

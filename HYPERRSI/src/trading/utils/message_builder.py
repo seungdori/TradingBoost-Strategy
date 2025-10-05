@@ -3,8 +3,8 @@
 import json
 import traceback
 from datetime import datetime
-from HYPERRSI.src.core.logger import get_logger
-from HYPERRSI.src.helpers.order_helper import contracts_to_qty
+from shared.logging import get_logger
+from shared.utils import contracts_to_qty
 from HYPERRSI.src.trading.utils.trading_utils import calculate_dca_levels, update_dca_levels_redis
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 logger = get_logger(__name__)

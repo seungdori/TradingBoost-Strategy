@@ -14,7 +14,7 @@ from HYPERRSI.src.api.exchange.models import (
 from HYPERRSI.src.trading.cancel_trigger_okx import TriggerCancelClient
 from HYPERRSI.src.core.database import redis_client  # Redis 클라이언트 가져오기
 import asyncio
-from HYPERRSI.src.core.logger import get_logger, error_logger
+from shared.logging import get_logger, error_logger
 from HYPERRSI.src.api.dependencies import get_exchange_context
 from pydantic import BaseModel
 import ccxt.async_support as ccxt

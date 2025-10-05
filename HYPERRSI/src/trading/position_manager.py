@@ -7,7 +7,7 @@ from datetime import datetime
 from redis import WatchError
 from HYPERRSI.src.trading.models import Position
 from HYPERRSI.src.core.database import redis_client
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 import telegram_message
 

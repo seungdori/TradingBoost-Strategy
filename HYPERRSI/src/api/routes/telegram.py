@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, Path, WebSocket, WebSocketDisconnect
 from typing import Optional, List
 from pydantic import BaseModel, Field
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from HYPERRSI.src.core.database import redis_client
 from HYPERRSI.src.helpers.user_id_helper import get_telegram_id_from_uid
 import datetime

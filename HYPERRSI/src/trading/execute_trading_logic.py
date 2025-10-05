@@ -11,7 +11,7 @@ from HYPERRSI.src.api.trading.Calculate_signal import TrendStateCalculator
 from HYPERRSI.src.services.redis_service import RedisService
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.database import redis_client
-from HYPERRSI.src.core.logger import get_logger, setup_error_logger, log_bot_start, log_bot_stop, log_bot_error
+from shared.logging import get_logger, setup_error_logger, log_bot_start, log_bot_stop, log_bot_error
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 import time
 from HYPERRSI.src.trading.models import get_timeframe

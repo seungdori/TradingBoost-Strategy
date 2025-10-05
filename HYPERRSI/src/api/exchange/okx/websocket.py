@@ -3,7 +3,7 @@ import asyncio
 from typing import Callable, Dict, Optional
 import websockets
 from .constants import WSS_PUBLIC_URL, WSS_PRIVATE_URL
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

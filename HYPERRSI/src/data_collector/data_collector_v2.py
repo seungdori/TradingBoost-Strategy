@@ -16,7 +16,7 @@ import pytz
 import redis
 
 from HYPERRSI.src.core.config import settings
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from shared.indicators import compute_all_indicators
 from HYPERRSI.src.config import get_settings
 

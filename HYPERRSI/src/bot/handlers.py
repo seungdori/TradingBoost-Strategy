@@ -6,7 +6,7 @@ from HYPERRSI.src.bot.command import basic, trading, settings, register, generic
 from HYPERRSI.src.config import TELEGRAM_BOT_TOKEN
 import os
 from HYPERRSI.src.services.redis_service import RedisService
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 redis_service = RedisService()

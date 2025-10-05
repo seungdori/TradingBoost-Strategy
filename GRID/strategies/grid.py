@@ -45,12 +45,7 @@ from GRID.utils.precision import (
     adjust_price_precision
 )
 from GRID.utils.quantity import calculate_order_quantity
-from GRID.utils.time import (
-    parse_timeframe,
-    calculate_current_timeframe_start,
-    calculate_next_timeframe_start,
-    calculate_sleep_duration
-)
+from shared.utils import (parse_timeframe, calculate_current_timeframe_start, calculate_next_timeframe_start, calculate_sleep_duration)
 from GRID.utils.redis_helpers import (
     set_running_symbols,
     check_running_symbols,

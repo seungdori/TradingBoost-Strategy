@@ -8,7 +8,7 @@ import asyncio
 import json
 import traceback
 from datetime import datetime
-from HYPERRSI.src.core.logger import get_logger, log_order
+from shared.logging import get_logger, log_order
 from HYPERRSI.src.core.database import redis_client
 from HYPERRSI.src.api.routes.order import update_stop_loss_order, close_position, ClosePositionRequest
 from HYPERRSI.src.trading.dual_side_entry import get_user_dual_side_settings

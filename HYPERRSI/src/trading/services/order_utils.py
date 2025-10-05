@@ -6,11 +6,11 @@ import traceback
 import json
 from typing import Optional
 import ccxt.async_support as ccxt
-from HYPERRSI.src.core.logger import get_logger, log_bot_error
+from shared.logging import get_logger, log_bot_error
 from HYPERRSI.src.core.database import redis_client
 from HYPERRSI.src.trading.models import OrderStatus
 from HYPERRSI.src.trading.error_message import map_exchange_error
-from HYPERRSI.src.trading.services.calc_utils import safe_float, round_to_qty, convert_symbol_to_okx_instrument
+from shared.utils import safe_float, round_to_qty, convert_symbol_to_okx_instrument
 from HYPERRSI.src.trading.cancel_trigger_okx import TriggerCancelClient
 from HYPERRSI.src.api.dependencies import get_user_api_keys
 from HYPERRSI.src.bot.telegram_message import send_telegram_message

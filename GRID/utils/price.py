@@ -1,7 +1,7 @@
 """가격 계산 유틸리티"""
 
 from decimal import Decimal, ROUND_HALF_UP
-from GRID.trading.get_minimum_qty import get_lot_sizes, get_perpetual_instruments
+from shared.utils import get_lot_sizes, get_perpetual_instruments
 
 
 def round_to_upbit_tick_size(amount):

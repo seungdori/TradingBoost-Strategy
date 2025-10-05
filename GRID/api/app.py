@@ -1,3 +1,7 @@
+# Auto-configure PYTHONPATH for monorepo structure
+from shared.utils.path_config import configure_pythonpath
+configure_pythonpath()
+
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import psutil
@@ -22,13 +26,23 @@ import redis.asyncio as aioredis
 import traceback
 import uvicorn
 
-#app = FastAPI()
-logging.basicConfig(level=logging.ERROR)  # ERROR 수준 이상의 로그만 출력
+# New infrastructure imports
+from shared.config import settings
+from shared.errors import register_exception_handlers
+from shared.errors.middleware import RequestIDMiddleware
+from shared.database.session import init_db, close_db
+from shared.database.redis import init_redis, close_redis
+from shared.logging import setup_json_logger
+
+# Legacy imports (for backward compatibility)
 from GRID.trading.redis_connection_manager import RedisConnectionManager
 from contextlib import asynccontextmanager
+
+# Setup structured logging
+logger = setup_json_logger("grid")
+
 APP_PORT = None
 redis_connection = RedisConnectionManager()
-
 process_pool = None
 
 
@@ -180,36 +194,76 @@ async def restart_running_bots(app: FastAPI):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Application lifespan with new infrastructure integration"""
+    port = None
     try:
+        # Initialize new infrastructure
+        logger.info(
+            "Starting GRID application",
+            extra={
+                "environment": settings.ENVIRONMENT,
+                "debug": settings.DEBUG,
+            }
+        )
+
+        # Initialize database and Redis (new infrastructure)
+        await init_db()
+        await init_redis()
+
+        # Legacy database initialization
         exchange_names = ['binance', 'upbit', 'bitget', 'binance_spot', 'bitget_spot', 'okx', 'okx_spot', 'bybit', 'bybit_spot']
         await db_service.init_database(exchange_names)
+
         port = get_app_port(app)
         app.state.port = port
         parent_pid = os.getppid()
         asyncio.create_task(check_parent_process(parent_pid))
         await asyncio.sleep(2)
-        
+
         redis = await get_redis_connection()
         recovery_state = await redis.get('recovery_state')
-        print(f"Recovery state: {recovery_state}")
+        logger.info(
+            "Recovery state checked",
+            extra={"recovery_state": recovery_state, "port": port}
+        )
+
         bot_states = await bot_state_service.get_all_bot_state(app)
-        print(f'[BOT STATE on port {port}]', bot_states)
-        
+        logger.info(
+            "Bot states loaded",
+            extra={"bot_count": len(bot_states) if bot_states else 0, "port": port}
+        )
+
         cleanup_task = asyncio.create_task(start_cleanup_task())
+
+        logger.info("GRID application startup complete", extra={"port": port})
+
     except Exception as e:
-        print(f"Error initializing app: {e}")
-        print(f"Shutting down app on port {port}")
-        print(f"Parent PID: {os.getppid()}")
-        raise  # 예외를 다시 발생시켜 애플리케이션이 시작되지 않도록 합니다.
-    
+        logger.error(
+            "Error initializing GRID application",
+            exc_info=True,
+            extra={"port": port, "parent_pid": os.getppid()}
+        )
+        raise
+
     try:
         yield
     finally:
         try:
+            logger.info("Shutting down GRID application", extra={"port": port})
+
             redis = await get_redis_connection()
             await redis.set('recovery_state', 'True', ex=360)
-            
+
             await save_running_symbols(app)
+
+            # Cleanup new infrastructure
+            await close_db()
+            await close_redis()
+
+            logger.info("GRID application shutdown complete")
+
+        except Exception as e:
+            logger.error("Error during shutdown", exc_info=True)
         finally:
             redis_connection.close_connection()
 
@@ -229,7 +283,20 @@ async def save_running_symbols(app: FastAPI):
     print("Saved running symbols for all users")
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    title="GRID Trading Strategy API",
+    description="Grid-based trading strategy with automatic rebalancing",
+    version="1.0.0",
+    debug=settings.DEBUG,
+    lifespan=lifespan
+)
+
+# Register exception handlers (new infrastructure)
+register_exception_handlers(app)
+
+# Register Request ID middleware (MUST be first for proper tracking)
+app.add_middleware(RequestIDMiddleware)
+
 # CORS 미들웨어 설정 - 라우터 등록 전에 추가
 app.add_middleware(
     CORSMiddleware,
@@ -239,6 +306,7 @@ app.add_middleware(
     allow_headers=["*"],  # 모든 헤더 허용
     expose_headers=["*"],  # 클라이언트에게 노출할 헤더
 )
+
 # WebSocket 전용 CORS 설정을 위한 미들웨어
 @app.middleware("http")
 async def add_websocket_cors_headers(request, call_next):

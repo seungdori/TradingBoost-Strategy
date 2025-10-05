@@ -5,7 +5,7 @@ import asyncio
 from typing import Optional, Dict, Any
 from decimal import Decimal
 from dataclasses import dataclass, asdict
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from HYPERRSI.src.config import settings
 from HYPERRSI.src.api.exchange.models import (
     OrderRequest, OrderResponse, OrderType, OrderSide, 

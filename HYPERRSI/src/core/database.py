@@ -1,4 +1,11 @@
 # src/core/database.py
+"""
+HYPERRSI Database Module - Migrated to New Infrastructure
+
+Database configuration and connection management with structured logging
+and exception handling.
+"""
+
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
@@ -8,21 +15,20 @@ from .database_dir.base import Base
 import json
 import redis.asyncio as redis
 from celery import Celery
-import logging
 from threading import Lock
 import time
 from prometheus_client import Counter, Histogram
 from pydantic_settings import BaseSettings
+
 from shared.database import RedisConnectionManager
 from shared.utils import retry_decorator
+from shared.logging import get_logger
+from shared.errors import DatabaseException, ConfigurationException
 
-# 로거 설정
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-handler = logging.StreamHandler()
-handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-logger.addHandler(handler)
 from HYPERRSI.src.core.config import settings  # <-- 공통 설정 import
+
+# 구조화된 로깅 사용
+logger = get_logger(__name__)
 
 class Settings(BaseSettings):
     # Redis 설정
@@ -114,29 +120,61 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 async def init_db():
-    """데이터베이스 테이블 생성"""
+    """
+    Initialize database tables.
+
+    Creates all tables defined in Base metadata if they don't exist.
+
+    Raises:
+        DatabaseException: Database initialization failed
+    """
     try:
+        logger.info("Initializing database...")
+
         async with engine.begin() as conn:
             inspector = await conn.run_sync(lambda sync_conn: inspect(sync_conn))
             existing_tables = await conn.run_sync(lambda sync_conn: inspector.get_table_names())
-            
+
             await conn.run_sync(Base.metadata.create_all)
-            
+
             created_tables = set(await conn.run_sync(lambda sync_conn: inspector.get_table_names())) - set(existing_tables)
+
             if created_tables:
-                logger.info(f"Created new tables: {', '.join(created_tables)}")
+                logger.info(
+                    "Database tables created",
+                    extra={"created_tables": list(created_tables)}
+                )
             else:
-                logger.info("All tables already exist, no new tables created.")
-                
-        logger.info("Database initialization completed successfully.")
+                logger.info("All database tables already exist")
+
+        logger.info("Database initialization completed successfully")
+
     except Exception as e:
-        logger.error(f"Database initialization failed: {str(e)}")
-        raise
+        logger.error(
+            "Database initialization failed",
+            exc_info=True
+        )
+        raise DatabaseException(
+            "Failed to initialize database",
+            details={"error": str(e)}
+        )
 
 async def close_db():
-    """데이터베이스 연결 종료"""
-    await db_engine.dispose()
-    logger.info("Database connection closed.")
+    """
+    Close database connection.
+
+    Disposes database engine and all connections.
+    """
+    try:
+        logger.info("Closing database connection...")
+        await db_engine.dispose()
+        logger.info("Database connection closed successfully")
+    except Exception as e:
+        logger.error(
+            "Error closing database connection",
+            exc_info=True
+        )
+        # Don't raise here - allow shutdown to continue
 
 class RedisClient:
     """shared RedisConnectionManager를 사용하는 래퍼 클래스 (하위 호환성)"""

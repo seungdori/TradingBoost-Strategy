@@ -9,7 +9,7 @@ from celery import Celery
 # shared indicators에서 가져옴
 from shared.indicators import compute_all_indicators
 import json
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from HYPERRSI.src.core.config import settings
 from HYPERRSI.src.trading.models import get_timeframe
 from HYPERRSI.src.config import get_settings

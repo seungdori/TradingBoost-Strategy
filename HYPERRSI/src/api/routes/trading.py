@@ -7,13 +7,13 @@ import logging
 import json
 
 from HYPERRSI.src.trading.trading_service import TradingService, get_okx_client
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from HYPERRSI.src.core.database import redis_client
 from HYPERRSI.src.core.celery_task import celery_app
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.utils.check_invitee import get_okx_uid_from_telegram
 from HYPERRSI.src.helpers.user_id_helper import get_telegram_id_from_uid
-from HYPERRSI.src.api.routes.settings import get_api_keys_from_supabase, ApiKeyService
+from HYPERRSI.src.api.routes.settings import get_api_keys_from_timescale, ApiKeyService
 from HYPERRSI.src.core.error_handler import handle_critical_error, ErrorCategory
 
 # 로거 설정
@@ -104,22 +104,22 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
             # 기본값 확인
             if api_key == "default_api_key" or api_secret == "default_api_secret" or passphrase == "default_passphrase":
                 is_default_api_key = True
-                logger.info(f"사용자 {okx_uid}의 API 키가 기본값으로 설정되어 있습니다. Supabase에서 정보 조회를 시도합니다.")
-        
-        # API 키가 없거나 기본값인 경우 Supabase에서 정보 가져오기
+                logger.info(f"사용자 {okx_uid}의 API 키가 기본값으로 설정되어 있습니다. TimescaleDB에서 정보 조회를 시도합니다.")
+
+        # API 키가 없거나 기본값인 경우 TimescaleDB에서 정보 가져오기
         if not api_keys or is_default_api_key:
-            # Supabase에서 API 키 정보 가져오기
-            supabase_api_keys = await get_api_keys_from_supabase(int(okx_uid))
+            # TimescaleDB에서 API 키 정보 가져오기
+            timescale_api_keys = await get_api_keys_from_timescale(int(okx_uid))
             
-            if supabase_api_keys:
-                # Supabase에서 가져온 API 키로 사용자 생성/업데이트
+            if timescale_api_keys:
+                # TimescaleDB에서 가져온 API 키로 사용자 생성/업데이트
                 await ApiKeyService.set_user_api_keys(
                     str(okx_uid), 
-                    supabase_api_keys['api_key'], 
-                    supabase_api_keys['api_secret'], 
-                    supabase_api_keys['passphrase']
+                    timescale_api_keys['api_key'], 
+                    timescale_api_keys['api_secret'], 
+                    timescale_api_keys['passphrase']
                 )
-                logger.info(f"사용자 {okx_uid}의 API 키를 Supabase 정보로 업데이트했습니다.")
+                logger.info(f"사용자 {okx_uid}의 API 키를 TimescaleDB 정보로 업데이트했습니다.")
         
         #if okx_uid not in allowed_uid:
         #    await send_telegram_message(f"⚠️[{okx_uid}] 권한이 없는 사용자입니다.", okx_uid, debug=True)

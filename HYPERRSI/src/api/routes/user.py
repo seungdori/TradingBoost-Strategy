@@ -95,7 +95,7 @@ async def register_user(
             'passphrase': request.passphrase
         })
         
-        #supabase에서 API정보 저장
+        # TimescaleDB에 API 정보 저장 (필요 시 확장 가능)
         
         
         

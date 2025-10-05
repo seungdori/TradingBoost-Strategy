@@ -1,12 +1,22 @@
 #src/services/redis_service.py
+"""
+Redis Service - Migrated to New Infrastructure
+
+Manages user settings, API keys, and caching with structured logging
+and exception handling.
+"""
 
 from redis.asyncio import Redis, ConnectionPool
 import json
-import logging
 from threading import Lock
 from typing import Optional, Dict, Any
 from prometheus_client import Counter, Histogram
+import time
+import os
+
 from shared.utils import retry_decorator
+from shared.logging import get_logger
+from shared.errors import DatabaseException, ValidationException, ConfigurationException
 from shared.constants.default_settings import (
     DEFAULT_PARAMS_SETTINGS,
     SETTINGS_CONSTRAINTS,
@@ -15,12 +25,10 @@ from shared.constants.default_settings import (
     DIRECTION_OPTIONS,
     PYRAMIDING_TYPES,
 )
-import time
-import os
-from fastapi import HTTPException
+
 from HYPERRSI.src.core.database import redis_client
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class RedisService:
     _instance = None
@@ -206,30 +214,90 @@ async def init_redis():
     await redis_service.ping()
 
 def validate_settings(settings: dict) -> dict:
-    # 숫자 범위 검증
-    for key, constraint in SETTINGS_CONSTRAINTS.items():
-        if key in settings:
-            val = settings[key]
-            if val < constraint['min'] or val > constraint['max']:
-                raise ValueError(
-                    f"'{key}' 설정값({val})이 범위를 벗어났습니다. "
-                    f"({constraint['min']} ~ {constraint['max']}) 사이여야 함."
-                )
-    
-    # 문자열 옵션 검증
-    if "direction" in settings and settings["direction"] not in DIRECTION_OPTIONS:
-        raise ValueError(f"direction 옵션이 유효하지 않습니다: {settings['direction']}")
-    
-    if "entry_option" in settings and settings["entry_option"] not in ENTRY_OPTIONS:
-        raise ValueError(f"entry_option 옵션이 유효하지 않습니다: {settings['entry_option']}")
-    
-    if "tp_sl_option" in settings and settings["tp_sl_option"] not in TP_SL_OPTIONS:
-        raise ValueError(f"tp_sl_option 옵션이 유효하지 않습니다: {settings['tp_sl_option']}")
-    
-    if "pyramiding_type" in settings and settings["pyramiding_type"] not in PYRAMIDING_TYPES:
-        raise ValueError(f"pyramiding_type 옵션이 유효하지 않습니다: {settings['pyramiding_type']}")
-    
-    return settings
+    """
+    Validate user settings against constraints.
+
+    Args:
+        settings: User settings dictionary
+
+    Returns:
+        Validated settings dictionary
+
+    Raises:
+        ValidationException: Settings validation failed
+    """
+    try:
+        # 숫자 범위 검증
+        for key, constraint in SETTINGS_CONSTRAINTS.items():
+            if key in settings:
+                val = settings[key]
+                if val < constraint['min'] or val > constraint['max']:
+                    raise ValidationException(
+                        f"Setting '{key}' value ({val}) is out of range",
+                        details={
+                            "key": key,
+                            "value": val,
+                            "min": constraint['min'],
+                            "max": constraint['max']
+                        }
+                    )
+
+        # 문자열 옵션 검증
+        if "direction" in settings and settings["direction"] not in DIRECTION_OPTIONS:
+            raise ValidationException(
+                f"Invalid direction option: {settings['direction']}",
+                details={
+                    "value": settings["direction"],
+                    "valid_options": DIRECTION_OPTIONS
+                }
+            )
+
+        if "entry_option" in settings and settings["entry_option"] not in ENTRY_OPTIONS:
+            raise ValidationException(
+                f"Invalid entry option: {settings['entry_option']}",
+                details={
+                    "value": settings["entry_option"],
+                    "valid_options": ENTRY_OPTIONS
+                }
+            )
+
+        if "tp_sl_option" in settings and settings["tp_sl_option"] not in TP_SL_OPTIONS:
+            raise ValidationException(
+                f"Invalid TP/SL option: {settings['tp_sl_option']}",
+                details={
+                    "value": settings["tp_sl_option"],
+                    "valid_options": TP_SL_OPTIONS
+                }
+            )
+
+        if "pyramiding_type" in settings and settings["pyramiding_type"] not in PYRAMIDING_TYPES:
+            raise ValidationException(
+                f"Invalid pyramiding type: {settings['pyramiding_type']}",
+                details={
+                    "value": settings["pyramiding_type"],
+                    "valid_options": PYRAMIDING_TYPES
+                }
+            )
+
+        logger.debug(
+            "Settings validation successful",
+            extra={"settings_keys": list(settings.keys())}
+        )
+
+        return settings
+
+    except ValidationException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Settings validation failed",
+            exc_info=True,
+            extra={"settings": settings}
+        )
+        raise ValidationException(
+            f"Settings validation error: {str(e)}",
+            details={"error": str(e)}
+        )
 
 async def update_user_settings(user_id: str, new_settings: dict) -> dict:
     existing_settings = await redis_service.get_user_settings(str(user_id))

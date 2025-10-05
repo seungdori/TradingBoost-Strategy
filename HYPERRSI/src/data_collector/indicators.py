@@ -4,7 +4,7 @@
 import math
 import numpy as np
 from typing import List, Union
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

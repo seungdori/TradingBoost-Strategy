@@ -1,6 +1,9 @@
 """트레이딩 관련 공통 유틸리티 함수"""
 import logging
-from typing import Optional
+import math
+import traceback
+import aiohttp
+from typing import Optional, Tuple, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -209,3 +212,349 @@ def is_break_even_order(order_type: str) -> bool:
         False
     """
     return order_type == "break_even"
+
+
+# ============================================================================
+# 주문 계약 및 수량 관련 함수
+# ============================================================================
+
+async def get_perpetual_instruments() -> Optional[List[Dict]]:
+    """
+    OKX Perpetual 종목 정보를 가져옵니다.
+
+    Returns:
+        List[Dict]: Perpetual 종목 정보 리스트 또는 None
+    """
+    try:
+        from shared.utils.redis_utils import set_redis_data, get_redis_data
+        from shared.database.redis import get_redis_client
+
+        redis_client = await get_redis_client()
+
+        # Redis에서 데이터 확인
+        cached_data = await get_redis_data(redis_client, 'perpetual_instruments')
+        if cached_data:
+            return cached_data
+
+        # 캐시된 데이터가 없으면 API 호출
+        base_url = "https://www.okx.com"
+        # SSL 검증을 비활성화하는 옵션 추가
+        conn = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=conn) as session:
+            url = f"{base_url}/api/v5/public/instruments?instType=SWAP"
+            async with session.get(url) as response:
+                data = await response.json()
+
+        # 데이터를 Redis에 저장
+        if data and 'data' in data:
+            await set_redis_data(redis_client, 'perpetual_instruments', data['data'])
+            return data['data']
+        else:
+            logger.warning("Invalid response from OKX API")
+            return None
+
+    except Exception as e:
+        logger.error(f"Error in get_perpetual_instruments: {str(e)}")
+        traceback.print_exc()
+        return None
+
+
+def get_lot_sizes(instruments: List[Dict]) -> Dict[str, Tuple[float, float, str]]:
+    """
+    종목별 계약 단위 정보를 정리합니다.
+
+    Args:
+        instruments: Perpetual 종목 정보 리스트
+
+    Returns:
+        Dict: {symbol: (lot_size, contract_value, base_currency)}
+    """
+    lot_sizes = {}
+    for instrument in instruments:
+        symbol = instrument['instId']
+        lot_size = float(instrument['lotSz'])
+        contract_value = float(instrument['ctVal'])
+        base_currency = symbol.split('-')[0]
+        lot_sizes[symbol] = (lot_size, contract_value, base_currency)
+    return lot_sizes
+
+
+async def round_to_qty(symbol: str, qty: float, lot_sizes: Dict) -> int:
+    """
+    수량을 계약 수로 변환하고 내림합니다.
+
+    Args:
+        symbol: 거래 심볼 (예: BTC-USDT-SWAP)
+        qty: 수량 (예: 0.02 BTC)
+        lot_sizes: get_lot_sizes()로 얻은 계약 정보
+
+    Returns:
+        int: 내림된 계약 수
+
+    Raises:
+        ValueError: 유효하지 않은 심볼인 경우
+    """
+    if symbol not in lot_sizes:
+        raise ValueError(f"{symbol} is not a valid Perpetual instrument.")
+    if not symbol.endswith('-USDT-SWAP'):
+        raise ValueError(f"{symbol} is not a USDT-SWAP instrument.")
+
+    lot_size, contract_value, _ = lot_sizes[symbol]
+
+    # qty는 실제 수량(예: 0.02 BTC)
+    # contract_value는 한 계약당 기초자산의 양(예: BTC의 경우 0.01 BTC)
+    contracts = qty / contract_value  # 계약 수 계산
+    rounded_contracts = math.floor(contracts)  # 계약 수 내림
+
+    logger.debug(f"round_to_qty - 입력 수량: {qty}, 계약 가치: {contract_value}, "
+                f"계산된 계약 수: {contracts}, 반올림된 계약 수: {rounded_contracts}")
+
+    return rounded_contracts
+
+
+async def contracts_to_qty(symbol: str, contracts: int) -> Optional[float]:
+    """
+    계약 수를 실제 수량으로 변환합니다.
+
+    Args:
+        symbol: 거래 심볼 (예: BTC-USDT-SWAP)
+        contracts: 계약 수
+
+    Returns:
+        float: 실제 수량 또는 None (오류 시)
+    """
+    try:
+        perpetual_instruments = await get_perpetual_instruments()
+        if not perpetual_instruments:
+            logger.error("Failed to get perpetual instruments")
+            return None
+
+        lot_sizes = get_lot_sizes(perpetual_instruments)
+
+        if not symbol.endswith('-USDT-SWAP'):
+            raise ValueError(f"{symbol} is not a USDT-SWAP instrument.")
+
+        lot_size, contract_value, _ = lot_sizes[symbol]
+        qty = contracts * contract_value  # 계약 수에 계약 가치를 곱해서 실제 수량 계산
+
+        logger.debug(f"contracts_to_qty - 계약 수: {contracts}, 계약 가치: {contract_value}, 수량: {qty}")
+
+        return qty
+    except Exception as e:
+        logger.error(f"Error in contracts_to_qty: {str(e)}")
+        traceback.print_exc()
+        return None
+
+
+def split_contracts(total_contracts: int) -> Tuple[int, int, int]:
+    """
+    계약 수를 30%, 30%, 40%로 분할하고 최소 계약 단위로 내림합니다.
+
+    Args:
+        total_contracts: 총 계약 수
+
+    Returns:
+        Tuple[int, int, int]: (qty1, qty2, qty3)
+    """
+    qty1 = math.floor(total_contracts * 0.3)
+    qty2 = math.ceil(total_contracts * 0.3)
+    qty3 = total_contracts - (qty1 + qty2)
+
+    logger.debug(f"split_contracts - 총 계약: {total_contracts}, "
+                f"분할 결과: qty1={qty1}, qty2={qty2}, qty3={qty3}")
+
+    return qty1, qty2, qty3
+
+
+# ============================================================================
+# Redis 기반 계약 및 Tick Size 조회 함수
+# ============================================================================
+
+async def get_contract_size(symbol: str, redis_client=None) -> float:
+    """
+    Redis에서 심볼의 계약 크기를 조회합니다.
+
+    Args:
+        symbol: 거래 심볼
+        redis_client: Redis 클라이언트 (선택, None이면 자동 생성)
+
+    Returns:
+        float: 계약 크기 (기본값: 0.01)
+    """
+    try:
+        if redis_client is None:
+            from shared.database.redis import get_redis_client
+            redis_client = await get_redis_client()
+
+        import json
+
+        spec_key = await redis_client.get(f"symbol_info:contract_specifications")
+
+        if not spec_key:
+            logger.warning(f"Contract specifications not found in Redis for {symbol}")
+            return 0.01
+
+        spec_json = json.loads(spec_key)
+        spec = spec_json.get(symbol)
+
+        if not spec:
+            logger.warning(f"Symbol specification not found: {symbol}")
+            return 0.01
+
+        contract_size = spec.get("contractSize", 0.01)
+
+        logger.debug(f"Contract size for {symbol}: {contract_size}")
+
+        return contract_size
+
+    except Exception as e:
+        logger.error(f"Error getting contract size for {symbol}: {str(e)}")
+        return 0.01
+
+
+async def get_tick_size_from_redis(symbol: str, redis_client=None) -> Optional[float]:
+    """
+    Redis에서 심볼의 tick size를 조회합니다.
+
+    Args:
+        symbol: 거래 심볼
+        redis_client: Redis 클라이언트 (선택, None이면 자동 생성)
+
+    Returns:
+        float: Tick size 또는 None
+    """
+    try:
+        if redis_client is None:
+            from shared.database.redis import get_redis_client
+            redis_client = await get_redis_client()
+
+        import json
+
+        spec_json = await redis_client.get("symbol_info:contract_specifications")
+        if spec_json:
+            specs = json.loads(spec_json)
+            spec = specs.get(symbol)
+            tick_size = spec.get("tickSize") if spec else None
+            if tick_size is None:
+                logger.error(f"Tick size not found in contract specification for {symbol}")
+            return tick_size
+        else:
+            logger.error(f"Contract specification not found for symbol: {symbol}")
+            return None
+    except Exception as e:
+        logger.error(f"Error fetching tick size for {symbol}: {str(e)}")
+        return None
+
+
+async def get_minimum_qty(symbol: str, redis_client=None) -> float:
+    """
+    Redis에 저장된 contract_specifications에서 해당 심볼의 최소 주문 수량을 반환합니다.
+
+    Args:
+        symbol: 거래 심볼
+        redis_client: Redis 클라이언트 (선택, None이면 자동 생성)
+
+    Returns:
+        float: 최소 주문 수량 (기본값: 0.1)
+    """
+    try:
+        if redis_client is None:
+            from shared.database.redis import get_redis_client
+            redis_client = await get_redis_client()
+
+        import json
+
+        spec_json = await redis_client.get("symbol_info:contract_specifications")
+        if not spec_json:
+            logger.error(f"Contract specification not found for symbol: {symbol}")
+            return 0.1
+
+        specs = json.loads(spec_json)
+        spec = specs.get(symbol)
+        if not spec:
+            logger.error(f"Specification not found for symbol: {symbol}")
+            return 0.1
+
+        min_size = spec.get("minSize")
+        contract_size = spec.get("contractSize")
+        if min_size is None or contract_size is None:
+            logger.error(f"minSize or contractSize not defined for symbol: {symbol}")
+            return 0.1
+
+        # 정수 스케일링을 위한 소수점 자릿수 계산
+        min_size_decimals = len(str(min_size).split('.')[-1]) if '.' in str(min_size) else 0
+        contract_size_decimals = len(str(contract_size).split('.')[-1]) if '.' in str(contract_size) else 0
+        total_decimals = min_size_decimals + contract_size_decimals
+
+        # 정수로 변환하여 계산
+        multiplier = 10 ** total_decimals
+        min_size_int = int(float(min_size) * (10 ** min_size_decimals))
+        contract_size_int = int(float(contract_size) * (10 ** contract_size_decimals))
+
+        # 계산 후 원래 소수점으로 복원
+        result = (min_size_int * contract_size_int) / multiplier
+
+        # 8자리까지 반올림 (정수 연산으로)
+        final_multiplier = 10 ** 8
+        rounded_result = int(result * final_multiplier) / final_multiplier
+
+        return rounded_result
+
+    except Exception as e:
+        logger.error(f"Error fetching minimum quantity for {symbol}: {str(e)}")
+        return 0.1
+
+
+async def round_to_tick_size(
+    value: float,
+    current_price: Optional[float] = None,
+    symbol: Optional[str] = None,
+    redis_client=None
+) -> float:
+    """
+    가격을 tick size 또는 heuristics에 따라 반올림합니다.
+
+    Args:
+        value: 반올림할 가격
+        current_price: tick_size가 없을 경우 기준 가격
+        symbol: 종목 코드 (tick_size를 가져오기 위함)
+        redis_client: Redis 클라이언트 (선택, None이면 자동 생성)
+
+    Returns:
+        float: 반올림된 가격
+    """
+    from decimal import Decimal, ROUND_HALF_UP
+
+    logger.debug(f"round_to_tick_size - value={value}, current_price={current_price}, symbol={symbol}")
+
+    if symbol:
+        tick_size = await get_tick_size_from_redis(symbol, redis_client)
+        logger.debug(f"Redis tick_size: {tick_size}")
+    else:
+        tick_size = 0.001  # 기본 tick size
+        logger.debug(f"Using default tick_size: {tick_size}")
+
+    value = Decimal(str(value))  # 부동소수점 오차 방지
+
+    if tick_size and tick_size > 0:
+        tick_size = Decimal(str(tick_size))
+        rounded = (value / tick_size).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * tick_size
+        return float(rounded)
+
+    # tick size가 없을 경우, current_price 기준 반올림
+    if current_price is None:
+        return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+    if current_price < 0.01:
+        decimals = "0.00001"
+    elif current_price < 0.1:
+        decimals = "0.00001"
+    elif current_price < 10:
+        decimals = "0.0001"
+    elif current_price < 1000:
+        decimals = "0.001"
+    else:
+        decimals = "0.01"
+
+    rounded = value.quantize(Decimal(decimals), rounding=ROUND_HALF_UP)
+    return float(rounded)

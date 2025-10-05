@@ -97,3 +97,68 @@ def retry_decorator(
             )
         return wrapper
     return decorator
+
+
+# ============================================================================
+# 이벤트 루프 관리
+# ============================================================================
+
+def ensure_async_loop() -> asyncio.AbstractEventLoop:
+    """
+    현재 스레드에 사용 가능한 이벤트 루프를 반환하거나 새로 생성합니다.
+    닫힌 루프나 다른 스레드의 루프는 사용하지 않습니다.
+
+    Returns:
+        asyncio.AbstractEventLoop: 사용 가능한 이벤트 루프
+
+    Raises:
+        RuntimeError: 예상치 못한 오류 발생 시
+
+    Examples:
+        >>> loop = ensure_async_loop()
+        >>> loop.run_until_complete(my_async_function())
+
+    Note:
+        이 함수는 멀티스레드 환경에서 각 스레드가 자체 이벤트 루프를 가져야 할 때 유용합니다.
+    """
+    try:
+        # 현재 실행 중인 루프가 있는지 확인
+        loop = asyncio.get_running_loop()
+        logger.debug("실행 중인 이벤트 루프를 사용합니다.")
+        return loop
+    except RuntimeError:
+        # 현재 실행 중인 루프가 없는 경우
+        pass
+
+    try:
+        # 기존 루프가 있는지 확인
+        loop = asyncio.get_event_loop()
+
+        # 루프가 닫혀있는지 확인
+        if loop.is_closed():
+            logger.info("기존 이벤트 루프가 닫혀 있어 새로 생성합니다")
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        return loop
+    except RuntimeError as ex:
+        # 루프가 아예 없는 경우
+        if "There is no current event loop in thread" in str(ex):
+            logger.info("이벤트 루프가 없어 새로 생성합니다")
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            return loop
+
+        # 그 외 예상치 못한 오류
+        logger.error(f"이벤트 루프 생성 중 오류 발생: {str(ex)}")
+        raise
+
+
+def get_or_create_event_loop() -> asyncio.AbstractEventLoop:
+    """
+    이벤트 루프를 가져오거나 생성합니다 (ensure_async_loop의 alias).
+
+    Returns:
+        asyncio.AbstractEventLoop: 이벤트 루프
+    """
+    return ensure_async_loop()

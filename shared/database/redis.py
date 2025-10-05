@@ -1,14 +1,23 @@
-"""Redis 연결 관리자
-
-GRID와 HYPERRSI 프로젝트에서 공통으로 사용하는 Redis 연결 관리 클래스
 """
+Redis Connection Management with Connection Pooling
+
+Provides optimized Redis connection management with:
+- Connection pooling for performance
+- Automatic reconnection on failure
+- Type-safe operations
+- Backward compatibility with legacy RedisConnectionManager
+"""
+
 import logging
 import time
 from threading import Lock
-from typing import Optional
+from typing import Optional, Any
 import redis.asyncio as aioredis
 from redis import Redis, RedisError
 from redis.asyncio import Redis as AsyncRedis, ConnectionPool
+from shared.config import settings
+from shared.errors import RedisException
+from shared.database.pool_monitor import RedisPoolMonitor
 
 
 logger = logging.getLogger(__name__)
@@ -262,3 +271,133 @@ async def get_redis_connection(decode_responses: bool = False) -> AsyncRedis:
     """
     manager = RedisConnectionManager()
     return await manager.get_connection_async(decode_responses=decode_responses)
+
+
+# ============================================================================
+# New Connection Pool System (Recommended)
+# ============================================================================
+
+class RedisConnectionPool:
+    """
+    Modern Redis connection pool manager.
+
+    Uses settings from shared.config for automatic configuration.
+    """
+
+    _pool: Optional[ConnectionPool] = None
+    _monitor: Optional[RedisPoolMonitor] = None
+    _lock = Lock()
+
+    @classmethod
+    def get_pool(cls) -> ConnectionPool:
+        """
+        Get or create Redis connection pool.
+
+        Returns:
+            ConnectionPool: Redis connection pool
+        """
+        if cls._pool is None:
+            with cls._lock:
+                if cls._pool is None:
+                    cls._pool = aioredis.ConnectionPool.from_url(
+                        settings.REDIS_URL,
+                        max_connections=settings.REDIS_MAX_CONNECTIONS,
+                        decode_responses=True,
+                        socket_keepalive=True,
+                        socket_connect_timeout=5,
+                        retry_on_timeout=True,
+                        health_check_interval=15,
+                    )
+                    logger.info(
+                        f"✅ Redis pool created: {settings.REDIS_HOST}:{settings.REDIS_PORT} "
+                        f"(max_connections={settings.REDIS_MAX_CONNECTIONS})"
+                    )
+
+                    # Initialize pool monitor
+                    cls._monitor = RedisPoolMonitor(cls._pool)
+                    logger.info("Redis pool monitor initialized")
+
+        return cls._pool
+
+    @classmethod
+    def get_monitor(cls) -> RedisPoolMonitor:
+        """
+        Get Redis pool monitor.
+
+        Returns:
+            RedisPoolMonitor: Pool monitoring instance
+        """
+        if cls._monitor is None:
+            # Ensure pool is created first
+            cls.get_pool()
+        return cls._monitor
+
+    @classmethod
+    async def health_check(cls) -> dict:
+        """
+        Perform health check on Redis connection pool.
+
+        Returns:
+            dict: Health status with latency metrics
+
+        Example:
+            {
+                "status": "healthy",
+                "message": "Redis responding normally",
+                "latency_ms": 1.23,
+                "metrics": {
+                    "max_connections": 200,
+                    "connection_kwargs": {
+                        "db": 0,
+                        "decode_responses": true,
+                        ...
+                    }
+                },
+                "timestamp": "2025-10-05T10:30:45.123456"
+            }
+        """
+        monitor = cls.get_monitor()
+        return await monitor.health_check()
+
+    @classmethod
+    async def close_pool(cls):
+        """Close Redis connection pool"""
+        if cls._pool is not None:
+            await cls._pool.disconnect()
+            cls._pool = None
+            cls._monitor = None
+            logger.info("✅ Redis connection pool closed")
+
+
+async def get_redis() -> AsyncRedis:
+    """
+    Get Redis client from connection pool (FastAPI dependency).
+    
+    Usage:
+        @router.get("/cache")
+        async def get_cache(redis: Redis = Depends(get_redis)):
+            value = await redis.get("key")
+            return {"value": value}
+    
+    Returns:
+        AsyncRedis: Redis client instance
+    """
+    pool = RedisConnectionPool.get_pool()
+    return AsyncRedis(connection_pool=pool)
+
+
+async def init_redis():
+    """Initialize Redis connection pool (call at app startup)"""
+    try:
+        redis = await get_redis()
+        await redis.ping()
+        logger.info(f"✅ Redis connected: {settings.REDIS_HOST}:{settings.REDIS_PORT}")
+    except Exception as e:
+        logger.error(f"❌ Redis connection failed: {e}")
+        raise
+
+
+async def close_redis():
+    """Close Redis connections (call at app shutdown)"""
+    await RedisConnectionPool.close_pool()
+

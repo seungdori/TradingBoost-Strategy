@@ -10,7 +10,7 @@ import os
 import traceback
 import telegram
 from typing import Optional, Dict
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from HYPERRSI.src.core.database import redis_client
 from .utils import MESSAGE_QUEUE_KEY, MESSAGE_PROCESSING_FLAG
 

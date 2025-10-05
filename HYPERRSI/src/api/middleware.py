@@ -1,7 +1,7 @@
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

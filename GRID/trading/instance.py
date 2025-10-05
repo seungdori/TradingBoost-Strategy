@@ -1,5 +1,5 @@
 import ccxt.pro as ccxtpro
-from GRID.database import user_database
+from GRID.services import user_service_pg as user_database
 from typing import Optional
 from pydantic import BaseModel, Field
 import redis.asyncio as aioredis

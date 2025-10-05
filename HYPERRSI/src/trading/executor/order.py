@@ -8,7 +8,7 @@ from HYPERRSI.src.api.exchange.models import (
     OrderRequest, OrderResponse, OrderType, OrderSide, 
     TimeInForce
 )
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from HYPERRSI.src.trading.executor.order_backend_wrapper import OrderBackendWrapper
 
 logger = get_logger(__name__)

@@ -14,7 +14,7 @@ import traceback
 import httpx
 from HYPERRSI.src.core.database import redis_client
 from HYPERRSI.src.api.trading.trend_state_calculator import TrendStateCalculator
-from HYPERRSI.src.trading.services.calc_utils import safe_float
+from shared.utils import safe_float
 from HYPERRSI.src.trading.models import tf_mapping
 import datetime as dt
 import aiohttp

@@ -1,20 +1,64 @@
+"""
+Trading Service - Migrated to New Infrastructure
+
+Manages trading access lists (blacklist/whitelist) with database operations.
+
+DEPRECATED: File-based functions remain for backward compatibility.
+New code should use TradingAccessService from trading_service_new.py
+"""
+
 import json
 from typing import List
+from pathlib import Path
+
+from shared.logging import get_logger
+from shared.errors import DatabaseException, ConfigurationException, ValidationException
 
 from GRID.dtos.symbol import AccessListDto
 from shared.utils import path_helper
 import aiosqlite
 
-def get_list_from_file(file_name: str):
+logger = get_logger(__name__)
+
+
+def get_list_from_file(file_name: str) -> List[str]:
+    """
+    DEPRECATED: Get list from JSON file.
+
+    Use TradingAccessService instead for new code.
+
+    Args:
+        file_name: Path to JSON file
+
+    Returns:
+        List of symbols from file
+
+    Raises:
+        ConfigurationException: File read error
+    """
+    logger.warning(
+        "Using deprecated file-based access list",
+        extra={"file_name": file_name, "function": "get_list_from_file"}
+    )
+
     file_path = file_name
     try:
         with open(file_path, 'r') as file:
-            white_list = json.load(file)
-            #print('[ LIST]', white_list)
-            return white_list
+            symbols = json.load(file)
+            logger.debug(
+                "File-based list loaded",
+                extra={"file_name": file_name, "count": len(symbols)}
+            )
+            return symbols
     except FileNotFoundError:
-        print(f"No such file: {file_name}")
-        return []  # 파일이 없는 경우 빈 리스트 반환
+        logger.warning(f"File not found: {file_name}")
+        return []
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in file {file_name}: {e}")
+        raise ConfigurationException(f"Invalid JSON file: {file_name}")
+    except Exception as e:
+        logger.error(f"Error reading file {file_name}: {e}")
+        raise ConfigurationException(f"Failed to read file: {file_name}")
 
 
 def get_ban_list_from_file(file_name: str):
@@ -25,19 +69,128 @@ def get_white_list_from_file(file_name: str):
     return get_list_from_file(file_name)
 
 
-async def get_black_list(exchange_name, user_id):
+async def get_black_list(exchange_name: str, user_id: int) -> List[str]:
+    """
+    DEPRECATED: Get blacklist from SQLite database.
+
+    Use TradingAccessService instead for new code.
+
+    Args:
+        exchange_name: Exchange identifier
+        user_id: User ID
+
+    Returns:
+        List of blacklisted symbols
+    """
+    logger.warning(
+        "Using deprecated SQLite blacklist",
+        extra={
+            "exchange": exchange_name,
+            "user_id": user_id,
+            "function": "get_black_list"
+        }
+    )
     return await get_list_from_db(exchange_name, user_id, 'blacklist')
 
-async def get_white_list(exchange_name, user_id):
+
+async def get_white_list(exchange_name: str, user_id: int) -> List[str]:
+    """
+    DEPRECATED: Get whitelist from SQLite database.
+
+    Use TradingAccessService instead for new code.
+
+    Args:
+        exchange_name: Exchange identifier
+        user_id: User ID
+
+    Returns:
+        List of whitelisted symbols
+    """
+    logger.warning(
+        "Using deprecated SQLite whitelist",
+        extra={
+            "exchange": exchange_name,
+            "user_id": user_id,
+            "function": "get_white_list"
+        }
+    )
     return await get_list_from_db(exchange_name, user_id, 'whitelist')
 
-async def get_list_from_db(exchange_name: str, user_id: int, list_type: str):
-    db_path = f'{exchange_name}_users.db'
-    async with aiosqlite.connect(db_path) as db:
-        cursor = await db.execute(f'SELECT symbol FROM {list_type} WHERE user_id = ?', (user_id,))
-        symbols = await cursor.fetchall()
-        await cursor.close()
-    return [symbol[0] for symbol in symbols] if symbols else []
+
+async def get_list_from_db(
+    exchange_name: str,
+    user_id: int,
+    list_type: str
+) -> List[str]:
+    """
+    DEPRECATED: Get access list from SQLite database.
+
+    Use TradingAccessService instead for new code.
+
+    Args:
+        exchange_name: Exchange identifier
+        user_id: User ID
+        list_type: 'blacklist' or 'whitelist'
+
+    Returns:
+        List of symbols
+
+    Raises:
+        DatabaseException: Database operation failed
+    """
+    logger.warning(
+        "Using deprecated SQLite database access",
+        extra={
+            "exchange": exchange_name,
+            "user_id": user_id,
+            "list_type": list_type,
+            "function": "get_list_from_db"
+        }
+    )
+
+    try:
+        db_path = f'{exchange_name}_users.db'
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute(
+                f'SELECT symbol FROM {list_type} WHERE user_id = ?',
+                (user_id,)
+            )
+            symbols = await cursor.fetchall()
+            await cursor.close()
+
+        result = [symbol[0] for symbol in symbols] if symbols else []
+
+        logger.debug(
+            "SQLite list retrieved",
+            extra={
+                "exchange": exchange_name,
+                "user_id": user_id,
+                "list_type": list_type,
+                "count": len(result)
+            }
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(
+            "Failed to get list from SQLite",
+            exc_info=True,
+            extra={
+                "exchange": exchange_name,
+                "user_id": user_id,
+                "list_type": list_type
+            }
+        )
+        raise DatabaseException(
+            f"Failed to get {list_type} from database",
+            details={
+                "exchange": exchange_name,
+                "user_id": user_id,
+                "list_type": list_type,
+                "error": str(e)
+            }
+        )
 
 # def update_file(file_name: str, items: List[str]):
 #     file_path = str(path_helper.packaged_binary_dir / file_name)

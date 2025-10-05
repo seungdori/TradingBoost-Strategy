@@ -5,7 +5,7 @@ import json
 
 from fastapi.security import OAuth2PasswordBearer
 from HYPERRSI.src.core.database import redis_client
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from HYPERRSI.src.api.dependencies import get_user_api_keys
 
 from position_monitor import OKXWebsocketClient

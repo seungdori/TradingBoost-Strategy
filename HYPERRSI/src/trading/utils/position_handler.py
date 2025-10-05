@@ -6,7 +6,7 @@ from os import error
 import traceback
 from datetime import datetime, timedelta
 from typing import Dict
-from HYPERRSI.src.helpers.order_helper import contracts_to_qty
+from shared.utils import contracts_to_qty
 from HYPERRSI.src.trading.trading_service import TradingService
 from HYPERRSI.src.trading.models import Position
 from HYPERRSI.src.api.trading.Calculate_signal import TrendStateCalculator
@@ -21,7 +21,7 @@ from HYPERRSI.src.api.routes.position import open_position_endpoint
 from HYPERRSI.src.trading.models import get_timeframe
 from HYPERRSI.src.api.routes.position import OpenPositionRequest
 from HYPERRSI.src.trading.utils.message_builder import create_position_message
-from HYPERRSI.src.core.logger import get_logger, setup_error_logger
+from shared.logging import get_logger, setup_error_logger
 from HYPERRSI.src.trading.utils.trading_utils import calculate_dca_levels, update_dca_levels_redis, init_user_position_data, check_dca_condition
 logger = get_logger(__name__)
 error_logger = setup_error_logger()

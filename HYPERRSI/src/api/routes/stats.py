@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 import json
 from HYPERRSI.src.core.database import redis_client
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 from HYPERRSI.src.trading.stats import (
     get_user_trading_statistics,
     get_pnl_history,

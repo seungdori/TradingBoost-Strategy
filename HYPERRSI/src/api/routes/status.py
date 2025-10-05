@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from HYPERRSI.src.services.redis_service import RedisService, redis_service
-from HYPERRSI.src.core.logger import get_logger
+from shared.logging import get_logger
 import time
 from datetime import datetime
 

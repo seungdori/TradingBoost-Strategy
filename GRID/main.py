@@ -1,3 +1,7 @@
+# Auto-configure PYTHONPATH for monorepo structure
+from shared.utils.path_config import configure_pythonpath
+configure_pythonpath()
+
 import uvicorn
 import argparse
 import multiprocessing
@@ -9,7 +13,6 @@ import platform
 import os
 from worker_manager import setup_workers, stop_workers
 import signal
-import sys
 from app import app  # FastAPI 앱 임포트
 
 
