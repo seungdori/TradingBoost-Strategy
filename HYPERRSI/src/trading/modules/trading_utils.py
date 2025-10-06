@@ -1,0 +1,54 @@
+# HYPERRSI/src/trading/modules/trading_utils.py
+"""
+Trading Utility Functions
+
+트레이딩 관련 유틸리티 함수들
+"""
+
+from HYPERRSI.src.core.database import redis_client
+
+
+def get_decimal_places(number: float) -> int:
+    """주어진 숫자의 소수점 자리수를 반환"""
+    str_num = str(abs(float(number)))
+    if '.' not in str_num:
+        return 0
+    return len(str_num.split('.')[1])
+
+
+async def init_user_position_data(user_id: str, symbol: str, side: str, is_first_init: bool = False):
+    """
+    포지션 데이터 초기화
+
+    Args:
+        user_id: 사용자 ID
+        symbol: 심볼
+        side: 포지션 방향 ('long' or 'short')
+        is_first_init: 첫 초기화 여부
+    """
+    position_state_key = f"user:{user_id}:position:{symbol}:position_state"
+    tp_data_key = f"user:{user_id}:position:{symbol}:{side}:tp_data"
+    dca_count_key = f"user:{user_id}:position:{symbol}:{side}:dca_count"
+    dca_levels_key = f"user:{user_id}:position:{symbol}:{side}:dca_levels"
+    position_key = f"user:{user_id}:position:{symbol}:{side}"
+
+    if is_first_init:
+        min_size_key = f"user:{user_id}:position:{symbol}:min_sustain_contract_size"
+        await redis_client.delete(min_size_key)
+        main_position_direction_key = f"user:{user_id}:position:{symbol}:main_position_direction"
+        await redis_client.delete(main_position_direction_key)
+
+    tp_state = f"user:{user_id}:position:{symbol}:{side}:tp_state"
+    hedging_direction_key = f"user:{user_id}:position:{symbol}:hedging_direction"
+    entry_fail_count_key = f"user:{user_id}:entry_fail_count"
+    initial_size_key = f"user:{user_id}:position:{symbol}:{side}:initial_size"
+
+    await redis_client.delete(position_state_key)
+    await redis_client.delete(tp_data_key)
+    await redis_client.delete(dca_count_key)
+    await redis_client.delete(dca_levels_key)
+    await redis_client.delete(position_key)
+    await redis_client.delete(initial_size_key)
+    await redis_client.delete(tp_state)
+    await redis_client.delete(entry_fail_count_key)
+    await redis_client.delete(hedging_direction_key)

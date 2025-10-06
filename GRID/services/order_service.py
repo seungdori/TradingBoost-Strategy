@@ -100,7 +100,7 @@ async def is_order_placed(exchange_name: str, user_id: int, symbol_name: str, gr
     return False
 
 
-async def is_price_placed(exchange_name: str, user_id: int, symbol_name: str, price: float, grid_level: int = None, grid_num: int = 20) -> bool:
+async def is_price_placed(exchange_name: str, user_id: int, symbol_name: str, price: float, grid_level: int | None = None, grid_num: int = 20) -> bool:
     """
     Check if a price is already placed (with tolerance).
 

@@ -167,17 +167,19 @@ def compute_trend_state(
     lower_list = []
     bbw_list = []
     for i in range(len(closes)):
-        if math.isnan(basis_list[i]) or math.isnan(std_list[i]):
+        basis_val = basis_list[i]
+        std_val = std_list[i]
+        if basis_val is None or std_val is None or math.isnan(basis_val) or math.isnan(std_val):
             upper_list.append(math.nan)
             lower_list.append(math.nan)
             bbw_list.append(math.nan)
             continue
-        up = basis_list[i] + mult_bb*std_list[i]
-        lo = basis_list[i] - mult_bb*std_list[i]
+        up = basis_val + mult_bb*std_val
+        lo = basis_val - mult_bb*std_val
         upper_list.append(up)
         lower_list.append(lo)
-        if basis_list[i] != 0:
-            bbw_list.append((up - lo)*10.0 / basis_list[i])
+        if basis_val != 0:
+            bbw_list.append((up - lo)*10.0 / basis_val)
         else:
             bbw_list.append(math.nan)
     # bbw의 SMA
@@ -193,7 +195,7 @@ def compute_trend_state(
 
         # 평균 bbw
         ma_val = bbw_ma[i]
-        if math.isnan(ma_val):
+        if ma_val is None or math.isnan(ma_val):
             bb_state_list[i] = 0
             continue
 

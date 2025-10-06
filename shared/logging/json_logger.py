@@ -142,6 +142,7 @@ def setup_json_logger(
     handler = logging.StreamHandler()
 
     # Use JSON formatter if enabled
+    formatter: logging.Formatter
     if settings.LOG_JSON:
         formatter = JSONFormatter()
     else:
@@ -196,7 +197,7 @@ def log_with_context(
     level: str,
     message: str,
     **context: Any,
-):
+) -> None:
     """
     Log message with additional context.
 
@@ -222,7 +223,7 @@ def log_error_with_context(
     error: Exception,
     message: str | None = None,
     **context: Any,
-):
+) -> None:
     """
     Log error with exception info and context.
 

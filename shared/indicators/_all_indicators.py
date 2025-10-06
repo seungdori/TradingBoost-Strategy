@@ -147,13 +147,15 @@ def compute_all_indicators(candles, rsi_period=14, atr_period=14,
     stdev_list = calc_stddev(closes, bb_length)
     bbw_list = []
     for i in range(len(closes)):
-        if math.isnan(basis_list[i]) or math.isnan(stdev_list[i]):
+        basis_val = basis_list[i]
+        stdev_val = stdev_list[i]
+        if basis_val is None or stdev_val is None or math.isnan(basis_val) or math.isnan(stdev_val):
             bbw_list.append(math.nan)
         else:
-            up_ = basis_list[i] + bb_mult*stdev_list[i]
-            lo_ = basis_list[i] - bb_mult*stdev_list[i]
-            if basis_list[i] != 0:
-                bbw_list.append((up_ - lo_)*10.0 / basis_list[i])
+            up_ = basis_val + bb_mult*stdev_val
+            lo_ = basis_val - bb_mult*stdev_val
+            if basis_val != 0:
+                bbw_list.append((up_ - lo_)*10.0 / basis_val)
             else:
                 bbw_list.append(math.nan)
     # bbw의 SMA (ma_2)
@@ -166,7 +168,7 @@ def compute_all_indicators(candles, rsi_period=14, atr_period=14,
             bb_state_list[i] = 0
             continue
         ma_val = bbw_ma[i]
-        if math.isnan(ma_val):
+        if ma_val is None or math.isnan(ma_val):
             bb_state_list[i] = 0
             continue
         # 예시: buzz, squeeze를 ma_val 기반 임의 계산

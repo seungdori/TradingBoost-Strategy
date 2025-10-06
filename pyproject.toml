@@ -1,0 +1,120 @@
+[project]
+name = "tradingboost-strategy"
+version = "1.0.0"
+description = "Cryptocurrency automated trading system with HYPERRSI and GRID strategies"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "pydantic-settings",
+    "sqlalchemy",
+    "asyncpg",
+    "redis",
+    "celery",
+    "ccxt",
+    "python-telegram-bot",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.8.0",
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.12.0",
+    "ruff>=0.1.0",
+]
+
+[tool.mypy]
+# Mypy configuration for TradingBoost-Strategy
+# Python version and platform
+python_version = "3.12"
+platform = "darwin"
+
+# Import discovery
+mypy_path = "."
+namespace_packages = true
+explicit_package_bases = true
+
+# Strict mode options (gradually enable)
+strict = false
+warn_return_any = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+# Type checking options
+check_untyped_defs = true
+disallow_untyped_defs = false  # Enable gradually
+disallow_any_unimported = false
+disallow_any_expr = false
+disallow_any_decorated = false
+disallow_any_explicit = false
+disallow_subclassing_any = false
+disallow_untyped_calls = false  # Enable gradually
+disallow_incomplete_defs = true
+disallow_untyped_decorators = false  # Enable gradually
+
+# Import following
+follow_imports = "normal"
+ignore_missing_imports = true
+
+# Error reporting
+show_error_codes = true
+show_column_numbers = true
+show_error_context = true
+pretty = true
+
+# Incremental mode
+incremental = true
+cache_dir = ".mypy_cache"
+
+# Module-specific overrides
+[[tool.mypy.overrides]]
+module = "shared.*"
+disallow_untyped_defs = false
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "HYPERRSI.*"
+disallow_untyped_defs = false
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "GRID.*"
+disallow_untyped_defs = false
+check_untyped_defs = true
+
+# Third-party libraries without stubs
+[[tool.mypy.overrides]]
+module = [
+    "ccxt.*",
+    "celery.*",
+    "telegram.*",
+]
+ignore_missing_imports = true
+
+[tool.ruff]
+# Ruff configuration (optional, for future use)
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]  # Line too long (handled by formatter)
+
+[tool.pytest.ini_options]
+# Pytest configuration (already exists in pytest.ini, kept for reference)
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+asyncio_mode = "auto"
+markers = [
+    "integration: Integration tests requiring real database/Redis",
+    "slow: Slow tests that take more than 1 second",
+    "unit: Fast unit tests",
+]

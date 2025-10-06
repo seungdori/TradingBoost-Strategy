@@ -8,6 +8,7 @@ from typing import Protocol, Any
 from dataclasses import dataclass
 from datetime import datetime
 import time
+from sqlalchemy.ext.asyncio import AsyncEngine
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -40,7 +41,7 @@ class PoolMonitor:
         health = monitor.check_health()
     """
 
-    def __init__(self, engine, leak_threshold: float = 0.8):
+    def __init__(self, engine: AsyncEngine, leak_threshold: float = 0.8) -> None:
         """
         Initialize pool monitor.
 
@@ -61,11 +62,11 @@ class PoolMonitor:
         pool = self.engine.pool
 
         return PoolMetrics(
-            pool_size=pool.size(),
-            checked_out=pool.checkedout(),
-            available=pool.size() - pool.checkedout(),
-            overflow=pool.overflow(),
-            max_overflow=pool._max_overflow,
+            pool_size=pool.size(),  # type: ignore[attr-defined]
+            checked_out=pool.checkedout(),  # type: ignore[attr-defined]
+            available=pool.size() - pool.checkedout(),  # type: ignore[attr-defined]
+            overflow=pool.overflow(),  # type: ignore[attr-defined]
+            max_overflow=pool._max_overflow,  # type: ignore[attr-defined]
             timestamp=datetime.utcnow()
         )
 
@@ -127,7 +128,7 @@ class PoolMonitor:
             "timestamp": metrics.timestamp.isoformat()
         }
 
-    async def warm_up_pool(self, connections: int | None = None):
+    async def warm_up_pool(self, connections: int | None = None) -> None:
         """
         Pre-create connections to avoid cold start.
 
@@ -136,7 +137,7 @@ class PoolMonitor:
         Args:
             connections: Number of connections to create (default: pool_size)
         """
-        connections = connections or self.engine.pool.size()
+        connections = connections or self.engine.pool.size()  # type: ignore[attr-defined]
 
         logger.info(
             f"Warming up pool with {connections} connections",
@@ -146,7 +147,8 @@ class PoolMonitor:
         try:
             # Create a connection to ensure pool is initialized
             async with self.engine.begin() as conn:
-                await conn.execute("SELECT 1")
+                from sqlalchemy import text
+                await conn.execute(text("SELECT 1"))
 
             logger.info("Pool warm-up complete")
 

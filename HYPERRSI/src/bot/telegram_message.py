@@ -12,7 +12,8 @@ from HYPERRSI.src.core.database import redis_client
 import datetime as dt
 from typing import Optional
 
-from HYPERRSI.src.helpers.user_id_helper import get_telegram_id_from_uid
+from shared.helpers.user_id_converter import get_telegram_id_from_uid
+from HYPERRSI.src.services.timescale_service import TimescaleUserService
 # 순환 참조 제거
 # from HYPERRSI.src.trading.monitoring import get_okx_uid_from_telegram_id
 dotenv.load_dotenv()
@@ -122,7 +123,7 @@ async def log_telegram_event(
     try:
         # okx_uid가 제공되었지만 user_id가 없으면 조회
         if okx_uid and not user_id:
-            user_id = await get_telegram_id_from_uid(okx_uid)
+            user_id = await get_telegram_id_from_uid(redis_client, okx_uid, TimescaleUserService)
         
         # user_id가 있지만 okx_uid가 없으면 조회
         if user_id and not okx_uid:
@@ -334,7 +335,7 @@ async def send_telegram_message_with_markup_direct(okx_uid, text, reply_markup=N
     error_msg = None
     message_id = None
     try:
-        telegram_id = await get_telegram_id_from_uid(okx_uid)
+        telegram_id = await get_telegram_id_from_uid(redis_client, okx_uid, TimescaleUserService)
     except Exception as e:
         traceback.print_exc()
         return
@@ -408,7 +409,7 @@ async def send_telegram_message_direct(message, okx_uid, debug=False, category="
             telegram_id_to_send = 1709556958
             final_message = f"[DEBUG : {og_okx_uid}] {message}"
         else:
-            telegram_id_to_send = await get_telegram_id_from_uid(okx_uid)
+            telegram_id_to_send = await get_telegram_id_from_uid(redis_client, okx_uid, TimescaleUserService)
             logger.info(f"OKX UID {okx_uid} -> Telegram ID {telegram_id_to_send}")
         if telegram_id_to_send:
             async with semaphore:
@@ -477,7 +478,7 @@ async def edit_telegram_message_text_direct(okx_uid, message_id, text, reply_mar
     status = "failed"
     error_msg = None
     edited_message_id = None # 수정 성공 시 message_id가 반환될 수 있음 (문서 확인 필요)
-    telegram_id = await get_telegram_id_from_uid(okx_uid)
+    telegram_id = await get_telegram_id_from_uid(redis_client, okx_uid, TimescaleUserService)
     try:
         async with semaphore:
             max_retries = 3

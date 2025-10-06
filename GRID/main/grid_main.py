@@ -47,7 +47,7 @@ from GRID.jobs.task_manager import create_tasks
 
 # ==================== Config (for debug only) ====================
 try:
-    from config import OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE
+    from config import OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE  # type: ignore[attr-defined]
 except ImportError:
     OKX_API_KEY = None
     OKX_SECRET_KEY = None
@@ -78,7 +78,7 @@ async def main(exchange_name, direction, enter_symbol_count, enter_symbol_amount
             is_running = await get_user_data(exchange_name, user_id, "is_running")
             if is_running is None:
                 await update_user_data(exchange_name, user_id, is_running=False, tasks=[], running_symbols=set())
-            completed_symbols = set()
+            completed_symbols: set[str] = set()
             if force_restart:
                 completed_trading_symbols = await get_user_data(exchange_name, user_id, "completed_trading_symbols")
             else:
@@ -97,7 +97,7 @@ async def main(exchange_name, direction, enter_symbol_count, enter_symbol_amount
         numbers_to_entry = enter_symbol_count
         initial_capital_list = enter_symbol_amount_list
         modified_symbols = []
-        recovery_tasks = []
+        recovery_tasks: list[asyncio.Task] = []
         timeframe = '15m'
         limit = 1000
         initial_capital = initial_investment
@@ -118,7 +118,7 @@ async def main(exchange_name, direction, enter_symbol_count, enter_symbol_amount
         # 심볼 가져오기 및 포맷팅
         symbols, modified_symbols = await get_and_format_symbols(exchange_name, user_id, direction, n, force_restart)
 
-        symbol_queues = {symbol: asyncio.Queue(maxsize=1) for symbol in symbols}
+        symbol_queues: dict[str, asyncio.Queue] = {symbol: asyncio.Queue(maxsize=1) for symbol in symbols}
         symbols_formatted = format_symbols(symbols)
 
         # 메시지 준비
@@ -132,7 +132,7 @@ async def main(exchange_name, direction, enter_symbol_count, enter_symbol_amount
             #asyncio.create_task(telegram_message.send_telegram_message(message, exchange_name, user_id))
             trading_semaphore = asyncio.Semaphore(numbers_to_entry)
             completed_symbols = set()
-            running_symbols = set()
+            running_symbols: set[str] = set()
             await update_user_data(exchange_name, user_id, running_symbols=set())
             tasks = []
         except Exception as e:
@@ -232,7 +232,7 @@ async def main(exchange_name, direction, enter_symbol_count, enter_symbol_amount
     except KeyboardInterrupt:
         print("Caught KeyboardInterrupt. Cleaning up...")
         print("is_running set to False")
-        raise e
+        raise
     except Exception as e:
         print('[START FEATURE EXCEPTION]', e)
         print(traceback.format_exc())

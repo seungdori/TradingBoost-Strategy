@@ -25,7 +25,11 @@ def fetch_usdt_swaps():
     url = "https://www.okx.com/api/v5/public/instruments?instType=SWAP"
     data = requests.get(url, timeout=10).json().get("data", [])
     return [d["instId"] for d in data if d["settleCcy"] == "USDT"]
-
+def save_candle(key, candle_json):
+    with redis.pipeline() as p:
+        p.rpush(key, candle_json)
+        p.ltrim(key, -10000, -1)
+        p.execute()
 def convert_symbol_format(symbol: str, to_okx_ws: bool = True) -> str:
     """심볼 형식을 웹소켓 양식으로 변환하는 헬퍼 함수
     

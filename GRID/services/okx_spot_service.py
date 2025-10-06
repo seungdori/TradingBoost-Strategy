@@ -33,12 +33,12 @@ async def get_okx_spot_account_balance():
     try:
         if ((not cache_expired(okx_spot_account_balance_cache_expiry))
                 and (okx_spot_account_balance_cache is not None)):
-            return okx_spot_account_balance_cache
-        else:
-            futures_account_balance = await okx_spot_client.fetch_balance(params={})
-            okx_spot_account_balance_cache = futures_account_balance
-            okx_spot_account_balance_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
-            return futures_account_balance
+            return okx_spot_account_balance_cache  # type: ignore[unreachable]
+
+        futures_account_balance = await okx_spot_client.fetch_balance(params={})
+        okx_spot_account_balance_cache = futures_account_balance
+        okx_spot_account_balance_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
+        return futures_account_balance
     except Exception as e:
         print('[EXCEPTION get_okx_balances]', e)
         raise ValueError(f"OKX 계좌를 불러오지 못했습니다. {e}")
@@ -53,9 +53,9 @@ async def get_okx_spot_wallet():
     try:
         balance_info = await get_okx_spot_account_balance()
 
-        total_balance = float(balance_info['total']['USDT']) 
+        total_balance = float(balance_info['total']['USDT'])
         wallet_balance = float(balance_info['free']['USDT'])
-        total_unrealized_profit = 0 
+        total_unrealized_profit = 0.0
 
         # Assuming 'unrealizedPL' corresponds to 'upl' in the new data structure
         if 'info' in balance_info and balance_info['info']['data']:
@@ -78,12 +78,12 @@ async def get_okx_spot_tickers():
     try:
         if ((not cache_expired(okx_spot_mark_price_cache_expiry))
                 and (okx_spot_mark_price_cache is not None)):
-            return okx_spot_mark_price_cache
-        else:
-            tickers = await client.fetch_tickers()
-            okx_spot_mark_price_cache = tickers
-            okx_spot_mark_price_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
-            return tickers
+            return okx_spot_mark_price_cache  # type: ignore[unreachable]
+
+        tickers = await client.fetch_tickers()
+        okx_spot_mark_price_cache = tickers
+        okx_spot_mark_price_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
+        return tickers
     except Exception as e:
         raise ValueError(f"OKX 마켓 정보를 불러오지 못했습니다. {e}")
     finally:
@@ -95,7 +95,7 @@ async def fetch_okx_spot_positions():
 
     print('[FETCH OKX POSITIONS]')
     exchange = exchange_store.get_okx_spot_instance()
-    positions = []
+    positions: list[dict] = []
 
     try:
         balance = await exchange.fetch_balance()

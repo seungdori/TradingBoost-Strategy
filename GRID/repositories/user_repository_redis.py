@@ -164,7 +164,8 @@ async def find_user_by_username(
                         "user_id": user_id
                     }
                 )
-                return user_data
+                result: dict[str, Any] = user_data
+                return result
 
         logger.info(
             "User not found by username",
@@ -223,7 +224,7 @@ async def get_user_by_id(
         )
 
         user_keys = await redis_database.get_user_keys(exchange_name)
-        user_data = user_keys.get(user_id)
+        user_data: dict[str, Any] | None = user_keys.get(user_id)
 
         if user_data:
             logger.info(

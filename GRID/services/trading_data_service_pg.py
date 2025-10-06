@@ -5,7 +5,7 @@ Provides backward-compatible interface for trading data operations using Postgre
 Replaces GRID.database.database and GRID.infra.database SQLite implementation.
 """
 
-from typing import Optional
+from typing import Optional, Any
 import pandas as pd
 
 from GRID.infra.database_pg import get_grid_db
@@ -53,7 +53,7 @@ async def update_entry_data(
     async with get_grid_db() as session:
         repo = TradingDataRepositoryPG(session)
 
-        entry_data = {}
+        entry_data: dict[str, Any] = {}
         if direction is not None:
             entry_data['direction'] = direction
         if entry_time is not None:
@@ -86,7 +86,7 @@ async def update_entry_data(
 async def update_tp_data(
     exchange_name: str,
     symbol: str,
-    **kwargs
+    **kwargs: Any
 ) -> None:
     """
     Update or create take profit data for a symbol.

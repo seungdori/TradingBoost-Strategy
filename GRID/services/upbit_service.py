@@ -1,15 +1,16 @@
 from datetime import datetime, timedelta
 from shared.exchange_apis import exchange_store
 from shared.helpers.cache_helper import cache_expired
+from typing import Any
 
 CACHE_TIME_SECONDS = 30
 AVG_PRICE_CACHE_TIME_SECONDS = 30
 
-upbit_balances_cache = None
+upbit_balances_cache: Any = None
 upbit_balances_cache_expiry = datetime.now()
-upbit_tickers_cache = None
+upbit_tickers_cache: Any = None
 upbit_tickers_cache_expiry = datetime.now()
-upbit_avg_price_cache = None
+upbit_avg_price_cache: Any = None
 upbit_avg_price_cache_expiry = datetime.now()
 
 
@@ -32,12 +33,12 @@ async def get_upbit_tickers():
     try:
         if (not cache_expired(upbit_tickers_cache_expiry)) and (upbit_tickers_cache is not None):
             return upbit_tickers_cache
-        else:
-            # exchange = exchange_store.get_upbit_instance()
-            tickers = await upbit_client.fetch_tickers()
-            upbit_tickers_cache = tickers
-            upbit_tickers_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
-            return upbit_tickers_cache
+
+        # exchange = exchange_store.get_upbit_instance()
+        tickers = await upbit_client.fetch_tickers()
+        upbit_tickers_cache = tickers
+        upbit_tickers_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
+        return upbit_tickers_cache
 
     except Exception as e:
         raise ValueError(f"업비트 마켓 정보를 불러오지 못했습니다. {e}")
@@ -55,11 +56,10 @@ async def get_upbit_balances():
         if (not cache_expired(upbit_balances_cache_expiry)) and (upbit_balances_cache is not None):
             return upbit_balances_cache
 
-        else:
-            balances = await upbit_client.fetch_balance()
-            upbit_balances_cache = balances
-            upbit_balances_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
-            return upbit_balances_cache
+        balances = await upbit_client.fetch_balance()
+        upbit_balances_cache = balances
+        upbit_balances_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
+        return upbit_balances_cache
 
     except Exception as e:
         raise ValueError(f"업비트 계좌를 불러오지 못했습니다. {e}")
@@ -72,7 +72,7 @@ async def fetch_upbit_avg_price():
     global upbit_avg_price_cache, upbit_avg_price_cache_expiry
 
     if not (cache_expired(upbit_avg_price_cache_expiry)) and (upbit_avg_price_cache is not None):
-        return upbit_avg_price_cache_expiry
+        return upbit_avg_price_cache
 
     try:
         balance_data = await get_upbit_balances()
@@ -93,7 +93,7 @@ async def fetch_upbit_avg_price():
 
 
 async def fetch_upbit_positions():
-    positions = []
+    positions: list[Any] = []
 
     try:
         balances = await get_upbit_balances()

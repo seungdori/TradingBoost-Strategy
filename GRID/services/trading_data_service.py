@@ -18,10 +18,11 @@ async def fetch_trading_data(exchange_name: str, symbols: List[str]) -> List[Tra
 
 
 def get_trading_logs(exchange_name: str) -> List[str]:
-    return trading_log_repository.get_trading_messages(exchange_name)
+    result: list[str] = trading_log_repository.get_trading_messages(exchange_name)
+    return result
 
 
-def put_trading_log(log: str):
+def put_trading_log(log: str) -> None:
     trading_log_repository.put_trading_message(log)
 
 
@@ -45,7 +46,8 @@ async def create_chart_image(exchange_name: str, selected_coin_name: str, enter_
 
 async def get_win_rates(exchange_name: str, enter_strategy : str) -> List[WinrateDto]:
     try:
-        return await grid.build_sort_ai_trading_data(exchange_name, enter_strategy)
+        result: list[WinrateDto] = await grid.build_sort_ai_trading_data(exchange_name, enter_strategy)
+        return result
     except Exception as e:
         print('[GET WIN RATE EXCEPTION]', e)
         return []

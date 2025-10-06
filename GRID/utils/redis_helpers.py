@@ -48,7 +48,7 @@ async def is_order_placed(exchange_name: str, user_id: int, symbol_name: str, gr
     return order_placed is not None and order_placed != b'0'
 
 
-async def is_price_placed(exchange_name: str, user_id: int, symbol_name: str, price: float, grid_level: int = None, grid_num: int = 20) -> bool:
+async def is_price_placed(exchange_name: str, user_id: int, symbol_name: str, price: float, grid_level: int | None = None, grid_num: int = 20) -> bool:
     """특정 가격에 주문이 배치되었는지 확인합니다."""
     placed_prices = await get_placed_prices(exchange_name, user_id, symbol_name)
     return price in placed_prices

@@ -20,7 +20,7 @@ from ._core import (
 from ._moving_averages import (
     calc_sma,
     calc_ema,
-    calc_rma_improved,
+    calc_rma,
     calc_t3,
     calc_vidya,
     calc_jma,
@@ -45,6 +45,23 @@ from ._trend import (
     compute_trend_state
 )
 
+# ADX
+from ._adx import (
+    calculate_adx,
+    calculate_dm_tr,
+    calculate_tr,
+    rma
+)
+
+# MAMA/FAMA
+from ._mama_fama import (
+    compute_mama_fama,
+    compute_ema,
+    hilbert_transform,
+    compute_component,
+    compute_alpha
+)
+
 # All indicators computation
 from ._all_indicators import compute_all_indicators
 
@@ -58,7 +75,7 @@ __all__ = [
     # Moving averages
     'calc_sma',
     'calc_ema',
-    'calc_rma_improved',
+    'calc_rma',
     'calc_t3',
     'calc_vidya',
     'calc_jma',
@@ -73,6 +90,17 @@ __all__ = [
     # Trend
     'rational_quadratic',
     'compute_trend_state',
+    # ADX
+    'calculate_adx',
+    'calculate_dm_tr',
+    'calculate_tr',
+    'rma',
+    # MAMA/FAMA
+    'compute_mama_fama',
+    'compute_ema',
+    'hilbert_transform',
+    'compute_component',
+    'compute_alpha',
     # All
     'compute_all_indicators',
 ]

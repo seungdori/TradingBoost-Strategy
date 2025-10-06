@@ -4,12 +4,13 @@
 """
 import json
 import logging
-from typing import Any, Optional, Dict, List
+from typing import Any
+from redis.asyncio import Redis as AsyncRedis
 
 logger = logging.getLogger(__name__)
 
 
-async def set_redis_data(redis_client, key: str, data: Any, expiry: int = 144000) -> None:
+async def set_redis_data(redis_client: AsyncRedis, key: str, data: Any, expiry: int = 144000) -> None:
     """
     Redis에 데이터를 저장합니다.
 
@@ -22,7 +23,7 @@ async def set_redis_data(redis_client, key: str, data: Any, expiry: int = 144000
     await redis_client.set(key, json.dumps(data), ex=expiry)
 
 
-async def get_redis_data(redis_client, key: str) -> Optional[Any]:
+async def get_redis_data(redis_client: AsyncRedis, key: str) -> Any | None:
     """
     Redis에서 데이터를 가져옵니다.
 
@@ -37,7 +38,7 @@ async def get_redis_data(redis_client, key: str) -> Optional[Any]:
     return json.loads(data) if data else None
 
 
-async def delete_redis_data(redis_client, key: str) -> bool:
+async def delete_redis_data(redis_client: AsyncRedis, key: str) -> bool:
     """
     Redis에서 데이터를 삭제합니다.
 
@@ -48,11 +49,11 @@ async def delete_redis_data(redis_client, key: str) -> bool:
     Returns:
         삭제 성공 여부
     """
-    result = await redis_client.delete(key)
+    result: int = await redis_client.delete(key)
     return result > 0
 
 
-async def exists_redis_key(redis_client, key: str) -> bool:
+async def exists_redis_key(redis_client: AsyncRedis, key: str) -> bool:
     """
     Redis 키가 존재하는지 확인합니다.
 
@@ -63,14 +64,15 @@ async def exists_redis_key(redis_client, key: str) -> bool:
     Returns:
         키 존재 여부
     """
-    return await redis_client.exists(key) > 0
+    exists_result: int = await redis_client.exists(key)
+    return exists_result > 0
 
 
 # ============================================================================
 # 사용자 설정 관련
 # ============================================================================
 
-async def get_user_settings(redis_client, user_id: str) -> Dict:
+async def get_user_settings(redis_client: AsyncRedis, user_id: str) -> dict[str, Any]:
     """
     사용자의 설정 정보를 가져옵니다.
 
@@ -86,7 +88,8 @@ async def get_user_settings(redis_client, user_id: str) -> Dict:
         settings_data = await redis_client.get(settings_key)
 
         if settings_data:
-            return json.loads(settings_data)
+            settings_dict: dict[str, Any] = json.loads(settings_data)
+            return settings_dict
         else:
             # 기본 설정값
             return {
@@ -105,7 +108,7 @@ async def get_user_settings(redis_client, user_id: str) -> Dict:
         }
 
 
-async def set_user_settings(redis_client, user_id: str, settings: Dict, expiry: int = 86400 * 30) -> bool:
+async def set_user_settings(redis_client: AsyncRedis, user_id: str, settings: dict[str, Any], expiry: int = 86400 * 30) -> bool:
     """
     사용자 설정을 저장합니다.
 
@@ -131,7 +134,7 @@ async def set_user_settings(redis_client, user_id: str, settings: Dict, expiry: 
 # 최근 심볼 관리
 # ============================================================================
 
-async def add_recent_symbol(redis_client, user_id: str, symbol: str, max_symbols: int = 10) -> None:
+async def add_recent_symbol(redis_client: AsyncRedis, user_id: str, symbol: str, max_symbols: int = 10) -> None:
     """
     사용자의 최근 거래 심볼을 Redis에 추가합니다.
 
@@ -146,7 +149,7 @@ async def add_recent_symbol(redis_client, user_id: str, symbol: str, max_symbols
 
         # 기존 최근 심볼 목록 조회
         recent_symbols_data = await redis_client.get(recent_symbols_key)
-        recent_symbols = json.loads(recent_symbols_data) if recent_symbols_data else []
+        recent_symbols: list[str] = json.loads(recent_symbols_data) if recent_symbols_data else []
 
         # 이미 있는 심볼이면 맨 앞으로 이동
         if symbol in recent_symbols:
@@ -165,7 +168,7 @@ async def add_recent_symbol(redis_client, user_id: str, symbol: str, max_symbols
         logger.error(f"최근 심볼 추가 중 오류: {str(e)}")
 
 
-async def get_recent_symbols(redis_client, user_id: str, default_symbols: List[str] = None) -> List[str]:
+async def get_recent_symbols(redis_client: AsyncRedis, user_id: str, default_symbols: list[str] | None = None) -> list[str]:
     """
     사용자의 최근 거래 심볼 목록을 조회합니다.
 
@@ -182,7 +185,8 @@ async def get_recent_symbols(redis_client, user_id: str, default_symbols: List[s
         recent_symbols_data = await redis_client.get(recent_symbols_key)
 
         if recent_symbols_data:
-            return json.loads(recent_symbols_data)
+            symbols_list: list[str] = json.loads(recent_symbols_data)
+            return symbols_list
 
         # 데이터가 없으면 기본 심볼 반환
         return default_symbols if default_symbols else []
@@ -196,7 +200,7 @@ async def get_recent_symbols(redis_client, user_id: str, default_symbols: List[s
 # 포지션 및 주문 관리
 # ============================================================================
 
-async def get_position(redis_client, user_id: str, symbol: str, side: str = None) -> Optional[Dict]:
+async def get_position(redis_client: AsyncRedis, user_id: str, symbol: str, side: str | None = None) -> dict[str, Any] | None:
     """
     포지션 정보를 조회합니다.
 
@@ -216,13 +220,16 @@ async def get_position(redis_client, user_id: str, symbol: str, side: str = None
             key = f"position:{user_id}:{symbol}"
 
         data = await redis_client.get(key)
-        return json.loads(data) if data else None
+        if data:
+            position_dict: dict[str, Any] = json.loads(data)
+            return position_dict
+        return None
     except Exception as e:
         logger.error(f"포지션 조회 중 오류: {str(e)}")
         return None
 
 
-async def set_position(redis_client, user_id: str, symbol: str, position_data: Dict, side: str = None, expiry: int = 300) -> bool:
+async def set_position(redis_client: AsyncRedis, user_id: str, symbol: str, position_data: dict[str, Any], side: str | None = None, expiry: int = 300) -> bool:
     """
     포지션 정보를 저장합니다.
 
@@ -250,7 +257,7 @@ async def set_position(redis_client, user_id: str, symbol: str, position_data: D
         return False
 
 
-async def delete_position(redis_client, user_id: str, symbol: str, side: str = None) -> bool:
+async def delete_position(redis_client: AsyncRedis, user_id: str, symbol: str, side: str | None = None) -> bool:
     """
     포지션 정보를 삭제합니다.
 
@@ -269,7 +276,7 @@ async def delete_position(redis_client, user_id: str, symbol: str, side: str = N
         else:
             key = f"position:{user_id}:{symbol}"
 
-        result = await redis_client.delete(key)
+        result: int = await redis_client.delete(key)
         return result > 0
     except Exception as e:
         logger.error(f"포지션 삭제 중 오류: {str(e)}")

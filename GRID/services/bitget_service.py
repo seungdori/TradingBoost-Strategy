@@ -1,13 +1,14 @@
 from datetime import datetime, timedelta
+from typing import Any
 
 from shared.exchange_apis import exchange_store
 from shared.helpers.cache_helper import cache_expired
 
 CACHE_TIME_SECONDS = 25
 
-bitget_futures_account_balance_cache = None
+bitget_futures_account_balance_cache: Any = None
 bitget_futures_account_balance_cache_expiry = datetime.now()
-bitget_futures_mark_price_cache = None
+bitget_futures_mark_price_cache: Any = None
 bitget_futures_mark_price_cache_expiry = datetime.now()
 
 
@@ -32,11 +33,11 @@ async def get_bitget_futures_account_balance():
         if ((not cache_expired(bitget_futures_account_balance_cache_expiry))
                 and (bitget_futures_account_balance_cache is not None)):
             return bitget_futures_account_balance_cache
-        else:
-            futures_account_balance = await bitget_client.fetch_balance(params={})
-            bitget_futures_account_balance_cache = futures_account_balance
-            bitget_futures_account_balance_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
-            return futures_account_balance
+
+        futures_account_balance = await bitget_client.fetch_balance(params={})
+        bitget_futures_account_balance_cache = futures_account_balance
+        bitget_futures_account_balance_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
+        return futures_account_balance
     except Exception as e:
         print('[EXCEPTION get_bitget_balances]', e)
         raise ValueError(f"비트겟 계좌를 불러오지 못했습니다. {e}")
@@ -69,11 +70,11 @@ async def get_bitget_tickers():
         if ((not cache_expired(bitget_futures_mark_price_cache_expiry))
                 and (bitget_futures_mark_price_cache is not None)):
             return bitget_futures_mark_price_cache
-        else:
-            tickers = await client.fetch_tickers(params={'productType': 'USDT-FUTURES'})
-            bitget_futures_mark_price_cache = tickers
-            bitget_futures_mark_price_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
-            return tickers
+
+        tickers = await client.fetch_tickers(params={'productType': 'USDT-FUTURES'})
+        bitget_futures_mark_price_cache = tickers
+        bitget_futures_mark_price_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
+        return tickers
     except Exception as e:
         raise ValueError(f"비트겟 마켓 정보를 불러오지 못했습니다. {e}")
     finally:
@@ -84,7 +85,7 @@ async def get_bitget_tickers():
 async def fetch_bitget_positions():
     print('[FETCH BITGET POSITIONS]')
     exchange = exchange_store.get_bitget_instance()
-    positions = []
+    positions: list[Any] = []
 
     try:
         balance = await get_bitget_futures_account_balance()

@@ -1,10 +1,16 @@
-"""검증 및 파싱 유틸리티"""
+"""
+트레이딩 검증 유틸리티
 
-# shared 모듈에서 공통 유틸리티 import
-from shared.utils import parse_bool  # noqa: F401 (re-export for backward compatibility)
+주문 유효성 검증 및 포지션 관련 검증 기능 제공
+"""
 
 
-def check_order_validity(notional_usd, pos, max_notional_value, order_direction):
+def check_order_validity(
+    notional_usd: float,
+    pos: float,
+    max_notional_value: float,
+    order_direction: str
+) -> bool:
     """
     주문 유효성을 검증합니다.
 
@@ -16,6 +22,19 @@ def check_order_validity(notional_usd, pos, max_notional_value, order_direction)
 
     Returns:
         bool: 주문 가능 여부
+
+    Examples:
+        >>> # 롱 포지션이 있고 더 롱 주문을 하려는 경우
+        >>> check_order_validity(1000, 10, 1000, 'long')
+        False  # 이미 최대값에 도달
+
+        >>> # 롱 포지션이 있고 숏 주문을 하려는 경우 (반대 방향)
+        >>> check_order_validity(1000, 10, 1000, 'short')
+        True  # 반대 방향은 허용
+
+        >>> # 포지션이 없는 경우
+        >>> check_order_validity(0, 0, 1000, 'long')
+        True  # 새로운 주문 가능
     """
     if pos > 0:  # 현재 롱 포지션
         if order_direction == 'long' and notional_usd >= max_notional_value:

@@ -19,20 +19,20 @@ class TelegramStore:
         self.__bitget_token = '6468139319:AAFahdVubywE64CEdireFSNUYej6tl3StDw'
         self.__okx_token = '7159235181:AAH2t1wVV3JynlR6ruzqCgCeH-0hjHhV20Y'
 
-    def set_telegram_id(self, telegram_id: str):
+    def set_telegram_id(self, telegram_id: str) -> None:
         self.__telegram_id = telegram_id
 
-    def set_binance_token(self, token: str):
+    def set_binance_token(self, token: str) -> None:
         self.__binance_token = token
 
-    def set_upbit_token(self, token: str):
+    def set_upbit_token(self, token: str) -> None:
         self.__upbit_token = token
 
 
-    def set_bitget_token(self, token: str):
+    def set_bitget_token(self, token: str) -> None:
         self.__bitget_token = token
 
-    def set_okx_token(self, token: str):
+    def set_okx_token(self, token: str) -> None:
         self.__okx_token = token
 
     def get_telegram_id(self) -> str:

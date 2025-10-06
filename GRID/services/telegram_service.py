@@ -2,15 +2,16 @@ from GRID.api.apilist import telegram_store
 from GRID.dtos.telegram import TelegramTokenDto
 
 
-def set_telegram_id(telegram_id: str):
+def set_telegram_id(telegram_id: str) -> None:
     telegram_store.set_telegram_id(telegram_id)
 
 
 def get_telegram_id() -> str:
-    return telegram_store.get_telegram_id()
+    result: str = telegram_store.get_telegram_id()
+    return result
 
 
-def set_telegram_token(dto: TelegramTokenDto):
+def set_telegram_token(dto: TelegramTokenDto) -> None:
     exchange_name = dto.exchange_name
     token = dto.token
 
@@ -34,19 +35,21 @@ def set_telegram_token(dto: TelegramTokenDto):
 
 def get_telegram_token(exchange_name: str) -> str:
     print('[GET TELEGRAM TOKEN EXCHANGE_NAME]', exchange_name)
+    result: str
     if exchange_name == 'binance':
-        return telegram_store.get_binance_token()
+        result = telegram_store.get_binance_token()
     elif exchange_name == 'binance_spot':
-        return telegram_store.get_binance_token()
+        result = telegram_store.get_binance_token()
     elif exchange_name == 'upbit':
-        return telegram_store.get_upbit_token()
+        result = telegram_store.get_upbit_token()
     elif exchange_name == 'bitget':
-        return telegram_store.get_bitget_token()
+        result = telegram_store.get_bitget_token()
     elif exchange_name == 'okx':
-        return telegram_store.get_okx_token()
+        result = telegram_store.get_okx_token()
     elif exchange_name == 'bitget_spot':
-        return telegram_store.get_bitget_token()
+        result = telegram_store.get_bitget_token()
     elif exchange_name == 'okx_spot':
-        return telegram_store.get_okx_token()
+        result = telegram_store.get_okx_token()
     else:
         raise Exception('Unknown exchange')
+    return result

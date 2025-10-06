@@ -28,7 +28,7 @@ router = APIRouter()
 
 
 @router.get("/", summary="Overall system health check")
-async def health_check() -> dict[str, Any]:
+async def health_check() -> JSONResponse:
     """
     Comprehensive system health check.
 
@@ -109,7 +109,7 @@ async def health_check() -> dict[str, Any]:
 
 
 @router.get("/db", summary="Database pool health check")
-def database_health() -> dict[str, Any]:
+def database_health() -> JSONResponse:
     """
     Database connection pool health check.
 
@@ -165,7 +165,7 @@ def database_health() -> dict[str, Any]:
 
 
 @router.get("/redis", summary="Redis pool health check")
-async def redis_health() -> dict[str, Any]:
+async def redis_health() -> JSONResponse:
     """
     Redis connection pool health check.
 
@@ -222,7 +222,7 @@ async def redis_health() -> dict[str, Any]:
 
 
 @router.get("/ready", summary="Readiness probe")
-async def readiness_check() -> dict[str, str]:
+async def readiness_check() -> JSONResponse:
     """
     Kubernetes-style readiness probe.
 
@@ -263,7 +263,7 @@ async def readiness_check() -> dict[str, str]:
 
 
 @router.get("/live", summary="Liveness probe")
-def liveness_check() -> dict[str, str]:
+def liveness_check() -> JSONResponse:
     """
     Kubernetes-style liveness probe.
 
@@ -271,6 +271,9 @@ def liveness_check() -> dict[str, str]:
     Always returns 200 if the process is running.
 
     Returns:
-        dict: Simple alive status
+        JSONResponse: Simple alive status
     """
-    return {"status": "alive"}
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"status": "alive"}
+    )

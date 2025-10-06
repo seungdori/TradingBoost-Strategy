@@ -3,7 +3,7 @@ import redis.asyncio as aioredis
 import json
 import time
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Mapping, cast
 from redis.exceptions import RedisError, TimeoutError
 import redis
 from functools import lru_cache
@@ -35,23 +35,23 @@ _redis_manager = RedisConnectionManager(
 )
 
 class UserKeyCache:
-    def __init__(self):
-        self.cache = {}
-        self.last_updated = {}
+    def __init__(self) -> None:
+        self.cache: dict[str, Any] = {}
+        self.last_updated: dict[str, float] = {}
 
-    def get(self, exchange_name, user_id):
+    def get(self, exchange_name: str, user_id: str | int) -> Any | None:
         key = f"{exchange_name}:{user_id}"
         cached_data = self.cache.get(key)
         if cached_data and time.time() - self.last_updated.get(key, 0) < CACHE_EXPIRY:
             return cached_data
         return None
 
-    def set(self, exchange_name, user_id, data):
+    def set(self, exchange_name: str, user_id: str | int, data: Any) -> None:
         key = f"{exchange_name}:{user_id}"
         self.cache[key] = data
         self.last_updated[key] = time.time()
 
-    def delete(self, exchange_name, user_id):
+    def delete(self, exchange_name: str, user_id: str | int) -> None:
         key = f"{exchange_name}:{user_id}"
         self.cache.pop(key, None)
         self.last_updated.pop(key, None)
@@ -60,7 +60,7 @@ class UserKeyCache:
 user_key_cache = UserKeyCache()
 
 
-async def get_redis_connection():
+async def get_redis_connection() -> Redis:
     """shared Redis 매니저를 사용하는 래퍼 함수 (하위 호환성)"""
     return await _redis_manager.get_connection_async(decode_responses=True)
 
@@ -70,7 +70,7 @@ async def get_redis_connection():
 #================================================================================================
 
 
-async def init_job_table(exchange_name: str):
+async def init_job_table(exchange_name: str) -> None:
     redis = await get_redis_connection()
     try:
         # Redis doesn't need table initialization, but we can set up some default values if needed
@@ -82,7 +82,7 @@ async def init_job_table(exchange_name: str):
     finally:
         await redis.close()
 
-async def initialize_database(exchange_name):
+async def initialize_database(exchange_name: str) -> None:
     redis = await get_redis_connection()
     try:
         # Create a hash for default user settings
@@ -98,7 +98,7 @@ async def initialize_database(exchange_name):
             'grid_num': '20',
             'stop_task_only': '0',
         }
-        await redis.hset(f'{exchange_name}:default_settings', mapping=default_settings)
+        await redis.hset(f'{exchange_name}:default_settings', mapping=cast(Mapping[str | bytes, bytes | float | int | str], default_settings))
 
         # Create an index to keep track of user IDs
         await redis.sadd(f'{exchange_name}:user_ids', '0')  # Start with 0 as we'll increment for new users
@@ -115,27 +115,27 @@ async def initialize_database(exchange_name):
     finally:
         await redis.close()
 
-async def add_user(exchange_name: str, user_data: dict):
+async def add_user(exchange_name: str, user_data: dict[str, Any]) -> int:
     redis = await get_redis_connection()
-    
+
     try:
         # Get a new user ID
         user_id = await redis.incr(f'{exchange_name}:next_user_id')
-        
+
         # Add the new user ID to the set of user IDs
         await redis.sadd(f'{exchange_name}:user_ids', str(user_id))
-        
+
         # Create a hash for the user with default settings and provided data
         user_key = f'{exchange_name}:user:{user_id}'
         default_settings = await redis.hgetall(f'{exchange_name}:default_settings')
-        user_data = {**default_settings, **user_data}  # Merge default settings with provided data
-        await redis.hset(user_key, mapping=user_data)
+        merged_data = {**default_settings, **user_data}  # Merge default settings with provided data
+        await redis.hset(user_key, mapping=cast(Mapping[str | bytes, bytes | float | int | str], merged_data))
         # Initialize empty blacklist and whitelist for the user
         await redis.sadd(f'{exchange_name}:blacklist:{user_id}', 'PLACEHOLDER')
         await redis.sadd(f'{exchange_name}:whitelist:{user_id}', 'PLACEHOLDER')
         await redis.srem(f'{exchange_name}:blacklist:{user_id}', 'PLACEHOLDER')
         await redis.srem(f'{exchange_name}:whitelist:{user_id}', 'PLACEHOLDER')
-        
+
         return user_id
     finally:
         await redis.close()
@@ -161,17 +161,17 @@ async def initialize_active_grid(
     }
     
     # Convert grid_data to a flat dictionary
-    flat_data = {}
+    flat_data: dict[str, str] = {}
     for level, data in active_grid.items():
         for field, value in data.items():
             flat_data[f"{level}:{field}"] = json.dumps(value)
-    
-    # Use hmset to set all fields at once
-    await redis.hmset(key, flat_data)
-    
+
+    # Use hset with mapping instead of deprecated hmset
+    await redis.hset(key, mapping=cast(Mapping[str | bytes, bytes | float | int | str], flat_data))
+
     return active_grid
 
-async def get_active_grid(redis: Redis, exchange_name: str, user_id: int, symbol_name: str):
+async def get_active_grid(redis: Redis, exchange_name: str, user_id: int, symbol_name: str) -> dict[int, dict[str, Any]]:
     base_key = f"{exchange_name}:user:{user_id}:symbol:{symbol_name}"
     active_grid = {}
 
@@ -232,12 +232,12 @@ async def get_active_grid(redis: Redis, exchange_name: str, user_id: int, symbol
 
 async def get_order_placed(redis: Redis, exchange_name: str, user_id: int, symbol_name: str, level: int) -> bool:
     key = f"{exchange_name}:user:{user_id}:symbol:{symbol_name}:order_placed"
-    value = await redis.hget(key, level)
-    return value == b"1"  # Redis returns bytes, so we compare with b"1"
+    value = await redis.hget(key, str(level))
+    return value == "1"  # Redis returns str when decode_responses=True
 
-async def set_order_placed(redis: Redis, exchange_name: str, user_id: int, symbol_name: str, level: int, status: bool):
+async def set_order_placed(redis: Redis, exchange_name: str, user_id: int, symbol_name: str, level: int, status: bool) -> None:
     key = f"{exchange_name}:user:{user_id}:symbol:{symbol_name}:order_placed"
-    await redis.hset(key, level, 1 if status else 0)
+    await redis.hset(key, str(level), 1 if status else 0)
 
 # 특정 그리드 레벨의 정보를 업데이트하는 함수
 async def update_grid_level(
@@ -247,7 +247,7 @@ async def update_grid_level(
     symbol_name: str,
     grid_level: int,
     updated_info: Dict[str, Any]
-):
+) -> None:
     base_key = f"{exchange_name}:user:{user_id}:symbol:{symbol_name}"
     grid_key = f"{base_key}:active_grid:{grid_level}"
     
@@ -270,16 +270,16 @@ async def update_active_grid(
     execution_time: Optional[datetime] = None,
     grid_count: Optional[int] = None,
     pnl: Optional[float] = None
-):
+) -> dict[str, Any]:
     base_key = f"{exchange_name}:user:{user_id}:symbol:{symbol_name}"
     grid_key = f"{base_key}:active_grid:{grid_level}"
 
     # 현재 그리드 정보 가져오기
     current_grid_info = await redis.hgetall(grid_key)
-    
+
     # 기존 데이터를 파싱하거나 새로운 데이터 초기화
     if current_grid_info:
-        grid_data = {}
+        grid_data: dict[str, Any] = {}
         for field, value in current_grid_info.items():
             try:
                 # value가 문자열이든 바이트든 처리할 수 있도록 함
@@ -305,14 +305,16 @@ async def update_active_grid(
     if position_size is not None:
         grid_data['position_size'] = position_size
     if pnl is not None:
-        grid_data['pnl'] = grid_data.get('pnl', 0) + pnl
+        current_pnl = grid_data.get('pnl', 0.0)
+        grid_data['pnl'] = (current_pnl or 0.0) + pnl
     if grid_count is not None:
-        grid_data['grid_count'] = grid_data.get('grid_count', 0) + grid_count
+        current_count = grid_data.get('grid_count', 0)
+        grid_data['grid_count'] = (current_count or 0) + grid_count
     if execution_time:
         grid_data['execution_time'] = execution_time.isoformat()
 
     # 업데이트된 데이터 저장
-    update_dict = {}
+    update_dict: dict[str, str] = {}
     for field, value in grid_data.items():
         if value is not None:
             try:
@@ -320,11 +322,10 @@ async def update_active_grid(
             except (TypeError, ValueError) as e:
                 print(f"Error encoding {field}: {e}")
                 update_dict[field] = str(value)  # 인코딩 실패 시 문자열로 저장
-        else:
-            update_dict[field] = None  # None을 사용하여 필드 삭제
 
+    # Use hset with mapping instead of deprecated hmset
     async with redis.pipeline(transaction=True) as pipe:
-        await pipe.hmset(grid_key, update_dict)
+        await pipe.hset(grid_key, mapping=cast(Mapping[str | bytes, bytes | float | int | str], update_dict))
         await pipe.execute()
 
     return grid_data
@@ -334,9 +335,9 @@ async def get_full_active_grid(
     exchange_name: str,
     user_id: int,
     symbol_name: str
-):
+) -> dict[int, dict[str, Any]]:
     base_key = f"{exchange_name}:user:{user_id}:symbol:{symbol_name}"
-    active_grid = {}
+    active_grid: dict[int, dict[str, Any]] = {}
 
     for grid_level in range(21):  # 0부터 20까지
         grid_key = f"{base_key}:active_grid:{grid_level}"
@@ -349,26 +350,44 @@ async def get_full_active_grid(
 
     return active_grid
 
-async def upload_order_placed(redis, exchange_name, user_id, symbol, order_placed):
+async def upload_order_placed(
+    redis: Redis,
+    exchange_name: str,
+    user_id: int,
+    symbol: str,
+    order_placed: dict[str, bool]
+) -> None:
     order_placed_key = f'{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed'
-    
+
     # order_placed의 불리언 값을 정수로 변환
     redis_order_placed = {k: int(v) for k, v in order_placed.items()}
-    
-    await redis.hmset(order_placed_key, redis_order_placed)
 
-async def update_take_profit_orders_info(redis ,exchange_name: str, user_id: int, symbol_name: str, level: int, order_id: str = None, new_price: float = None, quantity: float = 0.0, active: bool = False, side : str= None):
+    # Use hset with mapping instead of deprecated hmset
+    await redis.hset(order_placed_key, mapping=cast(Mapping[str | bytes, bytes | float | int | str], redis_order_placed))
+
+async def update_take_profit_orders_info(
+    redis: Redis,
+    exchange_name: str,
+    user_id: int,
+    symbol_name: str,
+    level: int,
+    order_id: str | None = None,
+    new_price: float | None = None,
+    quantity: float = 0.0,
+    active: bool = False,
+    side: str | None = None
+) -> dict[str, Any]:
     # Redis에서 현재 take_profit_orders_info 가져오기
     symbol_key = f"{exchange_name}:user:{user_id}:symbol:{symbol_name}"
-    level = str(level)
+    level_str = str(level)
     if active:
-        print(f"{symbol_key} : {level}, {order_id}, {new_price}, {quantity}, {active}, {side}")
+        print(f"{symbol_key} : {level_str}, {order_id}, {new_price}, {quantity}, {active}, {side}")
     take_profit_orders_info_json = await redis.hget(symbol_key, 'take_profit_orders_info')
-    take_profit_orders_info = json.loads(take_profit_orders_info_json) if take_profit_orders_info_json else {}
+    take_profit_orders_info: dict[str, Any] = json.loads(take_profit_orders_info_json) if take_profit_orders_info_json else {}
 
     # 해당 레벨의 정보 업데이트
-    if str(level) in take_profit_orders_info:
-        take_profit_orders_info[str(level)].update({
+    if level_str in take_profit_orders_info:
+        take_profit_orders_info[level_str].update({
             'order_id': order_id,
             'target_price': new_price,
             'quantity': quantity,
@@ -376,7 +395,7 @@ async def update_take_profit_orders_info(redis ,exchange_name: str, user_id: int
             'side': side
         })
     else:
-        take_profit_orders_info[str(level)] = {
+        take_profit_orders_info[level_str] = {
             'order_id': order_id,
             'target_price': new_price,
             'quantity': quantity,
@@ -384,7 +403,7 @@ async def update_take_profit_orders_info(redis ,exchange_name: str, user_id: int
             'side': None  # 또는 'sell', 상황에 따라 적절히 설정
         }
     if active:
-        print(f"{symbol_name}에 대해 {level} 레벨의 take_profit_orders_info 업데이트됨: active : {active}")
+        print(f"{symbol_name}에 대해 {level_str} 레벨의 take_profit_orders_info 업데이트됨: active : {active}")
 
     # 업데이트된 정보를 Redis에 저장
     await redis.hset(symbol_key, 'take_profit_orders_info', json.dumps(take_profit_orders_info))
@@ -433,25 +452,27 @@ async def update_take_profit_orders_info(redis ,exchange_name: str, user_id: int
 # SAVE
 #================================================================================================
 
-async def save_user_key(exchange_name, user_id, field, value):
+async def save_user_key(exchange_name: str, user_id: int | str, field: str, value: Any) -> None:
     key = f"{exchange_name}:user:{user_id}"
     redis = await get_redis_connection()
-    
+
     try:
         if isinstance(value, (dict, list, set)):
-            value = json.dumps(value)
+            value_str = json.dumps(value)
         elif isinstance(value, bool):
-            value = int(value)
-        
-        await redis.hset(key, field, value)
+            value_str = str(int(value))
+        else:
+            value_str = str(value)
+
+        await redis.hset(key, field, value_str)
         print(f"Saved {field} for user {user_id} in {exchange_name}")
-        
+
         # 캐시 무효화
         user_key_cache.cache.pop(f"{exchange_name}:{user_id}", None)
     except RedisError as e:
         print(f"Error saving to Redis: {e}")
 
-async def save_job_id(exchange_name, user_id: int, job_id: str):
+async def save_job_id(exchange_name: str, user_id: int, job_id: str) -> None:
     redis = await get_redis_connection()
     try:
         start_time = datetime.now().isoformat()
@@ -468,26 +489,24 @@ async def save_job_id(exchange_name, user_id: int, job_id: str):
     finally:
         await redis.close()
 
-async def get_job_id(exchange_name, user_id: int) -> str:
+async def get_job_id(exchange_name: str, user_id: int) -> str | None:
     redis = await get_redis_connection()
     try:
         job_key = f'{exchange_name}:job:{user_id}'
         job_id = await redis.hget(job_key, 'job_id')
-        return job_id.decode() if job_id else None
+        return job_id if job_id else None
     finally:
-
         await redis.close()
 
-async def update_job_status(exchange_name: str, user_id: int, status: str, job_id: str = None):
+async def update_job_status(exchange_name: str, user_id: int, status: str, job_id: str | None = None) -> None:
     redis = None
     try:
         redis = await get_redis_connection()
         job_key = f'{exchange_name}:job:{user_id}'
         user_key = f'{exchange_name}:user:{user_id}'
 
-        # Get existing job data
+        # Get existing job data (decode_responses=True returns str, not bytes)
         existing_job = await redis.hgetall(job_key)
-        existing_job = {k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v for k, v in existing_job.items()}
         
         current_time = datetime.now().isoformat()
 
@@ -520,7 +539,8 @@ async def update_job_status(exchange_name: str, user_id: int, status: str, job_i
         print(f"Error updating job status: {e}")
         raise
     finally:
-        await redis.aclose()
+        if redis:
+            await redis.close()
         
         
         
@@ -572,7 +592,7 @@ async def update_job_status(exchange_name: str, user_id: int, status: str, job_i
 
 
 
-async def update_telegram_id(exchange_name, user_id, telegram_id):
+async def update_telegram_id(exchange_name: str, user_id: int, telegram_id: str) -> None:
     redis = await get_redis_connection()
     try:
         user_key = f'{exchange_name}:user:{user_id}'
@@ -598,56 +618,58 @@ async def get_exchange_prefix(exchange_name: str) -> str:
     }
     return exchange_prefixes.get(exchange_name, exchange_name)
 
-async def get_user(exchange_name: str, user_id: int):
+async def get_user(exchange_name: str, user_id: int) -> dict[str, str]:
     redis = await get_redis_connection()
-    
+
     try:
         user_key = f'{exchange_name}:user:{user_id}'
         user_data = await redis.hgetall(user_key)
-        return {k.decode(): v.decode() for k, v in user_data.items()}
+        # Redis with decode_responses=True returns str, not bytes
+        return user_data
     finally:
         await redis.close()
 
-async def add_to_blacklist(exchange_name: str, user_id: int, symbol: str):
+async def add_to_blacklist(exchange_name: str, user_id: int, symbol: str) -> None:
     redis = await get_redis_connection()
-    
+
     try:
         blacklist_key = f'{exchange_name}:blacklist:{user_id}'
         await redis.sadd(blacklist_key, symbol)
     finally:
         await redis.close()
 
-async def add_to_whitelist(exchange_name: str, user_id: int, symbol: str):
+async def add_to_whitelist(exchange_name: str, user_id: int, symbol: str) -> None:
     redis = await get_redis_connection()
-    
+
     try:
         whitelist_key = f'{exchange_name}:whitelist:{user_id}'
         await redis.sadd(whitelist_key, symbol)
     finally:
         await redis.close()
 
-async def set_telegram_id(exchange_name: str, user_id: int, telegram_id: str):
+async def set_telegram_id(exchange_name: str, user_id: int, telegram_id: str) -> None:
     redis = await get_redis_connection()
-    
+
     try:
         telegram_key = f'{exchange_name}:telegram_ids'
-        await redis.hset(telegram_key, user_id, telegram_id)
+        await redis.hset(telegram_key, str(user_id), telegram_id)
     finally:
         await redis.close()
 
-async def get_running_user_ids(exchange_name: str):
+async def get_running_user_ids(exchange_name: str) -> list[str]:
     redis = await get_redis_connection()
-    
+
     try:
-        running_user_ids = []
+        running_user_ids: list[str] = []
         user_ids = await redis.smembers(f'{exchange_name}:user_ids')
-        
+
+        # Redis with decode_responses=True returns str, not bytes
         for user_id in user_ids:
-            user_key = f'{exchange_name}:user:{user_id.decode()}'
+            user_key = f'{exchange_name}:user:{user_id}'
             is_running = await redis.hget(user_key, 'is_running')
-            if is_running == b'1':
-                running_user_ids.append(user_id.decode())
-        
+            if is_running == '1':
+                running_user_ids.append(user_id)
+
         return running_user_ids
     finally:
         await redis.close()
@@ -657,7 +679,7 @@ async def get_running_user_ids(exchange_name: str):
 
 
 
-async def update_user_info(user_id, exchange_name, running_status, **user_data):
+async def update_user_info(user_id: int, exchange_name: str, running_status: bool, **user_data: Any) -> dict[str, str]:
     redis = None
     try:
         redis = await _redis_manager.get_connection_async(decode_responses=True)
@@ -670,7 +692,7 @@ async def update_user_info(user_id, exchange_name, running_status, **user_data):
         }
 
         # Update user info in Redis
-        await redis.hset(user_key, mapping=update_data)
+        await redis.hset(user_key, mapping=cast(Mapping[str | bytes, bytes | float | int | str], update_data))
         #print(f"User info updated for user {user_id} in {exchange_name}")
 
         # Retrieve and print saved info
@@ -681,8 +703,8 @@ async def update_user_info(user_id, exchange_name, running_status, **user_data):
     except Exception as e:
         print(f"Error updating user info: {e}")
         raise
-        
-async def update_user_running_status(exchange_name, user_id, is_running, redis=None):
+
+async def update_user_running_status(exchange_name: str, user_id: int, is_running: bool, redis: Redis | None = None) -> None:
     redis_close_flag = False
     try:
         if redis is None:
@@ -724,7 +746,7 @@ async def update_user_running_status(exchange_name, user_id, is_running, redis=N
             pass
 
 
-async def reset_user_data(user_id: int, exchange_name: str):
+async def reset_user_data(user_id: int, exchange_name: str) -> None:
     redis = await get_redis_connection()
     try:
         user_key = f'{exchange_name}:user:{user_id}'
@@ -733,7 +755,7 @@ async def reset_user_data(user_id: int, exchange_name: str):
 
         # Fetch current user data
         current_data = await redis.hgetall(user_key)
-        
+
         # Update specific fields
         current_data['is_running'] = '0'  # False
         current_data['tasks'] = '[]'  # Empty list
@@ -741,10 +763,10 @@ async def reset_user_data(user_id: int, exchange_name: str):
         current_data['running_symbols'] = '[]'  # Empty list
         current_data['completed_symbols'] = '[]'  # Empty list
         current_data['last_updated_time'] = current_time  # 마지막 리셋 시간 추가
-        
+
         # Save updated data back to Redis
-        await redis.hset(user_key, mapping=current_data)
-        
+        await redis.hset(user_key, mapping=cast(Mapping[str | bytes, bytes | float | int | str], current_data))
+
         ## Update local cache
         #cached_data = user_key_cache.get(exchange_name, user_id) or {}
         #cached_data.update({
@@ -754,7 +776,7 @@ async def reset_user_data(user_id: int, exchange_name: str):
         #    'completed_symbols': set()
         #})
         #user_key_cache.set(exchange_name, user_id, cached_data)
-        
+
         print(f"User data reset for user {user_id} in {exchange_name}")
     except RedisError as e:
         print(f"Error resetting user data: {e}")
@@ -762,9 +784,23 @@ async def reset_user_data(user_id: int, exchange_name: str):
 
 
             
-async def save_user(user_id, api_key=None, api_secret=None, password=None, initial_capital=None, direction=None,
-                    numbers_to_entry=None, leverage=None, is_running=None, stop_loss=None, tasks=None,
-                    running_symbols=None, grid_num=None, stop_task_only=None, exchange_name='okx'):
+async def save_user(
+    user_id: int,
+    api_key: str | None = None,
+    api_secret: str | None = None,
+    password: str | None = None,
+    initial_capital: dict[str, float] | None = None,
+    direction: str | None = None,
+    numbers_to_entry: int | None = None,
+    leverage: int | None = None,
+    is_running: bool | None = None,
+    stop_loss: float | None = None,
+    tasks: list[str] | None = None,
+    running_symbols: set[str] | None = None,
+    grid_num: int | None = None,
+    stop_task_only: bool | None = None,
+    exchange_name: str = 'okx'
+) -> None:
     redis = await get_redis_connection()
     korea_tz = ZoneInfo("Asia/Seoul")
     current_time = datetime.now(korea_tz).isoformat()
@@ -791,8 +827,8 @@ async def save_user(user_id, api_key=None, api_secret=None, password=None, initi
         user_data = {k: v for k, v in user_data.items() if v is not None}
         
         # Save to Redis
-        await redis.hset(user_key, mapping=user_data)
-        await redis.hset(user_key_key, mapping=user_data)
+        await redis.hset(user_key, mapping=cast(Mapping[str | bytes, bytes | float | int | str], user_data))
+        await redis.hset(user_key_key, mapping=cast(Mapping[str | bytes, bytes | float | int | str], user_data))
         
         # Update local cache
         cached_data = user_key_cache.get(exchange_name, user_id) or {}
@@ -812,17 +848,17 @@ async def save_user(user_id, api_key=None, api_secret=None, password=None, initi
     finally:
         await redis.close()      
         
-async def remove_tasks(user_id, task, exchange_name) :
+async def remove_tasks(user_id: int, task: str, exchange_name: str) -> None:
     redis = await get_redis_connection()
     try:
         user_key = f'{exchange_name}:user:{user_id}'
-        tasks = await redis.hget(user_key, 'tasks')
-        
-        if tasks is None:
-            tasks = []
+        tasks_json = await redis.hget(user_key, 'tasks')
+
+        if tasks_json is None:
+            tasks: list[str] = []
         else:
-            tasks = json.loads(tasks)
-        
+            tasks = json.loads(tasks_json)
+
         if task in tasks:
             tasks.remove(task)
             await redis.hset(user_key, 'tasks', json.dumps(tasks))
@@ -833,18 +869,18 @@ async def remove_tasks(user_id, task, exchange_name) :
         print(f"Error removing task for user {user_id} in Redis for {exchange_name}: {e}")
     finally:
         await redis.close()
-    
-async def add_tasks(user_id, task, exchange_name):
+
+async def add_tasks(user_id: int, task: str, exchange_name: str) -> None:
     redis = await get_redis_connection()
     try:
         user_key = f'{exchange_name}:user:{user_id}'
-        tasks = await redis.hget(user_key, 'tasks')
-        
-        if tasks is None:
-            tasks = []
+        tasks_json = await redis.hget(user_key, 'tasks')
+
+        if tasks_json is None:
+            tasks: list[str] = []
         else:
-            tasks = json.loads(tasks)
-        
+            tasks = json.loads(tasks_json)
+
         tasks.append(task)
         await redis.hset(user_key, 'tasks', json.dumps(tasks))
         print(f"Task added for user {user_id} in Redis for {exchange_name}.")
@@ -852,17 +888,17 @@ async def add_tasks(user_id, task, exchange_name):
         print(f"Error adding task for user {user_id} in Redis for {exchange_name}: {e}")
     finally:
         await redis.close()
-        
-async def add_running_symbol(user_id, new_symbols, exchange_name):
+
+async def add_running_symbol(user_id: int, new_symbols: str | list[str] | set[str], exchange_name: str) -> None:
     redis = await get_redis_connection()
     try:
         user_key = f'{exchange_name}:user:{user_id}'
-        running_symbols = await redis.hget(user_key, 'running_symbols')
+        running_symbols_json = await redis.hget(user_key, 'running_symbols')
 
-        if running_symbols is None:
-            running_symbols = set()
+        if running_symbols_json is None:
+            running_symbols: set[str] = set()
         else:
-            running_symbols = set(json.loads(running_symbols))
+            running_symbols = set(json.loads(running_symbols_json))
 
         if isinstance(new_symbols, (list, set)):
             running_symbols.update(new_symbols)
@@ -875,25 +911,25 @@ async def add_running_symbol(user_id, new_symbols, exchange_name):
         print(f"Error updating running symbols for user {user_id} in Redis for {exchange_name}: {e}")
     finally:
         await redis.close()
-        
-async def remove_running_symbol(user_id, symbol_to_remove, exchange_name, redis = None):
+
+async def remove_running_symbol(user_id: int, symbol_to_remove: str, exchange_name: str, redis: Redis | None = None) -> None:
     redis_flag = False
     if redis is None:
         redis = await get_redis_connection()
         redis_flag = True
     try:
         user_key = f'{exchange_name}:user:{user_id}'
-        running_symbols = await redis.hget(user_key, 'running_symbols')
+        running_symbols_json = await redis.hget(user_key, 'running_symbols')
 
-        if running_symbols is None:
-            running_symbols = set()
+        if running_symbols_json is None:
+            running_symbols_set: set[str] = set()
         else:
-            running_symbols = set(json.loads(running_symbols))
+            running_symbols_set = set(json.loads(running_symbols_json))
 
-        if symbol_to_remove in running_symbols:
-            running_symbols.remove(symbol_to_remove)
+        if symbol_to_remove in running_symbols_set:
+            running_symbols_set.remove(symbol_to_remove)
 
-        await redis.hset(user_key, 'running_symbols', json.dumps(list(running_symbols)))
+        await redis.hset(user_key, 'running_symbols', json.dumps(list(running_symbols_set)))
         print(f"Symbol {symbol_to_remove} removed for user {user_id} in Redis for {exchange_name}.")
     except Exception as e:
         print(f"Error removing symbol {symbol_to_remove} for user {user_id} in Redis for {exchange_name}: {e}")
@@ -901,47 +937,49 @@ async def remove_running_symbol(user_id, symbol_to_remove, exchange_name, redis 
         if redis_flag:
             await redis.close()
             
-async def save_running_symbols(exchange_name, user_id):
+async def save_running_symbols(exchange_name: str, user_id: int) -> None:
     redis = await get_redis_connection()
     try:
         # 기존 키에서 running_symbols 정보 가져오기
         user_key = f'{exchange_name}:user:{user_id}'
-        running_symbols = await redis.hget(user_key, 'running_symbols')
-        
-        if running_symbols is not None:
-            running_symbols = json.loads(running_symbols)
-            
+        running_symbols_json = await redis.hget(user_key, 'running_symbols')
+
+        if running_symbols_json is not None:
+            running_symbols = json.loads(running_symbols_json)
+
             # 새로운 키 형식으로 저장
             new_key = f'running_symbols:{exchange_name}:{user_id}'
             await redis.set(new_key, json.dumps(running_symbols))
-            
+
             print(f"Running symbols saved for user {user_id} in Redis under key {new_key}")
         else:
             print(f"No running symbols found for user {user_id} in Redis for {exchange_name}")
-    
+
     except Exception as e:
         print(f"Error saving running symbols for user {user_id} in Redis for {exchange_name}: {e}")
-    
+
     finally:
         await redis.close()
         #================================================================================================
 # GET
 #================================================================================================
 @lru_cache(maxsize=100)
-async def get_user_key(exchange_name, user_id):
+async def get_user_key(exchange_name: str, user_id: str | int) -> dict[str, Any] | None:
     cached_data = user_key_cache.get(exchange_name, user_id)
     if cached_data:
-        return cached_data
+        # Cast to proper type since cache can contain Any
+        return cast(dict[str, Any], cached_data)
 
     key = f"{exchange_name}:user:{user_id}"
     redis = await get_redis_connection()
-    
+
     try:
-        user_data = await redis.hgetall(key, encoding='utf-8')
+        # Redis with decode_responses=True returns dict[str, str], no encoding param needed
+        user_data = await redis.hgetall(key)
         if not user_data:
             return None
 
-        processed_user_data = {
+        processed_user_data: dict[str, Any] = {
             "user_id": user_id,
             "api_key": user_data.get('api_key'),
             "api_secret": user_data.get('api_secret'),
@@ -956,7 +994,7 @@ async def get_user_key(exchange_name, user_id):
             "running_symbols": set(json.loads(user_data.get('running_symbols', '[]'))),
             "grid_num": int(user_data.get('grid_num', 0))
         }
-        
+
         user_key_cache.set(exchange_name, user_id, processed_user_data)
         return processed_user_data
     except RedisError as e:
@@ -995,16 +1033,16 @@ async def get_all_user_keys(exchange_name: str) -> Dict[str, Any]:
     return user_keys
     
 
-async def get_position_size(exchange_name, user_id, symbol):
+async def get_position_size(exchange_name: str, user_id: int, symbol: str) -> float:
     redis = await get_redis_connection()
-    
+
     # 포지션 정보 확인
     position_key = f'{exchange_name}:positions:{user_id}'
     position_data = await redis.get(position_key)
-    
+
     if position_data is None:
         return 0.0  # 포지션 정보가 없으면 0 반환
-    
+
     try:
         positions = json.loads(position_data)
         if isinstance(positions, list):
@@ -1022,24 +1060,24 @@ async def get_position_size(exchange_name, user_id, symbol):
 
 
 
-async def set_trading_volume(exchange_name: str, user_id: int, symbol: str, volume: float):
+async def set_trading_volume(exchange_name: str, user_id: int, symbol: str, volume: float) -> float:
     try:
         redis = await get_redis_connection()
         korean_time = datetime.now(ZoneInfo("Asia/Seoul"))
         today = korean_time.strftime('%Y-%m-%d')
-        
+
         # 사용자별 심볼 거래량 누적
         user_symbol_key = f'{exchange_name}:user:{user_id}:symbol:{symbol}'
         current_volume = float(await redis.zscore(user_symbol_key, today) or 0)
         new_volume = current_volume + volume
         await redis.zadd(user_symbol_key, {today: new_volume})
-        
+
         # 전체 심볼 거래량 누적
         total_symbol_key = f'{exchange_name}:symbol:{symbol}'
         current_total_volume = float(await redis.zscore(total_symbol_key, today) or 0)
         new_total_volume = current_total_volume + volume
         await redis.zadd(total_symbol_key, {today: new_total_volume})
-        
+
         return new_volume
     except RedisError as e:
         raise HTTPException(status_code=500, detail=f"Redis 오류: {str(e)}")
@@ -1047,24 +1085,24 @@ async def set_trading_volume(exchange_name: str, user_id: int, symbol: str, volu
         raise HTTPException(status_code=500, detail=f"알 수 없는 오류: {str(e)}")
 
 
-async def set_trading_pnl(exchange_name: str, user_id: int, symbol: str, pnl: float):
+async def set_trading_pnl(exchange_name: str, user_id: int, symbol: str, pnl: float) -> float:
     try:
         redis = await get_redis_connection()
         korean_time = datetime.now(ZoneInfo("Asia/Seoul"))
         today = korean_time.strftime('%Y-%m-%d')
-        
+
         # 사용자별 심볼 PnL 누적
         user_symbol_key = f'{exchange_name}:user:{user_id}:pnl:{symbol}'
         current_pnl = float(await redis.zscore(user_symbol_key, today) or 0)
         new_pnl = current_pnl + pnl
         await redis.zadd(user_symbol_key, {today: new_pnl})
-        
+
         # 전체 심볼 PnL 누적
         total_symbol_key = f'{exchange_name}:pnl:{symbol}'
         current_total_pnl = float(await redis.zscore(total_symbol_key, today) or 0)
         new_total_pnl = current_total_pnl + pnl
         await redis.zadd(total_symbol_key, {today: new_total_pnl})
-        
+
         return new_pnl
     except RedisError as e:
         raise HTTPException(status_code=500, detail=f"Redis 오류: {str(e)}")
@@ -1072,7 +1110,7 @@ async def set_trading_pnl(exchange_name: str, user_id: int, symbol: str, pnl: fl
         raise HTTPException(status_code=500, detail=f"알 수 없는 오류: {str(e)}")
 
 
-async def get_total_grid_count(redis: Redis, exchange_name: str, user_id: int, symbol_name: str):
+async def get_total_grid_count(redis: Redis, exchange_name: str, user_id: int, symbol_name: str) -> int:
     base_key = f"{exchange_name}:user:{user_id}:symbol:{symbol_name}"
     total_grid_count = 0
     position_size = await get_position_size(exchange_name, user_id, symbol_name)
@@ -1096,27 +1134,28 @@ async def get_total_grid_count(redis: Redis, exchange_name: str, user_id: int, s
     return total_grid_count
         
 
-async def get_telegram_id(exchange_name, user_id):
+async def get_telegram_id(exchange_name: str, user_id: int) -> str | None:
     redis = await get_redis_connection()
     try:
         user_key = f'{exchange_name}:user:{user_id}'
         telegram_id = await redis.hget(user_key, 'telegram_id')
-        return telegram_id.decode() if telegram_id else None
+        return telegram_id if telegram_id else None
     except Exception as e:
         print(f"Error getting Telegram ID: {e}")
         return None
     finally:
         await redis.close()
-        
-async def get_job_status(exchange_name, user_id, redis=None):
+
+async def get_job_status(exchange_name: str, user_id: int, redis: Redis | None = None) -> tuple[str, str] | None:
     redis = await get_redis_connection()
     try:
         job_key = f'{exchange_name}:job:{user_id}'
         job_info = await redis.hmget(job_key, 'status', 'job_id')
-        
+
+        # Redis with decode_responses=True returns str, not bytes
         if job_info[0] and job_info[1]:
-            status = job_info[0].decode() if isinstance(job_info[0], bytes) else job_info[0]
-            job_id = job_info[1].decode() if isinstance(job_info[1], bytes) else job_info[1]
+            status = job_info[0]
+            job_id = job_info[1]
             return status, job_id
         else:
             return None
@@ -1128,14 +1167,13 @@ async def get_job_status(exchange_name, user_id, redis=None):
         await redis.close()
 
 
-async def get_user_info(exchange_name, user_id):
+async def get_user_info(exchange_name: str, user_id: int) -> dict[str, str]:
     redis = await get_redis_connection()
     try:
         user_key = f'{exchange_name}:user:{user_id}'
         user_info = await redis.hgetall(user_key)
-        return {k.decode('utf-8') if isinstance(k, bytes) else k: 
-                v.decode('utf-8') if isinstance(v, bytes) else v 
-                for k, v in user_info.items()}
+        # Redis with decode_responses=True returns dict[str, str] directly
+        return user_info
     except Exception as e:
         print(f"Error in get_user_info for user {user_id} on {exchange_name}: {e}")
         print(traceback.format_exc())
@@ -1148,19 +1186,14 @@ async def get_user_data(exchange_name: str, user_id: str) -> Dict[str, Any]:
     try:
         user_key = f'{exchange_name}:user:{user_id}'
         user_data = await redis.hgetall(user_key)
-        
+
         if not user_data:
             print(f"Warning: No data found for user {user_id} on {exchange_name}")
             return {}
 
-        decoded_data = {}
-        for k, v in user_data.items():
-            key = k.decode('utf-8') if isinstance(k, bytes) else k
-            value = v.decode('utf-8') if isinstance(v, bytes) else v
-            decoded_data[key] = value
-
-        print(f"Debug: Retrieved data for user {user_id} on {exchange_name}: {decoded_data.keys()}")
-        return decoded_data
+        # Redis with decode_responses=True returns dict[str, str] directly
+        print(f"Debug: Retrieved data for user {user_id} on {exchange_name}: {user_data.keys()}")
+        return user_data
 
     except Exception as e:
         print(f"Error in get_user_data for user {user_id} on {exchange_name}: {e}")
@@ -1169,14 +1202,14 @@ async def get_user_data(exchange_name: str, user_id: str) -> Dict[str, Any]:
     finally:
         await redis.close()
         
-async def set_user_data(exchange_name: str, user_id: int, data: Dict[str, Any], field: Optional[str] = None) -> None:
+async def set_user_data(exchange_name: str, user_id: int, data: Dict[str, Any], field: str | None = None) -> None:
     redis = await get_redis_connection()
     user_key = f"{exchange_name}:user:{user_id}"
-    
+
     json_fields = ["tasks", "running_symbols", "completed_trading_symbols", "enter_symbol_amount_list"]
     boolean_fields = ["is_running", "stop_task_only"]
     numeric_fields = ["leverage", "initial_capital"]
-    
+
     def serialize_value(key: str, value: Any) -> str:
         if key in json_fields:
             return json.dumps(value)
@@ -1186,13 +1219,14 @@ async def set_user_data(exchange_name: str, user_id: int, data: Dict[str, Any], 
             return str(float(value))
         else:
             return str(value)
-    
+
     if field:
         value = serialize_value(field, data)
         await redis.hset(user_key, field, value)
     else:
         serialized_data = {key: serialize_value(key, value) for key, value in data.items()}
-        await redis.hmset(user_key, serialized_data)
+        # Use hset with mapping instead of deprecated hmset
+        await redis.hset(user_key, mapping=cast(Mapping[str | bytes, bytes | float | int | str], serialized_data))
         
 async def get_all_running_user_ids() -> List[str]:
     redis = await get_redis_connection()
@@ -1232,10 +1266,10 @@ async def get_all_running_user_ids() -> List[str]:
         
 # safe_float is now imported from shared.utils
 
-async def get_user_keys(exchange_name):
+async def get_user_keys(exchange_name: str) -> dict[str, dict[str, Any]]:
     #print(f"Getting user keys for exchange: {exchange_name}...")
     redis = await get_redis_connection()
-    user_keys = {}
+    user_keys: dict[str, dict[str, Any]] = {}
     try:
         # Redis에서 해당 exchange의 모든 사용자 키 가져오기
         try:
@@ -1247,11 +1281,10 @@ async def get_user_keys(exchange_name):
         
         for user_key in all_user_keys:
             try:
-                # 바이트 문자열을 UTF-8로 디코딩
-                user_key_str = user_key.decode('utf-8') if isinstance(user_key, bytes) else user_key
-                user_id = user_key_str.split(':')[-1]
-                
-                #print(f"Debug: Processing user_key: {user_key_str}, user_id: {user_id}")  # 디버그 출력
+                # Redis with decode_responses=True returns str, not bytes
+                user_id = user_key.split(':')[-1]
+
+                #print(f"Debug: Processing user_key: {user_key}, user_id: {user_id}")  # 디버그 출력
 
                 # 캐시에서 사용자 데이터 확인
                 cached_data = user_key_cache.get(exchange_name, user_id)
@@ -1260,18 +1293,16 @@ async def get_user_keys(exchange_name):
                     continue
                 # 캐시에 없으면 Redis에서 가져오기
                 try:
-                    user_data = await redis.hgetall(user_key_str)
+                    user_data = await redis.hgetall(user_key)
                 except Exception as e:
-                    print(f"Error getting user data for user_key: {user_key_str}: {e}")
+                    print(f"Error getting user data for user_key: {user_key}: {e}")
                     print(traceback.format_exc())
                 if not user_data:
-                    print(f"Debug: No data found for user_key: {user_key_str}")  # 디버그 출력
+                    print(f"Debug: No data found for user_key: {user_key}")  # 디버그 출력
                     continue
-                
-                # 바이트 문자열을 UTF-8로 디코딩
-                decoded_user_data = {k.decode('utf-8') if isinstance(k, bytes) else k: 
-                                     v.decode('utf-8') if isinstance(v, bytes) else v 
-                                     for k, v in user_data.items()}
+
+                # Redis with decode_responses=True returns dict[str, str] directly
+                decoded_user_data = user_data
             
                 processed_data = {
                     "user_id": user_id,
@@ -1303,23 +1334,17 @@ async def get_user_keys(exchange_name):
         return {}
     finally:
         await redis.close()
-        
-        
-#================================================================================================
-# SAFER SAVING
-#================================================================================================
 
-        
 #================================================================================================
 # CLOSE
 #================================================================================================
 # 캐시 무효화 함수
-def invalidate_cache(exchange_name, user_id):
+def invalidate_cache(exchange_name: str, user_id: int | str) -> None:
     key = f"{exchange_name}:{user_id}"
     user_key_cache.cache.pop(key, None)
     get_user_key.cache_clear()  # lru_cache 클리어
-    
+
 # Redis 연결 종료
-async def close_redis():
+async def close_redis() -> None:
     redis = await get_redis_connection()
     await redis.close()

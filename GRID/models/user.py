@@ -83,7 +83,7 @@ class TelegramID(Base):
         Integer, ForeignKey("grid_users.user_id", ondelete="CASCADE"), primary_key=True
     )
     exchange_name: Mapped[str] = mapped_column(
-        String(50), ForeignKey("grid_users.exchange_name"), primary_key=True
+        String(50), primary_key=True
     )
     telegram_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
 
@@ -111,7 +111,7 @@ class Job(Base):
         Integer, ForeignKey("grid_users.user_id", ondelete="CASCADE"), primary_key=True
     )
     exchange_name: Mapped[str] = mapped_column(
-        String(50), ForeignKey("grid_users.exchange_name"), primary_key=True
+        String(50), primary_key=True
     )
 
     job_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)

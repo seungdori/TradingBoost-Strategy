@@ -1,6 +1,7 @@
 import os
+from typing import Any
 
-user_keys = {}
+user_keys: dict[str, Any] = {}
 
 from shared.config import settings
 

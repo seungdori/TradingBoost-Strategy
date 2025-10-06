@@ -1,6 +1,6 @@
 import asyncio
 import time
-from typing import Dict, Any
+from typing import Any
 import logging
 from threading import Lock
 from concurrent.futures import ThreadPoolExecutor
@@ -40,20 +40,20 @@ class ReadOnlyKeys:
 
 
 class ThreadSafeAsyncExchangeManager:
-    def __init__(self):
-        self.instances: Dict[str, Dict[str, Any]] = {}
-        self.locks: Dict[str, asyncio.Lock] = {}
+    def __init__(self) -> None:
+        self.instances: dict[str, dict[str, Any]] = {}
+        self.locks: dict[str, asyncio.Lock] = {}
         self.global_lock = Lock()
         self.INSTANCE_TIMEOUT = 3600  # 1 hour
-        self.redis = None
+        self.redis: aioredis.Redis | None = None
 
-    async def init_redis(self):
+    async def init_redis(self) -> None:
         if REDIS_PASSWORD:
             self.redis = await aioredis.from_url('redis://localhost', encoding='utf-8', decode_responses=True,password=REDIS_PASSWORD)
         else:
             self.redis = await aioredis.from_url('redis://localhost', encoding='utf-8', decode_responses=True)
 
-    async def get_instance(self, exchange_name: str, user_id: str):
+    async def get_instance(self, exchange_name: str, user_id: str) -> Any | None:
         if exchange_name.lower() != 'okx':
             print(f"Exchange {exchange_name} is not supported by this manager")
             raise ValueError("This manager is configured only for OKX")
@@ -85,12 +85,12 @@ class ThreadSafeAsyncExchangeManager:
                 self.locks[key] = asyncio.Lock()
             return self.locks[key]
 
-    async def _create_okx_instance(self, user_id: str):
+    async def _create_okx_instance(self, user_id: str) -> Any | None:
         if self.redis is None:
             await self.init_redis()
 
         try:
-            if user_id == 999999999 or user_id == 'admin':
+            if user_id == '999999999' or user_id == 'admin':
                 return ccxtpro.okx({
                     'apiKey': ReadOnlyKeys.okx_keys,
                     'secret': ReadOnlyKeys.okx_secret,
@@ -102,7 +102,10 @@ class ThreadSafeAsyncExchangeManager:
                 })
             else:
                 user_key = f'okx:user:{user_id}'
-                user_data = await self.redis.hgetall(user_key)
+                if self.redis is not None:
+                    user_data = await self.redis.hgetall(user_key)
+                else:
+                    user_data = {}
                 if user_data and 'api_key' in user_data:
                     return ccxtpro.okx({
                         'apiKey': user_data['api_key'],
@@ -120,13 +123,13 @@ class ThreadSafeAsyncExchangeManager:
             print(f"Error creating okx instance for {user_id}: {e}")
             return None
 
-    async def close_instance(self, key: str):
+    async def close_instance(self, key: str) -> None:
         if key in self.instances:
             instance_data = self.instances[key]
             await instance_data['instance'].close()
             del self.instances[key]
 
-    async def cleanup_inactive_instances(self):
+    async def cleanup_inactive_instances(self) -> None:
         current_time = asyncio.get_event_loop().time()
         keys_to_remove = []
         for key, instance_data in self.instances.items():
@@ -146,19 +149,20 @@ async def start_cleanup_task():
         await exchange_manager.cleanup_inactive_instances()
         await asyncio.sleep(3600)  # 1시간마다 실행
         
-async def get_exchange_instance(exchange_name: str, user_id: str):
+async def get_exchange_instance(exchange_name: str, user_id: str) -> Any | None:
     return await exchange_manager.get_instance(exchange_name, user_id)
 
 
 
 
 # In your main application
-def run_async_task(coro):
-    asyncio.run_coroutine_threadsafe(coro, exchange_manager.loop)
+# Note: run_async_task is deprecated - use asyncio.create_task() instead
+# def run_async_task(coro):
+#     asyncio.run_coroutine_threadsafe(coro, exchange_manager.loop)
 
 
-# Main thread
-if __name__ == "__main__":
-    # Start the event loop
-    exchange_manager.loop.create_task(exchange_manager.periodic_cleanup())
-    exchange_manager.loop.run_forever()
+# Main thread - commented out as this manager doesn't have loop or periodic_cleanup
+# if __name__ == "__main__":
+#     # Start the event loop
+#     exchange_manager.loop.create_task(exchange_manager.periodic_cleanup())
+#     exchange_manager.loop.run_forever()

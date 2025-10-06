@@ -105,7 +105,7 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 
         try:
             # Process request
-            response = await call_next(request)
+            response: Response = await call_next(request)
 
             # Calculate duration
             duration = time.time() - start_time

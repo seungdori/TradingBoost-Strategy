@@ -5,6 +5,7 @@ Handles user data initialization, validation, and management operations.
 Extracted from grid_original.py for better maintainability.
 """
 
+import asyncio
 import json
 import traceback
 import logging
@@ -107,7 +108,7 @@ async def get_user_data_from_redis(redis, user_key):
             for k, v in user_data.items()}
 
 
-async def update_user_data(exchange_name: str, user_id: int, **kwargs):
+async def update_user_data(exchange_name: str, user_id: int, **kwargs: Any) -> None:
     """
     Update user data in Redis.
 

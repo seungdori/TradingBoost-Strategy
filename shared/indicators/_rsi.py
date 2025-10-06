@@ -41,7 +41,7 @@ def calc_rsi(prices: np.ndarray, period: int = 14) -> np.ndarray:
         rs = avg_gain / np.where(avg_loss == 0, 1e-10, avg_loss)  # 0으로 나누기 방지
         rsi = 100 - (100 / (1 + rs))
 
-        return rsi
+        return rsi  # type: ignore[no-any-return]
 
     except Exception as e:
         raise Exception(f"RSI 계산 중 오류 발생: {str(e)}")

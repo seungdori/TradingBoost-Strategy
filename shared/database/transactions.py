@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator, TypeVar, Callable, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy import text
 from shared.logging import get_logger
 from shared.errors.exceptions import DatabaseException
 import asyncio
@@ -65,7 +66,7 @@ async def transactional(
         try:
             # Set isolation level if specified
             if isolation_level:
-                await session.execute(f"SET TRANSACTION ISOLATION LEVEL {isolation_level}")
+                await session.execute(text(f"SET TRANSACTION ISOLATION LEVEL {isolation_level}"))
 
             # Begin nested transaction if already in transaction (SAVEPOINT)
             if session.in_transaction():
@@ -97,6 +98,7 @@ async def transactional(
             # PostgreSQL: 40P01 (deadlock_detected)
             # SQLite: doesn't have deadlock errors in the same way
             is_deadlock = (
+                e.orig is not None and
                 hasattr(e.orig, 'pgcode') and
                 e.orig.pgcode == '40P01'
             )
@@ -119,7 +121,7 @@ async def transactional(
                         "attempt": attempt,
                         "max_retries": max_retries,
                         "backoff_seconds": backoff,
-                        "error_code": e.orig.pgcode if hasattr(e.orig, 'pgcode') else None
+                        "error_code": e.orig.pgcode if e.orig is not None and hasattr(e.orig, 'pgcode') else None
                     }
                 )
 

@@ -28,7 +28,7 @@ SYMBOLS = ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]
 TIMEFRAMES = [1, 3, 5, 15, 30, 60, 240]  # 분 단위
 TF_MAP = {1: '1m', 3: '3m', 5: '5m', 15: '15m', 30: '30m', 60: '1h', 240: '4h'}
 MAX_CANDLE_LEN = 3000
-POLLING_CANDLES = 100  # 한 번에 폴링할 캔들 수
+POLLING_CANDLES = 400  # 한 번에 폴링할 캔들 수
 
 # 역매핑 생성 (ex: '1m' -> 1)
 REVERSE_TF_MAP = {v: k for k, v in TF_MAP.items()}

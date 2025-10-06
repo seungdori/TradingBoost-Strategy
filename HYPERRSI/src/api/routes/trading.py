@@ -12,8 +12,9 @@ from HYPERRSI.src.core.database import redis_client
 from HYPERRSI.src.core.celery_task import celery_app
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.utils.check_invitee import get_okx_uid_from_telegram
-from HYPERRSI.src.helpers.user_id_helper import get_telegram_id_from_uid
+from shared.helpers.user_id_converter import get_telegram_id_from_uid
 from HYPERRSI.src.api.routes.settings import get_api_keys_from_timescale, ApiKeyService
+from HYPERRSI.src.services.timescale_service import TimescaleUserService
 from HYPERRSI.src.core.error_handler import handle_critical_error, ErrorCategory
 
 # 로거 설정
@@ -89,8 +90,8 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
                 is_telegram_id = False
 
     
-        telegram_id = await get_telegram_id_from_uid(okx_uid)
-        
+        telegram_id = await get_telegram_id_from_uid(redis_client, okx_uid, TimescaleUserService)
+
         # API 키 확인 및 업데이트
         api_keys = await redis_client.hgetall(f"user:{okx_uid}:api:keys")
         
@@ -489,7 +490,7 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
         else:
             # OKX UID인 경우 텔레그램 ID 찾기 (선택 사항)
             try:
-                telegram_id = await get_telegram_id_from_uid(okx_uid)
+                telegram_id = await get_telegram_id_from_uid(redis_client, okx_uid, TimescaleUserService)
             except Exception as e:
                 logger.debug(f"텔레그램 ID 조회 실패 (무시됨): {str(e)}")
         

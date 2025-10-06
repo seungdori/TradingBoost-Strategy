@@ -3,14 +3,14 @@ ATR (Average True Range) indicator
 """
 
 
-def calc_atr(candles, length=14):
+def calc_atr(candles: list[dict[str, float]], length: int = 14) -> list[float | None]:
     """
     ATR(Average True Range) 계산
     length: ATR 기간 (기본값 14)
     """
     n = len(candles)
     tr_list = [0.0]*n
-    atr_list = [None]*n
+    atr_list: list[float | None] = [None]*n
 
     # 1) True Range 계산
     for i in range(n):
@@ -40,6 +40,7 @@ def calc_atr(candles, length=14):
         else:
             # length 이상: Wilder 공식
             prev_atr = atr_list[i-1]
+            assert prev_atr is not None, "Previous ATR should be calculated by now"
             atr_list[i] = (prev_atr * (length-1) + tr_list[i]) / length
 
     return atr_list

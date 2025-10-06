@@ -3,12 +3,13 @@ import logging
 import math
 import traceback
 import aiohttp
-from typing import Optional, Tuple, Dict, List
+from typing import Any
+from decimal import Decimal, ROUND_HALF_UP
 
 logger = logging.getLogger(__name__)
 
 
-def get_actual_order_type(order_data: dict) -> str:
+def get_actual_order_type(order_data: dict[str, Any]) -> str:
     """
     실제 order_type을 결정합니다.
     order_type이 없거나 불명확한 경우 order_name을 확인합니다.
@@ -28,12 +29,8 @@ def get_actual_order_type(order_data: dict) -> str:
         >>> get_actual_order_type(order_data)
         'sl'
     """
-    if not isinstance(order_data, dict):
-        logger.warning(f"get_actual_order_type: order_data가 dict가 아님: {type(order_data)}")
-        return "unknown"
-
-    order_type = order_data.get("order_type", "unknown")
-    order_name = order_data.get("order_name", "")
+    order_type: str = str(order_data.get("order_type", "unknown"))
+    order_name: str = str(order_data.get("order_name", ""))
 
     # order_type이 제대로 설정되어 있으면 그대로 사용
     # limit, market은 주문 방식이지 주문 목적이 아니므로 order_name 확인 필요
@@ -106,7 +103,7 @@ def normalize_order_type(order_type: str) -> str:
     return "unknown"
 
 
-def parse_order_info(order_data: dict) -> dict:
+def parse_order_info(order_data: dict[str, Any]) -> dict[str, Any]:
     """
     주문 데이터를 파싱하여 필요한 정보를 추출합니다.
 
@@ -136,24 +133,13 @@ def parse_order_info(order_data: dict) -> dict:
         >>> info['order_type']
         'tp1'
     """
-    if not isinstance(order_data, dict):
-        logger.warning(f"parse_order_info: order_data가 dict가 아님: {type(order_data)}")
-        return {
-            'order_type': 'unknown',
-            'order_name': '',
-            'price': 0.0,
-            'quantity': 0.0,
-            'side': '',
-            'status': ''
-        }
-
     return {
         'order_type': get_actual_order_type(order_data),
-        'order_name': order_data.get('order_name', ''),
+        'order_name': str(order_data.get('order_name', '')),
         'price': float(order_data.get('price', 0.0)),
         'quantity': float(order_data.get('quantity', 0.0)),
-        'side': order_data.get('side', ''),
-        'status': order_data.get('status', '')
+        'side': str(order_data.get('side', '')),
+        'status': str(order_data.get('status', ''))
     }
 
 
@@ -218,7 +204,7 @@ def is_break_even_order(order_type: str) -> bool:
 # 주문 계약 및 수량 관련 함수
 # ============================================================================
 
-async def get_perpetual_instruments() -> Optional[List[Dict]]:
+async def get_perpetual_instruments() -> list[dict[str, Any]] | None:
     """
     OKX Perpetual 종목 정보를 가져옵니다.
 
@@ -227,14 +213,14 @@ async def get_perpetual_instruments() -> Optional[List[Dict]]:
     """
     try:
         from shared.utils.redis_utils import set_redis_data, get_redis_data
-        from shared.database.redis import get_redis_client
+        from shared.database.redis import get_redis
 
-        redis_client = await get_redis_client()
+        redis_client = await get_redis()
 
         # Redis에서 데이터 확인
         cached_data = await get_redis_data(redis_client, 'perpetual_instruments')
         if cached_data:
-            return cached_data
+            return list(cached_data) if isinstance(cached_data, list) else None
 
         # 캐시된 데이터가 없으면 API 호출
         base_url = "https://www.okx.com"
@@ -243,12 +229,13 @@ async def get_perpetual_instruments() -> Optional[List[Dict]]:
         async with aiohttp.ClientSession(connector=conn) as session:
             url = f"{base_url}/api/v5/public/instruments?instType=SWAP"
             async with session.get(url) as response:
-                data = await response.json()
+                data: dict[str, Any] = await response.json()
 
         # 데이터를 Redis에 저장
         if data and 'data' in data:
-            await set_redis_data(redis_client, 'perpetual_instruments', data['data'])
-            return data['data']
+            instruments: list[dict[str, Any]] = data['data']
+            await set_redis_data(redis_client, 'perpetual_instruments', instruments)
+            return instruments
         else:
             logger.warning("Invalid response from OKX API")
             return None
@@ -259,7 +246,7 @@ async def get_perpetual_instruments() -> Optional[List[Dict]]:
         return None
 
 
-def get_lot_sizes(instruments: List[Dict]) -> Dict[str, Tuple[float, float, str]]:
+def get_lot_sizes(instruments: list[dict[str, Any]]) -> dict[str, tuple[float, float, str]]:
     """
     종목별 계약 단위 정보를 정리합니다.
 
@@ -279,7 +266,7 @@ def get_lot_sizes(instruments: List[Dict]) -> Dict[str, Tuple[float, float, str]
     return lot_sizes
 
 
-async def round_to_qty(symbol: str, qty: float, lot_sizes: Dict) -> int:
+async def round_to_qty(symbol: str, qty: float, lot_sizes: dict[str, Any]) -> int:
     """
     수량을 계약 수로 변환하고 내림합니다.
 
@@ -304,7 +291,7 @@ async def round_to_qty(symbol: str, qty: float, lot_sizes: Dict) -> int:
     # qty는 실제 수량(예: 0.02 BTC)
     # contract_value는 한 계약당 기초자산의 양(예: BTC의 경우 0.01 BTC)
     contracts = qty / contract_value  # 계약 수 계산
-    rounded_contracts = math.floor(contracts)  # 계약 수 내림
+    rounded_contracts: int = int(math.floor(contracts))  # 계약 수 내림
 
     logger.debug(f"round_to_qty - 입력 수량: {qty}, 계약 가치: {contract_value}, "
                 f"계산된 계약 수: {contracts}, 반올림된 계약 수: {rounded_contracts}")
@@ -312,7 +299,7 @@ async def round_to_qty(symbol: str, qty: float, lot_sizes: Dict) -> int:
     return rounded_contracts
 
 
-async def contracts_to_qty(symbol: str, contracts: int) -> Optional[float]:
+async def contracts_to_qty(symbol: str, contracts: int) -> float | None:
     """
     계약 수를 실제 수량으로 변환합니다.
 
@@ -346,7 +333,7 @@ async def contracts_to_qty(symbol: str, contracts: int) -> Optional[float]:
         return None
 
 
-def split_contracts(total_contracts: int) -> Tuple[int, int, int]:
+def split_contracts(total_contracts: int) -> tuple[int, int, int]:
     """
     계약 수를 30%, 30%, 40%로 분할하고 최소 계약 단위로 내림합니다.
 
@@ -370,7 +357,7 @@ def split_contracts(total_contracts: int) -> Tuple[int, int, int]:
 # Redis 기반 계약 및 Tick Size 조회 함수
 # ============================================================================
 
-async def get_contract_size(symbol: str, redis_client=None) -> float:
+async def get_contract_size(symbol: str, redis_client: Any = None) -> float:
     """
     Redis에서 심볼의 계약 크기를 조회합니다.
 
@@ -383,8 +370,8 @@ async def get_contract_size(symbol: str, redis_client=None) -> float:
     """
     try:
         if redis_client is None:
-            from shared.database.redis import get_redis_client
-            redis_client = await get_redis_client()
+            from shared.database.redis import get_redis
+            redis_client = await get_redis()
 
         import json
 
@@ -394,14 +381,14 @@ async def get_contract_size(symbol: str, redis_client=None) -> float:
             logger.warning(f"Contract specifications not found in Redis for {symbol}")
             return 0.01
 
-        spec_json = json.loads(spec_key)
-        spec = spec_json.get(symbol)
+        spec_json: dict[str, Any] = json.loads(spec_key)
+        spec: dict[str, Any] | None = spec_json.get(symbol)
 
         if not spec:
             logger.warning(f"Symbol specification not found: {symbol}")
             return 0.01
 
-        contract_size = spec.get("contractSize", 0.01)
+        contract_size: float = float(spec.get("contractSize", 0.01))
 
         logger.debug(f"Contract size for {symbol}: {contract_size}")
 
@@ -412,7 +399,7 @@ async def get_contract_size(symbol: str, redis_client=None) -> float:
         return 0.01
 
 
-async def get_tick_size_from_redis(symbol: str, redis_client=None) -> Optional[float]:
+async def get_tick_size_from_redis(symbol: str, redis_client: Any = None) -> float | None:
     """
     Redis에서 심볼의 tick size를 조회합니다.
 
@@ -425,8 +412,8 @@ async def get_tick_size_from_redis(symbol: str, redis_client=None) -> Optional[f
     """
     try:
         if redis_client is None:
-            from shared.database.redis import get_redis_client
-            redis_client = await get_redis_client()
+            from shared.database.redis import get_redis
+            redis_client = await get_redis()
 
         import json
 
@@ -446,7 +433,7 @@ async def get_tick_size_from_redis(symbol: str, redis_client=None) -> Optional[f
         return None
 
 
-async def get_minimum_qty(symbol: str, redis_client=None) -> float:
+async def get_minimum_qty(symbol: str, redis_client: Any = None) -> float:
     """
     Redis에 저장된 contract_specifications에서 해당 심볼의 최소 주문 수량을 반환합니다.
 
@@ -459,8 +446,8 @@ async def get_minimum_qty(symbol: str, redis_client=None) -> float:
     """
     try:
         if redis_client is None:
-            from shared.database.redis import get_redis_client
-            redis_client = await get_redis_client()
+            from shared.database.redis import get_redis
+            redis_client = await get_redis()
 
         import json
 
@@ -507,9 +494,9 @@ async def get_minimum_qty(symbol: str, redis_client=None) -> float:
 
 async def round_to_tick_size(
     value: float,
-    current_price: Optional[float] = None,
-    symbol: Optional[str] = None,
-    redis_client=None
+    current_price: float | None = None,
+    symbol: str | None = None,
+    redis_client: Any = None
 ) -> float:
     """
     가격을 tick size 또는 heuristics에 따라 반올림합니다.
@@ -534,16 +521,16 @@ async def round_to_tick_size(
         tick_size = 0.001  # 기본 tick size
         logger.debug(f"Using default tick_size: {tick_size}")
 
-    value = Decimal(str(value))  # 부동소수점 오차 방지
+    value_decimal: Decimal = Decimal(str(value))  # 부동소수점 오차 방지
 
     if tick_size and tick_size > 0:
-        tick_size = Decimal(str(tick_size))
-        rounded = (value / tick_size).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * tick_size
+        tick_size_decimal: Decimal = Decimal(str(tick_size))
+        rounded = (value_decimal / tick_size_decimal).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * tick_size_decimal
         return float(rounded)
 
     # tick size가 없을 경우, current_price 기준 반올림
     if current_price is None:
-        return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+        return float(value_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
     if current_price < 0.01:
         decimals = "0.00001"
@@ -556,5 +543,5 @@ async def round_to_tick_size(
     else:
         decimals = "0.01"
 
-    rounded = value.quantize(Decimal(decimals), rounding=ROUND_HALF_UP)
+    rounded = value_decimal.quantize(Decimal(decimals), rounding=ROUND_HALF_UP)
     return float(rounded)

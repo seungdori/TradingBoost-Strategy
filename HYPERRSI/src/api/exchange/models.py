@@ -124,20 +124,20 @@ class BalanceResponse(BaseModel):
     free: Decimal
     used: Decimal
 
-#class OrderResponse(BaseModel):
-#    order_id: str
-#    symbol: str
-#    side: str
-#    type: str
-#    amount: float
-#    filled: float
-#    price: Optional[float]
-#    average_price: Optional[float]
-#    status: str
-#    timestamp: datetime
-    
-#    class Config:
-#        arbitrary_types_allowed = True
+# class OrderResponse(BaseModel):
+#     order_id: str
+#     symbol: str
+#     side: str
+#     order_type: str
+#     amount: float
+#     filled: float
+#     price: Optional[float]
+#     average_price: Optional[float]
+#     status: str
+#     timestamp: datetime
+
+#     class Config:
+#         arbitrary_types_allowed = True
 
 class PositionResponseModel(BaseModel):
     symbol: str

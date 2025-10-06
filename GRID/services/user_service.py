@@ -116,7 +116,7 @@ async def get_user_by_id(
         )
 
         # Delegate to repository
-        user = await user_repository.get_user_by_id(exchange_name, user_id)
+        user: dict[str, Any] | None = await user_repository.get_user_by_id(exchange_name, user_id)
 
         if user:
             logger.info(
@@ -191,7 +191,7 @@ async def find_user_by_username(
         )
 
         # Delegate to repository
-        user = await user_repository.find_user_by_username(
+        user: dict[str, Any] | None = await user_repository.find_user_by_username(
             exchange_name,
             username
         )

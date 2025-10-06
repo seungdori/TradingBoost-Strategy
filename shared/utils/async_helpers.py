@@ -1,7 +1,7 @@
 """비동기 유틸리티 함수"""
 import asyncio
 import logging
-from typing import TypeVar, Callable, Any, Optional, Tuple
+from typing import TypeVar, Callable, Any, Awaitable
 from functools import wraps
 
 logger = logging.getLogger(__name__)
@@ -9,14 +9,14 @@ logger = logging.getLogger(__name__)
 T = TypeVar('T')
 
 async def retry_async(
-    func: Callable[..., T],
-    *args,
+    func: Callable[..., Awaitable[T]],
+    *args: Any,
     max_retries: int = 3,
     delay: float = 1.0,
     backoff: float = 2.0,
-    exceptions: Tuple[type, ...] = (Exception,),
-    on_retry: Optional[Callable] = None,
-    **kwargs
+    exceptions: tuple[type[BaseException], ...] = (Exception,),
+    on_retry: Callable[..., Awaitable[None]] | None = None,
+    **kwargs: Any
 ) -> T:
     """
     비동기 함수 재시도 헬퍼
@@ -44,7 +44,7 @@ async def retry_async(
         # 방법 2: 람다 사용
         result = await retry_async(lambda: my_func(arg1, arg2), max_retries=5)
     """
-    last_exception = None
+    last_exception: BaseException | None = None
     current_delay = delay
     func_name = getattr(func, '__name__', 'unknown')
 
@@ -68,15 +68,17 @@ async def retry_async(
             else:
                 logger.error(f"{func_name}: All {max_retries} attempts failed. Last error: {str(e)}")
 
-    raise last_exception
+    if last_exception is not None:
+        raise last_exception
+    raise RuntimeError(f"{func_name}: All attempts failed but no exception was captured")
 
 
 def retry_decorator(
     max_retries: int = 3,
     delay: float = 1.0,
     backoff: float = 2.0,
-    exceptions: Tuple[type, ...] = (Exception,)
-):
+    exceptions: tuple[type[BaseException], ...] = (Exception,)
+) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
     """
     비동기 함수 재시도 데코레이터
 
@@ -85,9 +87,9 @@ def retry_decorator(
         async def my_function():
             ...
     """
-    def decorator(func):
+    def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
         @wraps(func)
-        async def wrapper(*args, **kwargs):
+        async def wrapper(*args: Any, **kwargs: Any) -> T:
             return await retry_async(
                 lambda: func(*args, **kwargs),
                 max_retries=max_retries,
@@ -162,3 +164,65 @@ def get_or_create_event_loop() -> asyncio.AbstractEventLoop:
         asyncio.AbstractEventLoop: 이벤트 루프
     """
     return ensure_async_loop()
+
+
+# ============================================================================
+# Debounce 데코레이터
+# ============================================================================
+
+def async_debounce(wait: float):
+    """
+    비동기 함수의 debounce 데코레이터
+
+    Args:
+        wait: 대기 시간 (초)
+
+    Returns:
+        데코레이터 함수
+
+    Examples:
+        >>> @async_debounce(1.0)
+        ... async def my_function():
+        ...     print("Debounced!")
+    """
+    def decorator(fn):
+        last_called: float | None = None
+        task: asyncio.Task | None = None
+
+        @wraps(fn)
+        async def debounced(*args, **kwargs):
+            nonlocal last_called, task
+            current_time = asyncio.get_event_loop().time()
+
+            if last_called is None or current_time - last_called >= wait:
+                last_called = current_time
+                if task:
+                    task.cancel()
+                task = asyncio.create_task(fn(*args, **kwargs))
+                return await task
+            return None
+
+        return debounced
+    return decorator
+
+
+async def custom_sleep(timeframe: str):
+    """
+    다음 시간프레임까지 대기합니다.
+
+    Args:
+        timeframe: 시간프레임 문자열 (예: '15m', '1h')
+
+    Examples:
+        >>> await custom_sleep('15m')  # 다음 15분 경계까지 대기
+    """
+    from shared.utils.time_helpers import calculate_next_timeframe_start
+    from datetime import datetime
+    import random
+
+    now = datetime.now()
+    next_timeframe_start = calculate_next_timeframe_start(now, timeframe)
+    logger.debug(f"다음 타임프레임 시작 시간: {next_timeframe_start}")
+
+    while datetime.now() < next_timeframe_start:
+        await asyncio.sleep(random.uniform(0.5, 1.5))

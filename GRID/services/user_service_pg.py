@@ -6,7 +6,7 @@ Replaces GRID.database.user_database SQLite implementation.
 """
 
 import json
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 from GRID.infra.database_pg import get_grid_db
@@ -163,7 +163,7 @@ async def get_job_id(exchange_name: str, user_id: int) -> Optional[str]:
     """
     async with get_grid_db() as session:
         job_repo = JobRepositoryPG(session)
-        job_id = await job_repo.get_job_id(user_id, exchange_name)
+        job_id: str | None = await job_repo.get_job_id(user_id, exchange_name)
         return job_id
 
 
@@ -202,7 +202,7 @@ async def get_job_status(exchange_name: str, user_id: int) -> Optional[tuple]:
     """
     async with get_grid_db() as session:
         job_repo = JobRepositoryPG(session)
-        result = await job_repo.get_job_status(user_id, exchange_name)
+        result: tuple[Any, ...] | None = await job_repo.get_job_status(user_id, exchange_name)
         return result
 
 
@@ -266,7 +266,7 @@ async def get_telegram_id(exchange_name: str, user_id: int) -> Optional[str]:
     """
     async with get_grid_db() as session:
         user_repo = UserRepositoryPG(session)
-        telegram_id = await user_repo.get_telegram_id(user_id, exchange_name)
+        telegram_id: str | None = await user_repo.get_telegram_id(user_id, exchange_name)
         return telegram_id
 
 
@@ -339,7 +339,8 @@ async def get_running_symbols(user_id: int, exchange_name: str) -> List[str]:
         user = await user_repo.get_by_id(user_id, exchange_name)
 
         if user and user.running_symbols:
-            return json.loads(user.running_symbols)
+            result: list[str] = json.loads(user.running_symbols)
+            return result
         return []
 
 
@@ -559,7 +560,7 @@ async def get_blacklist(exchange_name: str, user_id: int) -> List[str]:
     """
     async with get_grid_db() as session:
         symbol_repo = SymbolListRepositoryPG(session)
-        symbols = await symbol_repo.get_blacklist(user_id, exchange_name)
+        symbols: list[str] = await symbol_repo.get_blacklist(user_id, exchange_name)
         return symbols
 
 
@@ -581,7 +582,7 @@ async def remove_from_blacklist(
     """
     async with get_grid_db() as session:
         symbol_repo = SymbolListRepositoryPG(session)
-        result = await symbol_repo.remove_from_blacklist(user_id, exchange_name, symbol)
+        result: bool = await symbol_repo.remove_from_blacklist(user_id, exchange_name, symbol)
         await session.commit()
         return result
 
@@ -623,7 +624,7 @@ async def get_whitelist(exchange_name: str, user_id: int) -> List[str]:
     """
     async with get_grid_db() as session:
         symbol_repo = SymbolListRepositoryPG(session)
-        symbols = await symbol_repo.get_whitelist(user_id, exchange_name)
+        symbols: list[str] = await symbol_repo.get_whitelist(user_id, exchange_name)
         return symbols
 
 
@@ -645,6 +646,6 @@ async def remove_from_whitelist(
     """
     async with get_grid_db() as session:
         symbol_repo = SymbolListRepositoryPG(session)
-        result = await symbol_repo.remove_from_whitelist(user_id, exchange_name, symbol)
+        result: bool = await symbol_repo.remove_from_whitelist(user_id, exchange_name, symbol)
         await session.commit()
         return result

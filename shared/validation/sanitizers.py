@@ -322,10 +322,7 @@ def sanitize_log_data(data: dict[str, Any], redact_value: str = "***REDACTED***"
         >>> sanitize_log_data({"config": {"api_key": "xyz"}})
         {'config': {'api_key': '***REDACTED***'}}
     """
-    if not isinstance(data, dict):
-        return data
-
-    sanitized = {}
+    sanitized: dict[str, Any] = {}
 
     for key, value in data.items():
         key_lower = key.lower()

@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 from sqlalchemy.pool import NullPool, QueuePool
-from shared.config import settings
+from shared.config.settings import settings
 from shared.logging import get_logger
 from shared.database.pool_monitor import PoolMonitor
 
@@ -45,13 +45,20 @@ class DatabaseConfig:
         """
         if cls._engine is None:
             # Determine pool class based on environment
-            pool_class = NullPool if settings.ENVIRONMENT == "test" else QueuePool
+            pool_class = NullPool if settings.ENVIRONMENT == "test" else QueuePool  # type: ignore[comparison-overlap]
 
             # Use db_url property for proper URL construction
             db_url = settings.db_url
 
-            # Build connect_args based on database type
+            # Debug logging
+            logger.info(f"Database URL: {db_url[:50]}..." if db_url else "Database URL: EMPTY")
+            if not db_url:
+                logger.error("DATABASE_URL is empty! Falling back to SQLite")
+                db_url = "sqlite+aiosqlite:///./default.db"
+
+            # Build connect_args and isolation_level based on database type
             connect_args = {}
+            isolation_level = None
             if "postgresql" in db_url:
                 connect_args = {
                     "server_settings": {
@@ -60,6 +67,7 @@ class DatabaseConfig:
                     },
                     "command_timeout": settings.DB_POOL_TIMEOUT,
                 }
+                isolation_level = "READ COMMITTED"  # PostgreSQL default
 
             cls._engine = create_async_engine(
                 db_url,
@@ -79,8 +87,8 @@ class DatabaseConfig:
                 # Logging
                 echo_pool=settings.DEBUG,
 
-                # Performance
-                isolation_level="READ COMMITTED",  # PostgreSQL default
+                # Performance (only for PostgreSQL)
+                **({"isolation_level": isolation_level} if isolation_level else {}),
             )
 
             logger.info(
@@ -131,6 +139,8 @@ class DatabaseConfig:
         if cls._monitor is None:
             # Ensure engine is created first
             cls.get_engine()
+
+        assert cls._monitor is not None, "Monitor should be initialized after get_engine()"
         return cls._monitor
 
     @classmethod
@@ -161,7 +171,7 @@ class DatabaseConfig:
         return monitor.check_health()
 
     @classmethod
-    async def warm_up_pool(cls, connections: int | None = None):
+    async def warm_up_pool(cls, connections: int | None = None) -> None:
         """
         Pre-create database connections to avoid cold start.
 

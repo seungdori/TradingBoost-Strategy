@@ -19,5 +19,5 @@ class UserWithoutPasswordDto(BaseModel):
     user_id: str  # user_id를 문자열로 변경
 
     @classmethod
-    def from_user_dto(cls, user_dto: dict):
+    def from_user_dto(cls, user_dto: dict) -> "UserWithoutPasswordDto":
         return cls(user_id=user_dto['user_id'])

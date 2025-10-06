@@ -11,7 +11,7 @@ Provides optimized Redis connection management with:
 import logging
 import time
 from threading import Lock
-from typing import Optional, Any
+from typing import Any
 import redis.asyncio as aioredis
 from redis import Redis, RedisError
 from redis.asyncio import Redis as AsyncRedis, ConnectionPool
@@ -33,26 +33,27 @@ class RedisConnectionManager:
     - 멀티 클라이언트: decode_responses=True/False 모두 지원
     """
     
-    _instance = None
+    _instance: "RedisConnectionManager | None" = None
     _lock = Lock()
+    _initialized: bool = False
     
     # 연결 풀들
-    _sync_pool: Optional[Redis] = None
-    _async_pool: Optional[ConnectionPool] = None
-    _async_binary_pool: Optional[ConnectionPool] = None
-    
+    _sync_pool: Redis | None = None
+    _async_pool: ConnectionPool | None = None
+    _async_binary_pool: ConnectionPool | None = None
+
     # 클라이언트들
-    _sync_client: Optional[Redis] = None
-    _async_client: Optional[AsyncRedis] = None
-    _async_binary_client: Optional[AsyncRedis] = None
+    _sync_client: Redis | None = None
+    _async_client: AsyncRedis | None = None
+    _async_binary_client: AsyncRedis | None = None
     
     # 재연결 관리
     _last_connect_attempt: float = 0
     _connect_backoff: float = 1
     _max_backoff: float = 30
     
-    def __new__(cls, host: str = "localhost", port: int = 6379, db: int = 0, 
-                password: Optional[str] = None, max_connections: int = 200):
+    def __new__(cls, host: str = "localhost", port: int = 6379, db: int = 0,
+                password: str | None = None, max_connections: int = 200) -> "RedisConnectionManager":
         """싱글톤 인스턴스 생성"""
         with cls._lock:
             if cls._instance is None:
@@ -61,7 +62,7 @@ class RedisConnectionManager:
             return cls._instance
     
     def __init__(self, host: str = "localhost", port: int = 6379, db: int = 0,
-                 password: Optional[str] = None, max_connections: int = 200):
+                 password: str | None = None, max_connections: int = 200) -> None:
         """
         Redis 연결 관리자 초기화
         
@@ -138,8 +139,8 @@ class RedisConnectionManager:
     async def _create_async_pool(self, decode_responses: bool) -> ConnectionPool:
         """비동기 연결 풀 생성"""
         redis_url = f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
-        
-        pool = aioredis.ConnectionPool.from_url(
+
+        pool: ConnectionPool = aioredis.ConnectionPool.from_url(
             redis_url,
             max_connections=self.max_connections if decode_responses else 100,
             decode_responses=decode_responses,
@@ -284,8 +285,8 @@ class RedisConnectionPool:
     Uses settings from shared.config for automatic configuration.
     """
 
-    _pool: Optional[ConnectionPool] = None
-    _monitor: Optional[RedisPoolMonitor] = None
+    _pool: ConnectionPool | None = None
+    _monitor: RedisPoolMonitor | None = None
     _lock = Lock()
 
     @classmethod
@@ -330,6 +331,8 @@ class RedisConnectionPool:
         if cls._monitor is None:
             # Ensure pool is created first
             cls.get_pool()
+
+        assert cls._monitor is not None, "Monitor should be initialized after get_pool()"
         return cls._monitor
 
     @classmethod

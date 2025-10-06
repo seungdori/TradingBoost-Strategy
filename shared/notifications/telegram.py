@@ -10,7 +10,7 @@ import asyncio
 import logging
 import json
 import time
-from typing import Optional, Dict, Any
+from typing import Any
 from enum import Enum
 import aiohttp
 
@@ -30,7 +30,7 @@ class MessageType(str, Enum):
 class TelegramNotifier:
     """Telegram 알림 관리 클래스"""
 
-    def __init__(self, bot_token: str, default_chat_id: Optional[str] = None):
+    def __init__(self, bot_token: str, default_chat_id: str | None = None):
         """
         Args:
             bot_token: Telegram 봇 토큰
@@ -44,7 +44,7 @@ class TelegramNotifier:
     async def send_message(
         self,
         message: str,
-        chat_id: Optional[str] = None,
+        chat_id: str | None = None,
         message_type: MessageType = MessageType.INFO,
         parse_mode: str = "Markdown",
         disable_notification: bool = False,
@@ -112,7 +112,7 @@ class TelegramNotifier:
         side: str,
         quantity: float,
         price: float,
-        chat_id: Optional[str] = None
+        chat_id: str | None = None
     ) -> bool:
         """
         거래 알림 발송
@@ -140,8 +140,8 @@ class TelegramNotifier:
         self,
         symbol: str,
         status: str,
-        pnl: Optional[float] = None,
-        chat_id: Optional[str] = None
+        pnl: float | None = None,
+        chat_id: str | None = None
     ) -> bool:
         """
         포지션 상태 알림 발송
@@ -165,8 +165,8 @@ class TelegramNotifier:
     async def send_error_notification(
         self,
         error_message: str,
-        details: Optional[str] = None,
-        chat_id: Optional[str] = None
+        details: str | None = None,
+        chat_id: str | None = None
     ) -> bool:
         """
         에러 알림 발송
@@ -188,10 +188,10 @@ class TelegramNotifier:
 
 # 간편 함수들 (기존 코드와의 호환성을 위해)
 
-_default_notifier: Optional[TelegramNotifier] = None
+_default_notifier: TelegramNotifier | None = None
 
 
-def initialize_telegram(bot_token: str, default_chat_id: Optional[str] = None):
+def initialize_telegram(bot_token: str, default_chat_id: str | None = None) -> None:
     """
     전역 Telegram Notifier 초기화
 
@@ -206,7 +206,7 @@ def initialize_telegram(bot_token: str, default_chat_id: Optional[str] = None):
 
 async def send_telegram(
     message: str,
-    chat_id: Optional[str] = None,
+    chat_id: str | None = None,
     message_type: MessageType = MessageType.INFO
 ) -> bool:
     """
@@ -232,7 +232,7 @@ async def send_trade_alert(
     side: str,
     quantity: float,
     price: float,
-    chat_id: Optional[str] = None
+    chat_id: str | None = None
 ) -> bool:
     """
     간편 거래 알림 함수
@@ -256,8 +256,8 @@ async def send_trade_alert(
 
 async def send_error_alert(
     error_message: str,
-    details: Optional[str] = None,
-    chat_id: Optional[str] = None
+    details: str | None = None,
+    chat_id: str | None = None
 ) -> bool:
     """
     간편 에러 알림 함수
@@ -288,9 +288,9 @@ MESSAGE_PROCESSING_FLAG = "telegram:processing_flag:{okx_uid}"
 
 async def get_telegram_id(
     identifier: str,
-    redis_client,
+    redis_client: Any,
     order_backend_url: str
-) -> Optional[int]:
+) -> int | None:
     """
     식별자가 okx_uid인지 telegram_id인지 확인하고 적절한 telegram_id를 반환합니다.
 
@@ -347,7 +347,7 @@ async def get_telegram_id(
 async def enqueue_telegram_message(
     message: str,
     okx_uid: str,
-    redis_client,
+    redis_client: Any,
     debug: bool = False
 ) -> bool:
     """
@@ -394,7 +394,7 @@ async def enqueue_telegram_message(
 
 async def process_telegram_messages(
     okx_uid: str,
-    redis_client,
+    redis_client: Any,
     bot_token: str,
     order_backend_url: str,
     debug: bool = False
@@ -457,7 +457,7 @@ async def process_telegram_messages(
 async def send_telegram_message(
     message: str,
     okx_uid: str,
-    redis_client,
+    redis_client: Any,
     bot_token: str,
     order_backend_url: str,
     debug: bool = False,

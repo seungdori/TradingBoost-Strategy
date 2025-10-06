@@ -52,8 +52,37 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
 
-    # 데이터베이스 설정
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
+    # 데이터베이스 상세 설정
+    DB_USER: str = os.getenv("DB_USER", "")
+    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "")
+    DB_HOST: str = os.getenv("DB_HOST", "")
+    DB_PORT: str = os.getenv("DB_PORT", "5432")
+    DB_NAME: str = os.getenv("DB_NAME", "")
+
+    # 데이터베이스 설정 (동적 구성)
+    @property
+    def DATABASE_URL(self) -> str:
+        """Construct DATABASE_URL from individual components"""
+        env_url = os.getenv("DATABASE_URL", "")
+        # If DATABASE_URL is already set and doesn't contain ${}, use it
+        if env_url and "${" not in env_url:
+            return env_url
+        # Otherwise, construct from components
+        if self.DB_USER and self.DB_PASSWORD and self.DB_HOST and self.DB_NAME:
+            return f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+        return ""
+
+    @property
+    def db_url(self) -> str:
+        """Alias for DATABASE_URL for backward compatibility"""
+        return self.DATABASE_URL
+
+    # 데이터베이스 풀 설정
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_TIMEOUT: int = 30
+    DB_POOL_RECYCLE: int = 3600
+    DB_POOL_PRE_PING: bool = True
 
     # 로깅 설정
     LOG_LEVEL: str = "INFO"
@@ -70,13 +99,6 @@ class Settings(BaseSettings):
     # Telegram 설정
     TELEGRAM_BOT_TOKEN: str = ""
     OWNER_ID: int = 0
-
-    # 데이터베이스 상세 설정
-    DB_USER: str = os.getenv("DB_USER", "")
-    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "")
-    DB_HOST: str = os.getenv("DB_HOST", "")
-    DB_PORT: str = os.getenv("DB_PORT", "5432")
-    DB_NAME: str = os.getenv("DB_NAME", "")
 
 
 @lru_cache()

@@ -26,7 +26,8 @@ from ccxt.async_support import NetworkError, ExchangeError
 
 # ==================== 프로젝트 모듈 ====================
 from GRID.database import redis_database
-from GRID.database.redis_database import update_take_profit_orders_info
+from GRID.database.redis_database import update_take_profit_orders_info, update_active_grid
+from GRID.jobs.task_manager import create_recovery_tasks, handle_task_completion
 from GRID.routes.logs_route import add_log_endpoint as add_user_log
 from GRID.strategies import strategy
 from GRID.trading.instance_manager import get_exchange_instance
@@ -43,7 +44,7 @@ from GRID.services.order_service import get_take_profit_orders_info
 from GRID.services.user_management_service import get_user_data
 
 # ==================== Utils ====================
-from GRID.utils.validators import parse_bool
+from shared.utils import parse_bool
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +151,7 @@ async def monitor_tp_orders_websocekts(exchange_name, symbol_name, user_id, leve
 
     except Exception as e:
         print(f"{user_id} : 기타 예외 처리1: {e}")
-        print(traceback.print_exc())
+        traceback.print_exc()
         await asyncio.sleep(5)
     #####TODO : 인스턴스 재활용버젼에서는 필요없어서 우선 확인
     finally:
@@ -172,6 +173,7 @@ async def monitor_positions(exchange_name, user_id):
     retry_count = 0
     max_retry_count = 3
     user_data = await redis.hgetall(f'{exchange_name}:user:{user_id}')
+    running_symbols: set[str] = set(json.loads(user_data.get('running_symbols', '[]')))
     await asyncio.sleep(4.5)
     exchange = None
     is_running = parse_bool(user_data.get('is_running', '0'))
@@ -431,10 +433,13 @@ async def check_and_close_positions(exchange, user_id):
 
                             await asyncio.sleep(6)
         try:
-            if exchange_name == 'upbit' : 
+            if exchange_name == 'upbit':
                 await asyncio.sleep(random.uniform(0.6, 2.2))
                 balance = await exchange.fetch_balance()
-                base_currency = symbol.split('-')[1]  # 'KRW-ETC'에서 'ETC'를 추출
+                if symbol is not None:
+                    base_currency = symbol.split('-')[1]  # 'KRW-ETC'에서 'ETC'를 추출
+                else:
+                    base_currency = 'UNKNOWN'
                 print("fetched positions for upbit")
                 for position in positions_data:
                     symbol = position['symbol']

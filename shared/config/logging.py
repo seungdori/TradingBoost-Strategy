@@ -112,7 +112,7 @@ def get_logger(
 def configure_root_logger(
     log_level: str = "INFO",
     format_string: Optional[str] = None
-):
+) -> None:
     """
     루트 로거 설정 (애플리케이션 전역 로깅)
 
@@ -195,7 +195,7 @@ def add_file_handler(
     max_bytes: int = 10 * 1024 * 1024,
     backup_count: int = 5,
     format_string: Optional[str] = None
-):
+) -> None:
     """
     기존 로거에 파일 핸들러 추가
 

@@ -56,7 +56,7 @@ from GRID.services.symbol_service import get_top_symbols
 from GRID.services.user_management_service import get_user_data, update_user_data
 
 # ==================== Utils ====================
-from GRID.utils.validators import parse_bool
+from shared.utils import parse_bool
 
 # ==================== 모듈 내부 import (순환 참조 방지) ====================
 # Grid Core - 그리드 레벨 계산 및 주문 배치

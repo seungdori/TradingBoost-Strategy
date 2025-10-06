@@ -47,6 +47,6 @@ class ExchangeApiKeyDto(BaseModel):
 class WalletDto(BaseModel):
     """지갑 정보"""
     exchange_name: str = Field(examples=["okx","binance", "upbit", "bitget", "binance_spot", "bitget_spot", "okx_spot"])
-    total_balance: float = Field(example=[0])
-    wallet_balance: Optional[float] = Field(None, examples=[0])
-    total_unrealized_profit: Optional[float] = Field(None, examples=[0])
+    total_balance: float = Field(examples=[0.0])
+    wallet_balance: Optional[float] = Field(None, examples=[0.0])
+    total_unrealized_profit: Optional[float] = Field(None, examples=[0.0])

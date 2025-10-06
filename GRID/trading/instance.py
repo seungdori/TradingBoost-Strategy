@@ -1,6 +1,6 @@
 import ccxt.pro as ccxtpro
 from GRID.services import user_service_pg as user_database
-from typing import Optional
+from typing import Optional, Any
 from pydantic import BaseModel, Field
 import redis.asyncio as aioredis
 import json
@@ -11,44 +11,61 @@ from shared.config import OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE  # 환경 
 
 REDIS_PASSWORD = settings.REDIS_PASSWORD
 
+# Global user keys cache
+user_keys: dict[int, dict[str, Any]] = {}
+
 class ReadOnlyKeys:
 
-    #binance_keys = 'mRBd4yWAhv2EV5bxQHsdyXIvh3JqqByO5Tt6SF246zkSkVPqexCCkCT4nffwEjK6'
-    #binance_secret= 'MKHfE31P4Ktqy7RbMSfmfd6wzhPVfr881W77y6DrWe62ooa87HQI1kC5chCIHDJj'
-    #upbit_keys = 'ezyT53BMGEetuw1Fxx4DTV3sTsnDalLdM8sdaziJ'
-    #upbit_secret= 'YxdJM8vAS0pvKc76EFB8z0FjBTf4zc8Lx0xP8spr'
-#
-    #bitget_keys ='bg_f1a2d50a1461661a047db47d89920509'
-    #bitegt_secret= '081832a19231d65a86b22a52116a06cfdaa36eb550eae3eaae6854cb6c41bbf7'
-    #bitget_password='tmzkdl2014'
+    # Binance keys (not configured - use user keys instead)
+    binance_keys: str | None = None
+    binance_secret: str | None = None
+
+    # Upbit keys (not configured - use user keys instead)
+    upbit_keys: str | None = None
+    upbit_secret: str | None = None
+
+    # Bitget keys (not configured - use user keys instead)
+    bitget_keys: str | None = None
+    bitegt_secret: str | None = None
+    bitget_password: str | None = None
+
+    # Bybit keys (not configured - use user keys instead)
+    bybit_keys: str | None = None
+    bybit_secret: str | None = None
 
     #OKX READ ONLY #아래가, 2025년 2월 25일 최신.
     OKX_API_KEY=OKX_API_KEY
     OKX_SECRET_KEY=OKX_SECRET_KEY
     OKX_PASSPHRASE=OKX_PASSPHRASE
-    #okx_keys = '3091c663-721b-458c-8d5a-92beb887d6f9' 
+
+    # Aliases for backward compatibility
+    okx_keys = OKX_API_KEY
+    okx_secret = OKX_SECRET_KEY
+    okx_password = OKX_PASSPHRASE
+
+    #okx_keys = '3091c663-721b-458c-8d5a-92beb887d6f9'
     #okx_secret = '1741A78A76F6C70C0608B3C85566E3D9'
     #okx_password='Tmdehfl2014!'
     #OKX READ ONLY
-    #okx_keys = 'f542196a-e52e-45b0-94dd-57f93da29a11' 
+    #okx_keys = 'f542196a-e52e-45b0-94dd-57f93da29a11'
     #okx_secret = '3CD5713E0466FBF591C50972DE3FB6D3'
     #okx_password='Dlrudtlr11!1'
-    #okx_keys = 'd8d10ac3-2890-4bb9-95f0-70f857dc38e3' 
+    #okx_keys = 'd8d10ac3-2890-4bb9-95f0-70f857dc38e3'
     #okx_secret = '7080F1F233F77A081F735E8C0E6F1FF3'
     #okx_password='Lej1321428!'
 
 
-async def get_redis_connection():
+async def get_redis_connection() -> aioredis.Redis:
     if REDIS_PASSWORD:
-        return aioredis.from_url('redis://localhost', encoding='utf-8', decode_responses=True,password=REDIS_PASSWORD)
+        return await aioredis.from_url('redis://localhost', encoding='utf-8', decode_responses=True,password=REDIS_PASSWORD)
     else:
-        return aioredis.from_url('redis://localhost', encoding='utf-8', decode_responses=True)
+        return await aioredis.from_url('redis://localhost', encoding='utf-8', decode_responses=True)
 
 #================================================================================================
 # GET INSTANCE
 #================================================================================================
 
-async def get_exchange_instance(exchange_name, user_id):
+async def get_exchange_instance(exchange_name: str, user_id: int | str) -> Any | None:
     exchange_name = str(exchange_name).lower()
     try:
         if exchange_name == 'binance':
@@ -76,7 +93,7 @@ async def get_exchange_instance(exchange_name, user_id):
     #finally:
     #    await exchange_instance.close()
 
-async def get_upbit_instance(user_id):
+async def get_upbit_instance(user_id: int | str) -> Any | None:
     redis = await get_redis_connection()
     try:
         #print(f"Getting upbit instance for {user_id}")
@@ -109,7 +126,7 @@ async def get_upbit_instance(user_id):
     finally:
         await redis.close()
         
-async def get_okx_instance(user_id):
+async def get_okx_instance(user_id: int | str) -> Any | None:
     redis = await get_redis_connection()
     try:
         #print(f"Getting okx instance for {user_id}")
@@ -150,7 +167,7 @@ async def get_okx_instance(user_id):
     finally:
         await redis.close()
 
-async def get_okx_spot_instance(user_id):
+async def get_okx_spot_instance(user_id: int | str) -> Any:
     global user_keys
     user_id = int(user_id)
     if user_id not in user_keys or 'api_key' not in user_keys[user_id]:
@@ -165,7 +182,7 @@ async def get_okx_spot_instance(user_id):
         }
     })
 
-async def get_binance_instance(user_id):
+async def get_binance_instance(user_id: int | str) -> Any:
     global user_keys
     if user_id == 999999999 or user_id == 'admin':
         return ccxtpro.binance({
@@ -188,7 +205,7 @@ async def get_binance_instance(user_id):
             }
         })
 
-async def get_binance_spot_instance(user_id):
+async def get_binance_spot_instance(user_id: int | str) -> Any:
     global user_keys
     if user_id == 999999999 or user_id == 'admin':
         return ccxtpro.binance({
@@ -212,7 +229,7 @@ async def get_binance_spot_instance(user_id):
         })
 
     
-async def get_bitget_instance(user_id):
+async def get_bitget_instance(user_id: int | str) -> Any:
     global user_keys
     if user_id == 999999999 or  user_id == 'admin':
         return ccxtpro.bitget({
@@ -241,7 +258,7 @@ async def get_bitget_instance(user_id):
             
         
     
-async def get_bitget_spot_instance(user_id):
+async def get_bitget_spot_instance(user_id: int | str) -> Any:
     global user_keys
     if  user_id == 999999999 or user_id == 'admin':
         return ccxtpro.bitget({
@@ -268,9 +285,9 @@ async def get_bitget_spot_instance(user_id):
 
 
 
-async def get_bybit_instance(user_id):
+async def get_bybit_instance(user_id: int | str) -> Any:
     global user_keys
-    if user_id == 'admin' or 999999999:
+    if user_id == 'admin' or user_id == 999999999:
         return ccxtpro.bybit({
             'apiKey': ReadOnlyKeys.bybit_keys,
             'secret': ReadOnlyKeys.bybit_secret,
@@ -293,7 +310,7 @@ async def get_bybit_instance(user_id):
         })
 
 
-async def get_bybit_spot_instance(user_id):
+async def get_bybit_spot_instance(user_id: int | str) -> Any:
     global user_keys
     user_id = int(user_id)
     if user_id not in user_keys or 'api_key' not in user_keys[user_id]:

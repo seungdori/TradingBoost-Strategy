@@ -8,7 +8,7 @@ from datetime import datetime
 import ccxt
 from shared.utils import contracts_to_qty
 from HYPERRSI.src.trading.trading_service import TradingService
-from HYPERRSI.src.utils.redis_helper import prepare_for_redis, parse_from_redis, DUAL_SIDE_SETTINGS_SCHEMA
+from shared.utils.redis_type_converter import prepare_for_redis, parse_from_redis, DUAL_SIDE_SETTINGS_SCHEMA
 from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
 from HYPERRSI.src.api.routes.order import close_position
 from HYPERRSI.src.bot.telegram_message import send_telegram_message

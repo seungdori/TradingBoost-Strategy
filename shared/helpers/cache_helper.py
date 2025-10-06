@@ -5,7 +5,7 @@
 from datetime import datetime
 
 
-def cache_expired(cache_expiry) -> bool:
+def cache_expired(cache_expiry: datetime | None) -> bool:
     """캐시가 만료되었는지 확인
 
     Args:

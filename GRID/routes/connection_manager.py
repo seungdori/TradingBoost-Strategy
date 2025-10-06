@@ -16,10 +16,10 @@ from shared.config import settings
 REDIS_PASSWORD = settings.REDIS_PASSWORD
 
 
-pool = aioredis.ConnectionPool.from_url(
-    settings.REDIS_URL, 
+pool: aioredis.ConnectionPool = aioredis.ConnectionPool.from_url(
+    settings.REDIS_URL,
     max_connections=30,
-    encoding='utf-8', 
+    encoding='utf-8',
     decode_responses=True,
     password=REDIS_PASSWORD
 )
@@ -46,27 +46,27 @@ class RedisMessageManager:
                                         decode_responses=True,
                                         )
 
-    async def get_and_clear_user_messages(self, user_id: int):
+    async def get_and_clear_user_messages(self, user_id: int) -> list[str]:
         key = f"user:{user_id}:messages"
         pipe = self.redis.pipeline()
-        
+
         # 메시지 가져오기와 TTL 확인을 파이프라인에 추가
         pipe.lrange(key, 0, -1)
         pipe.ttl(key)
         pipe.delete(key)
-        
+
         # 파이프라인 실행
         results = await pipe.execute()
         messages, ttl = results[0], results[1]
-        
+
         # 메시지가 있고 TTL이 유효한 경우
         if messages and ttl > 0:
             # 키를 다시 생성하고 TTL 설정
             await self.redis.rpush(key, *messages)
             await self.redis.expire(key, ttl)
-        
+
         # Decode messages if they're in bytes
-        decoded_messages = [
+        decoded_messages: list[str] = [
             message.decode('utf-8') if isinstance(message, bytes) else message
             for message in messages
         ]
@@ -79,19 +79,22 @@ class ConnectionManager:
         self.redis_key = "connected_users"  # Redis에서 사용할 키
 
 
-    async def get_user_messages(self, user_id: int):
+    async def get_user_messages(self, user_id: int) -> list[str]:
         key = f"user:{user_id}:messages"
         try:
-            # redis_client가 decode_responses=True로 설정되어 있으므로
-            # 추가 디코딩이 필요 없음
             messages = await redis_client.lrange(key, 0, -1)
-            logging.info(f"🔍 [INFO] Retrieved messages for user {user_id}: {messages}")
-            return messages or []
+            # Decode messages if they're in bytes
+            decoded_messages: list[str] = [
+                message.decode('utf-8') if isinstance(message, bytes) else message
+                for message in messages
+            ]
+            logging.info(f"🔍 [INFO] Retrieved messages for user {user_id}: {decoded_messages}")
+            return decoded_messages or []
         except Exception as e:
             logging.error(f"🚨 [ERROR] Failed to get messages for user {user_id}: {str(e)}")
             return []
 
-    async def add_connected_user(self, user_id: str):
+    async def add_connected_user(self, user_id: int) -> None:
         try:
             # Redis에 사용자 추가
             await redis_client.sadd(self.redis_key, str(user_id))
@@ -99,7 +102,7 @@ class ConnectionManager:
         except Exception as e:
             logging.error(f"🚨 [ERROR] Failed to add user {user_id} to connected users: {str(e)}")
 
-    async def remove_connected_user(self, user_id: str):
+    async def remove_connected_user(self, user_id: int) -> None:
         try:
             # Redis에서 사용자 제거
             await redis_client.srem(self.redis_key, str(user_id))
@@ -116,7 +119,7 @@ class ConnectionManager:
             logging.error(f"🚨 [ERROR] Failed to get connected users: {str(e)}")
             return []
 
-    async def connect(self, websocket: WebSocket, user_id: str):
+    async def connect(self, websocket: WebSocket, user_id: int) -> None:
         try:
             await websocket.accept()
             print('🐻33',user_id)
@@ -174,25 +177,25 @@ class ConnectionManager:
                 "last_seen": None
             }
 
-    async def add_user_message(self, user_id: int, message: str):
+    async def add_user_message(self, user_id: int, message: str) -> None:
         key = f"user:{user_id}:messages"
         try:
             # 메시지 저장 전 로깅
             logging.info(f"📝 [INFO] Adding message for user {user_id}: {message}")
-            
+
             # 파이프라인으로 작업 묶기
             pipe = redis_client.pipeline()
             await pipe.rpush(key, message)
             await pipe.expire(key, 3600)  # 1시간 유효
             await pipe.publish('messages', message)
             await pipe.execute()
-            
+
             logging.info(f"✅ [INFO] Message successfully added for user {user_id}")
         except Exception as e:
             logging.error(f"🚨 [ERROR] Failed to add message for user {user_id}: {str(e)}")
             raise
 
-    async def send_message_to_user(self, user_id: int, message: str):
+    async def send_message_to_user(self, user_id: int, message: str) -> None:
         if user_id in self.active_connections:
             failed_connections = []
             for connection in self.active_connections[user_id]:
@@ -214,7 +217,7 @@ class ConnectionManager:
 
 
 
-    async def disconnect(self, websocket: WebSocket, user_id: int):
+    async def disconnect(self, websocket: WebSocket, user_id: int) -> None:
         try:
             if user_id in self.active_connections:
                 self.active_connections[user_id].remove(websocket)
@@ -230,22 +233,31 @@ class ConnectionManager:
     async def get_user_info(self, user_id: int) -> Optional[Dict[str, Any]]:
         """
         Redis에서 사용자 정보를 조회하는 메서드
-        
+
         Args:
             user_id (int): 조회할 사용자 ID
-            
+
         Returns:
             Optional[Dict[str, Any]]: 사용자 정보 또는 None
         """
         try:
-            
+
             # 예시: Redis에서 사용자 정보 조회 로직
             # 실제 구현에서는 Redis에 저장된 사용자 정보를 확인
             user_key = f"okx:user:{user_id}"
             print(f"🍏🔹😇👆 {user_key}")
-            user_info = await redis_client.hgetall(user_key)
-            print('🍏🔹😇👆',user_info)
-            return user_info if user_info else None
+            user_info_raw = await redis_client.hgetall(user_key)
+            print('🍏🔹😇👆',user_info_raw)
+
+            # Decode bytes to strings if necessary
+            if user_info_raw:
+                user_info: dict[str, Any] = {
+                    k.decode('utf-8') if isinstance(k, bytes) else k:
+                    v.decode('utf-8') if isinstance(v, bytes) else v
+                    for k, v in user_info_raw.items()
+                }
+                return user_info
+            return None
         except Exception:
             traceback.print_exc()
             return None
@@ -253,7 +265,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 @app.websocket("/ws/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: int):
+async def websocket_endpoint(websocket: WebSocket, user_id: int) -> None:
     print('Recivced 🍎',user_id)
     await manager.connect(websocket, user_id)
     try:
@@ -264,15 +276,15 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
     except Exception as e:
         logging.error(f"🚨🚨🚨 [ERROR] WebSocket error: {str(e)}")
     finally:
-        manager.disconnect(websocket, user_id)
+        await manager.disconnect(websocket, user_id)
 
 @app.post("/add/{user_id}")
-async def add_message(user_id: int, message: str):
+async def add_message(user_id: int, message: str) -> dict[str, str]:
     await manager.add_user_message(user_id, message)
     return {"status": "Message added successfully"}
 
 @app.get("/get/{user_id}")
-async def get_messages(user_id: int):
+async def get_messages(user_id: int) -> dict[str, list[str]]:
     messages = await manager.get_user_messages(user_id)
     return {"messages": messages}
 

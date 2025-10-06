@@ -10,6 +10,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 from typing import Literal, Optional
 import os
+from pathlib import Path
+
+# Find project root (where .env file is located)
+_current_file = Path(__file__).resolve()
+_project_root = _current_file.parent.parent.parent  # shared/config/settings.py -> TradingBoost-Strategy/
+_env_file = _project_root / ".env"
 
 
 class Settings(BaseSettings):
@@ -21,7 +27,7 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_env_file),
         env_file_encoding="utf-8",
         case_sensitive=True,
         validate_assignment=True,
@@ -76,8 +82,13 @@ class Settings(BaseSettings):
         if self.DATABASE_URL:
             return self.DATABASE_URL
 
-        if all([self.DB_USER, self.DB_PASSWORD, self.DB_HOST, self.DB_NAME]):
-            return f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+        # Check if we have minimum required DB components (password is optional for local)
+        if self.DB_USER and self.DB_HOST and self.DB_NAME:
+            if self.DB_PASSWORD:
+                return f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+            else:
+                # No password (for local PostgreSQL with trust authentication)
+                return f"postgresql+asyncpg://{self.DB_USER}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
 
         # Development fallback
         if self.ENVIRONMENT == "development":

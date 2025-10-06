@@ -1,0 +1,672 @@
+shared/indicators/_atr.py: note: In function "calc_atr":
+shared/indicators/_atr.py:37:17: error: No overload variant of "__setitem__" of
+"list" matches argument types "int", "float"  [call-overload]
+                    atr_list[i] = tr_list[i]
+                    ^~~~~~~~~~~
+shared/indicators/_atr.py:37:17: note: Possible overload variants:
+shared/indicators/_atr.py:37:17: note:     def __setitem__(self, SupportsIndex, None, /) -> None
+shared/indicators/_atr.py:37:17: note:     def __setitem__(self, slice[Any, Any, Any], Iterable[None], /) -> None
+shared/indicators/_atr.py:39:17: error: No overload variant of "__setitem__" of
+"list" matches argument types "int", "float"  [call-overload]
+                    atr_list[i] = sum(tr_list[:i+1]) / (i+1)
+                    ^~~~~~~~~~~
+shared/indicators/_atr.py:39:17: note: Possible overload variants:
+shared/indicators/_atr.py:39:17: note:     def __setitem__(self, SupportsIndex, None, /) -> None
+shared/indicators/_atr.py:39:17: note:     def __setitem__(self, slice[Any, Any, Any], Iterable[None], /) -> None
+shared/indicators/_moving_averages.py: note: In function "calc_sma":
+shared/indicators/_moving_averages.py:7:1: error: Function is missing a return
+type annotation  [no-untyped-def]
+    def calc_sma(series, length: int):
+    ^
+shared/indicators/_moving_averages.py:7:1: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+    def calc_sma(series, length: int):
+    ^
+shared/indicators/_moving_averages.py: note: In function "calc_jma":
+shared/indicators/_moving_averages.py:174:13: error: No overload variant of
+"__setitem__" of "list" matches argument types "int", "float"  [call-overload]
+                out[i] = jma[i]
+                ^~~~~~
+shared/indicators/_moving_averages.py:174:13: note: Possible overload variants:
+shared/indicators/_moving_averages.py:174:13: note:     def __setitem__(self, SupportsIndex, None, /) -> None
+shared/indicators/_moving_averages.py:174:13: note:     def __setitem__(self, slice[Any, Any, Any], Iterable[None], /) -> None
+shared/utils/time_helpers.py:9:1: error: Library stubs not installed for "pytz"
+ [import-untyped]
+    import pytz
+    ^
+shared/utils/time_helpers.py:9:1: note: Hint: "python3 -m pip install types-pytz"
+shared/utils/time_helpers.py:9:1: note: (or run "mypy --install-types" to install all missing stub packages)
+shared/utils/time_helpers.py:9:1: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports
+shared/utils/time_helpers.py: note: In function "calculate_current_timeframe_start":
+shared/utils/time_helpers.py:80:9: error: Statement is unreachable 
+[unreachable]
+            current_timeframe_start = now.replace(second=0, microsecond=0)
+            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+shared/utils/time_helpers.py: note: In function "timeframe_to_seconds":
+shared/utils/time_helpers.py:203:9: error: Statement is unreachable 
+[unreachable]
+            return 900  # 기본값: 15분
+            ^~~~~~~~~~
+shared/utils/time_helpers.py: note: In function "timeframe_to_timedelta":
+shared/utils/time_helpers.py:231:9: error: Statement is unreachable 
+[unreachable]
+            return timedelta(minutes=15)
+            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+shared/utils/time_helpers.py: note: In function "get_timeframe_boundaries":
+shared/utils/time_helpers.py:272:9: error: Statement is unreachable 
+[unreachable]
+            start = dt.replace(second=0, microsecond=0)
+            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+shared/helpers/cache_helper.py: note: In function "cache_expired":
+shared/helpers/cache_helper.py:8:1: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+    def cache_expired(cache_expiry) -> bool:
+    ^
+shared/utils/redis_utils.py: note: In function "set_redis_data":
+shared/utils/redis_utils.py:12:1: error: Function is missing a type annotation
+for one or more arguments  [no-untyped-def]
+    async def set_redis_data(redis_client, key: str, data: Any, expiry: in...
+    ^
+shared/utils/redis_utils.py: note: In function "get_redis_data":
+shared/utils/redis_utils.py:25:1: error: Function is missing a type annotation
+for one or more arguments  [no-untyped-def]
+    async def get_redis_data(redis_client, key: str) -> Optional[Any]:
+    ^
+shared/utils/redis_utils.py: note: In function "delete_redis_data":
+shared/utils/redis_utils.py:40:1: error: Function is missing a type annotation
+for one or more arguments  [no-untyped-def]
+    async def delete_redis_data(redis_client, key: str) -> bool:
+    ^
+shared/utils/redis_utils.py:52:5: error: Returning Any from function declared
+to return "bool"  [no-any-return]
+        return result > 0
+        ^~~~~~~~~~~~~~~~~
+shared/utils/redis_utils.py: note: In function "exists_redis_key":
+shared/utils/redis_utils.py:55:1: error: Function is missing a type annotation
+for one or more arguments  [no-untyped-def]
+    async def exists_redis_key(redis_client, key: str) -> bool:
+    ^
+shared/utils/redis_utils.py:66:5: error: Returning Any from function declared
+to return "bool"  [no-any-return]
+        return await redis_client.exists(key) > 0
+        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+shared/utils/redis_utils.py: note: In function "get_user_settings":
+shared/utils/redis_utils.py:73:1: error: Function is missing a type annotation
+for one or more arguments  [no-untyped-def]
+    async def get_user_settings(redis_client, user_id: str) -> Dict:
+    ^
+shared/utils/redis_utils.py:89:13: error: Returning Any from function declared
+to return "dict[Any, Any]"  [no-any-return]
+                return json.loads(settings_data)
+                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+shared/utils/redis_utils.py: note: In function "set_user_settings":
+shared/utils/redis_utils.py:108:1: error: Function is missing a type annotation
+for one or more arguments  [no-untyped-def]
+    async def set_user_settings(redis_client, user_id: str, settings: Dict...
+    ^
+shared/utils/redis_utils.py: note: In function "add_recent_symbol":
+shared/utils/redis_utils.py:134:1: error: Function is missing a type annotation
+for one or more arguments  [no-untyped-def]
+    async def add_recent_symbol(redis_client, user_id: str, symbol: str, m...
+    ^
+shared/utils/redis_utils.py: note: In function "get_recent_symbols":
+shared/utils/redis_utils.py:168:1: error: Function is missing a type annotation
+for one or more arguments  [no-untyped-def]
+    async def get_recent_symbols(redis_client, user_id: str, default_symbo...
+    ^
+shared/utils/redis_utils.py:168:87: error: Incompatible default for argument
+"default_symbols" (default has type "None", argument has type "list[str]") 
+[assignment]
+    ...client, user_id: str, default_symbols: List[str] = None) -> List[str]:
+                                                          ^~~~
+shared/utils/redis_utils.py:168:87: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+shared/utils/redis_utils.py:168:87: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+shared/utils/redis_utils.py:185:13: error: Returning Any from function declared
+to return "list[str]"  [no-any-return]
+                return json.loads(recent_symbols_data)
+                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+shared/utils/redis_utils.py: note: In function "get_position":
+shared/utils/redis_utils.py:199:1: error: Function is missing a type annotation
+for one or more arguments  [no-untyped-def]
+    async def get_position(redis_client, user_id: str, symbol: str, side: ...
+    ^
+shared/utils/redis_utils.py:199:77: error: Incompatible default for argument
+"side" (default has type "None", argument has type "str")  [assignment]
+    ...s_client, user_id: str, symbol: str, side: str = None) -> Optional[Dic...
+                                                        ^~~~
+shared/utils/redis_utils.py:199:77: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+shared/utils/redis_utils.py:199:77: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+shared/utils/redis_utils.py: note: In function "set_position":
+shared/utils/redis_utils.py:225:1: error: Function is missing a type annotation
+for one or more arguments  [no-untyped-def]
+    async def set_position(redis_client, user_id: str, symbol: str, positi...
+    ^
+shared/utils/redis_utils.py:225:98: error: Incompatible default for argument
+"side" (default has type "None", argument has type "str")  [assignment]
+    ...r, symbol: str, position_data: Dict, side: str = None, expiry: int = 3...
+                                                        ^~~~
+shared/utils/redis_utils.py:225:98: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+shared/utils/redis_utils.py:225:98: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+shared/utils/redis_utils.py: note: In function "delete_position":
+shared/utils/redis_utils.py:253:1: error: Function is missing a type annotation
+for one or more arguments  [no-untyped-def]
+    async def delete_position(redis_client, user_id: str, symbol: str, sid...
+    ^
+shared/utils/redis_utils.py:253:80: error: Incompatible default for argument
+"side" (default has type "None", argument has type "str")  [assignment]
+    ...on(redis_client, user_id: str, symbol: str, side: str = None) -> bool:
+                                                               ^~~~
+shared/utils/redis_utils.py:253:80: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+shared/utils/redis_utils.py:253:80: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+shared/utils/redis_utils.py:273:9: error: Returning Any from function declared
+to return "bool"  [no-any-return]
+            return result > 0
+            ^~~~~~~~~~~~~~~~~
+shared/logging/specialized_loggers.py: note: In function "get_user_order_logger":
+shared/logging/specialized_loggers.py:93:23: error: Incompatible types in
+assignment (expression has type "int", variable has type "str")  [assignment]
+                user_id = int(user_id)
+                          ^~~~~~~~~~~~
+shared/logging/specialized_loggers.py:96:23: error: Incompatible types in
+assignment (expression has type "int", variable has type "str")  [assignment]
+                user_id = 0
+                          ^
+shared/logging/specialized_loggers.py: note: In function "log_order":
+shared/logging/specialized_loggers.py:137:1: error: Function is missing a
+return type annotation  [no-untyped-def]
+    def log_order(
+    ^
+shared/logging/specialized_loggers.py:137:1: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+    def log_order(
+    ^
+shared/logging/specialized_loggers.py:142:20: error: Incompatible default for
+argument "price" (default has type "None", argument has type "float") 
+[assignment]
+        price: float = None,
+                       ^~~~
+shared/logging/specialized_loggers.py:142:20: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+shared/logging/specialized_loggers.py:142:20: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+shared/logging/specialized_loggers.py:143:23: error: Incompatible default for
+argument "quantity" (default has type "None", argument has type "float") 
+[assignment]
+        quantity: float = None,
+                          ^~~~
+shared/logging/specialized_loggers.py:143:23: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+shared/logging/specialized_loggers.py:143:23: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+shared/logging/specialized_loggers.py:144:18: error: Incompatible default for
+argument "level" (default has type "None", argument has type "int") 
+[assignment]
+        level: int = None,
+                     ^~~~
+shared/logging/specialized_loggers.py:144:18: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+shared/logging/specialized_loggers.py:144:18: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+shared/logging/specialized_loggers.py:163:23: error: Incompatible types in
+assignment (expression has type "int", variable has type "str")  [assignment]
+                user_id = int(user_id)
+                          ^~~~~~~~~~~~
+shared/logging/specialized_loggers.py:165:23: error: Incompatible types in
+assignment (expression has type "int", variable has type "str")  [assignment]
+                user_id = 0
+                          ^
+shared/logging/specialized_loggers.py: note: In member "format" of class "AlertJSONFormatter":
+shared/logging/specialized_loggers.py:238:37: error: Incompatible types in
+assignment (expression has type "dict[str, str | Any]", target has type "str") 
+[assignment]
+                log_data['exception'] = {
+                                        ^
+shared/logging/specialized_loggers.py:239:25: error: Item "None" of
+"type[BaseException] | None" has no attribute "__name__"  [union-attr]
+                    'type': exc_type.__name__,
+                            ^~~~~~~~~~~~~~~~~
+shared/logging/specialized_loggers.py: note: In function "alert_log":
+shared/logging/specialized_loggers.py:277:1: error: Function is missing a
+return type annotation  [no-untyped-def]
+    def alert_log(
+    ^
+shared/logging/specialized_loggers.py:277:1: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+    def alert_log(
+    ^
+shared/logging/specialized_loggers.py:282:28: error: Incompatible default for
+argument "exception" (default has type "None", argument has type "Exception") 
+[assignment]
+        exception: Exception = None,
+                               ^~~~
+shared/logging/specialized_loggers.py:282:28: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+shared/logging/specialized_loggers.py:282:28: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+shared/logging/specialized_loggers.py:299:23: error: Incompatible types in
+assignment (expression has type "int", variable has type "str")  [assignment]
+                user_id = int(user_id)
+                          ^~~~~~~~~~~~
+shared/logging/specialized_loggers.py:301:23: error: Incompatible types in
+assignment (expression has type "int", variable has type "str")  [assignment]
+                user_id = 0
+                          ^
+shared/logging/specialized_loggers.py: note: In member "format" of class "DetailedJsonFormatter":
+shared/logging/specialized_loggers.py:376:25: error: Item "None" of
+"type[BaseException] | None" has no attribute "__name__"  [union-attr]
+                    'type': exc_type.__name__,
+                            ^~~~~~~~~~~~~~~~~
+shared/logging/specialized_loggers.py: note: In function "setup_debug_logger":
+shared/logging/specialized_loggers.py:384:1: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+    def setup_debug_logger(name='debug_logger') -> logging.Logger:
+    ^
+shared/logging/specialized_loggers.py: note: In function "log_debug":
+shared/logging/specialized_loggers.py:421:1: error: Function is missing a
+return type annotation  [no-untyped-def]
+    def log_debug(
+    ^
+shared/logging/specialized_loggers.py:421:1: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+    def log_debug(
+    ^
+shared/logging/specialized_loggers.py:426:28: error: Incompatible default for
+argument "exception" (default has type "None", argument has type "Exception") 
+[assignment]
+        exception: Exception = None,
+                               ^~~~
+shared/logging/specialized_loggers.py:426:28: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+shared/logging/specialized_loggers.py:426:28: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+shared/logging/specialized_loggers.py: note: In function "log_bot_start":
+shared/logging/specialized_loggers.py:483:1: error: Function is missing a
+return type annotation  [no-untyped-def]
+    def log_bot_start(user_id: str, symbol: str, config: dict = None):
+    ^
+shared/logging/specialized_loggers.py:483:61: error: Incompatible default for
+argument "config" (default has type "None", argument has type "dict[Any, Any]") 
+[assignment]
+    def log_bot_start(user_id: str, symbol: str, config: dict = None):
+                                                                ^~~~
+shared/logging/specialized_loggers.py:483:61: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+shared/logging/specialized_loggers.py:483:61: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+shared/logging/specialized_loggers.py:513:11: error: Argument 5 to "alert_log"
+has incompatible type "**dict[str, Collection[Any]]"; expected "Exception" 
+[arg-type]
+            **additional_data
+              ^~~~~~~~~~~~~~~
+shared/logging/specialized_loggers.py: note: In function "log_bot_stop":
+shared/logging/specialized_loggers.py:517:1: error: Function is missing a
+return type annotation  [no-untyped-def]
+    def log_bot_stop(user_id: str, symbol: str, reason: str = None):
+    ^
+shared/logging/specialized_loggers.py:517:59: error: Incompatible default for
+argument "reason" (default has type "None", argument has type "str") 
+[assignment]
+    def log_bot_stop(user_id: str, symbol: str, reason: str = None):
+                                                              ^~~~
+shared/logging/specialized_loggers.py:517:59: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+shared/logging/specialized_loggers.py:517:59: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+shared/logging/specialized_loggers.py: note: In function "log_bot_error":
+shared/logging/specialized_loggers.py:533:1: error: Function is missing a
+return type annotation  [no-untyped-def]
+    def log_bot_error(user_id: str, symbol: str, error_message: str, excep...
+    ^
+shared/logging/specialized_loggers.py:533:1: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+    def log_bot_error(user_id: str, symbol: str, error_message: str, excep...
+    ^
+shared/logging/specialized_loggers.py:533:89: error: Incompatible default for
+argument "exception" (default has type "None", argument has type "Exception") 
+[assignment]
+    ... str, error_message: str, exception: Exception = None, **additional_da...
+                                                        ^~~~
+shared/logging/specialized_loggers.py:533:89: note: PEP 484 prohibits implicit Optional. Accordingly, mypy has changed its default to no_implicit_optional=True
+shared/logging/specialized_loggers.py:533:89: note: Use https://github.com/hauntsaninja/no_implicit_optional to automatically upgrade your codebase
+shared/config/logging.py: note: In function "configure_root_logger":
+shared/config/logging.py:112:1: error: Function is missing a return type
+annotation  [no-untyped-def]
+    def configure_root_logger(
+    ^
+shared/config/logging.py: note: In function "add_file_handler":
+shared/config/logging.py:192:1: error: Function is missing a return type
+annotation  [no-untyped-def]
+    def add_file_handler(
+    ^
+shared/dtos/user.py: note: In member "from_user_dto" of class "UserWithoutPasswordDto":
+shared/dtos/user.py:33:5: error: Function is missing a return type annotation 
+[no-untyped-def]
+        def from_user_dto(cls, user_dto: dict):
+        ^
+shared/dtos/trading.py: note: In member "validate_tp2_greater_than_tp1" of class "TradingDataDto":
+shared/dtos/trading.py:132:5: error: Function is missing a type annotation for
+one or more arguments  [no-untyped-def]
+        def validate_tp2_greater_than_tp1(cls, v: float, info) -> float:
+        ^
+shared/dtos/trading.py: note: In member "validate_tp3_greater_than_tp2" of class "TradingDataDto":
+shared/dtos/trading.py:140:5: error: Function is missing a type annotation for
+one or more arguments  [no-untyped-def]
+        def validate_tp3_greater_than_tp2(cls, v: float, info) -> float:
+        ^
+shared/dtos/exchange.py: note: In class "WalletDto":
+shared/dtos/exchange.py:50:28: error: Unexpected keyword argument "example" for
+"Field"; did you mean "examples"?  [call-arg]
+        total_balance: float = Field(example=[0])
+                               ^~~~~~~~~~~~~~~~~~
+.venv/lib/python3.12/site-packages/pydantic/fields.py:673:1: note: "Field" defined here
+shared/utils/async_helpers.py: note: In function "retry_async":
+shared/utils/async_helpers.py:11:1: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+    async def retry_async(
+    ^
+shared/utils/async_helpers.py:53:13: error: Returning Any from function
+declared to return "T"  [no-any-return]
+                return await func(*args, **kwargs)
+                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+shared/utils/async_helpers.py:53:20: error: Incompatible types in "await"
+(actual type "T", expected type "Awaitable[Any]")  [misc]
+                return await func(*args, **kwargs)
+                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+shared/utils/async_helpers.py:54:16: error: Exception type must be derived from
+BaseException (or be a tuple of exception classes)  [misc]
+            except exceptions as e:
+                   ^~~~~~~~~~
+shared/utils/async_helpers.py:71:5: error: Exception must be derived from
+BaseException  [misc]
+        raise last_exception
+        ^~~~~~~~~~~~~~~~~~~~
+shared/utils/async_helpers.py: note: In function "retry_decorator":
+shared/utils/async_helpers.py:74:1: error: Function is missing a return type
+annotation  [no-untyped-def]
+    def retry_decorator(
+    ^
+shared/indicators/_rsi.py: note: In function "calc_rsi":
+shared/indicators/_rsi.py:44:9: error: Returning Any from function declared to
+return "ndarray[Any, Any]"  [no-any-return]
+            return rsi
+            ^~~~~~~~~~
+shared/indicators/_bollinger.py: note: In function "calc_stddev":
+shared/indicators/_bollinger.py:11:14: error: Need type annotation for "window"
+ [var-annotated]
+        window = deque()
+                 ^~~~~~~
+shared/notifications/telegram.py: note: In function "initialize_telegram":
+shared/notifications/telegram.py:194:1: error: Function is missing a return
+type annotation  [no-untyped-def]
+    def initialize_telegram(bot_token: str, default_chat_id: Optional[str]...
+    ^
+shared/notifications/telegram.py: note: In function "get_telegram_id":
+shared/notifications/telegram.py:289:1: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+    async def get_telegram_id(
+    ^
+shared/notifications/telegram.py: note: In function "enqueue_telegram_message":
+shared/notifications/telegram.py:347:1: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+    async def enqueue_telegram_message(
+    ^
+shared/notifications/telegram.py: note: In function "process_telegram_messages":
+shared/notifications/telegram.py:395:1: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+    async def process_telegram_messages(
+    ^
+shared/notifications/telegram.py: note: In function "send_telegram_message":
+shared/notifications/telegram.py:457:1: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+    async def send_telegram_message(
+    ^
+shared/indicators/__init__.py:20:1: error: Module
+"shared.indicators._moving_averages" has no attribute "calc_rma_improved" 
+[attr-defined]
+    from ._moving_averages import (
+    ^
+shared/validation/sanitizers.py: note: In function "sanitize_log_data":
+shared/validation/sanitizers.py:326:9: error: Statement is unreachable 
+[unreachable]
+            return data
+            ^~~~~~~~~~~
+shared/validation/sanitizers.py:340:30: error: Incompatible types in assignment
+(expression has type "dict[str, Any]", target has type "str")  [assignment]
+                sanitized[key] = sanitize_log_data(value, redact_value)
+                                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+shared/validation/sanitizers.py:343:30: error: Incompatible types in assignment
+(expression has type "list[dict[str, Any] | Any]", target has type "str") 
+[assignment]
+                sanitized[key] = [
+                                 ^
+shared/logging/json_logger.py: note: In function "setup_json_logger":
+shared/logging/json_logger.py:149:21: error: Incompatible types in assignment
+(expression has type "Formatter", variable has type "JSONFormatter") 
+[assignment]
+            formatter = logging.Formatter(
+                        ^
+shared/logging/json_logger.py: note: In function "log_with_context":
+shared/logging/json_logger.py:194:1: error: Function is missing a return type
+annotation  [no-untyped-def]
+    def log_with_context(
+    ^
+shared/logging/json_logger.py: note: In function "log_error_with_context":
+shared/logging/json_logger.py:220:1: error: Function is missing a return type
+annotation  [no-untyped-def]
+    def log_error_with_context(
+    ^
+shared/errors/middleware.py: note: In member "dispatch" of class "RequestIDMiddleware":
+shared/errors/middleware.py:128:13: error: Returning Any from function declared
+to return "Response"  [no-any-return]
+                return response
+                ^~~~~~~~~~~~~~~
+shared/database/transactions.py: note: In function "transactional":
+shared/database/transactions.py:68:23: error: No overload variant of "execute"
+of "AsyncSession" matches argument type "str"  [call-overload]
+                    await session.execute(f"SET TRANSACTION ISOLATION LEVE...
+                          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~...
+shared/database/transactions.py:68:23: note: Possible overload variants:
+shared/database/transactions.py:68:23: note:     def [_T: Any] execute(self, statement: TypedReturnsRows[_T], params: Sequence[Mapping[str, Any]] | Mapping[str, Any] | None = ..., *, execution_options: _OrmKnownExecutionOptions | Mapping[str, Any] = ..., bind_arguments: dict[str, Any] | None = ..., _parent_execute_state: Any | None = ..., _add_event: Any | None = ...) -> Coroutine[Any, Any, Result[_T]]
+shared/database/transactions.py:68:23: note:     def execute(self, statement: UpdateBase, params: Sequence[Mapping[str, Any]] | Mapping[str, Any] | None = ..., *, execution_options: _OrmKnownExecutionOptions | Mapping[str, Any] = ..., bind_arguments: dict[str, Any] | None = ..., _parent_execute_state: Any | None = ..., _add_event: Any | None = ...) -> Coroutine[Any, Any, CursorResult[Any]]
+shared/database/transactions.py:68:23: note:     def execute(self, statement: Executable, params: Sequence[Mapping[str, Any]] | Mapping[str, Any] | None = ..., *, execution_options: _OrmKnownExecutionOptions | Mapping[str, Any] = ..., bind_arguments: dict[str, Any] | None = ..., _parent_execute_state: Any | None = ..., _add_event: Any | None = ...) -> Coroutine[Any, Any, Result[Any]]
+shared/database/transactions.py:101:17: error: Item "None" of
+"BaseException | None" has no attribute "pgcode"  [union-attr]
+                    e.orig.pgcode == '40P01'
+                    ^~~~~~~~~~~~~
+shared/database/transactions.py:122:39: error: Item "None" of
+"BaseException | None" has no attribute "pgcode"  [union-attr]
+                            "error_code": e.orig.pgcode if hasattr(e.orig,...
+                                          ^~~~~~~~~~~~~
+shared/database/pool_monitor.py: note: In member "__init__" of class "PoolMonitor":
+shared/database/pool_monitor.py:43:5: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+        def __init__(self, engine, leak_threshold: float = 0.8):
+        ^
+shared/database/pool_monitor.py: note: In member "warm_up_pool" of class "PoolMonitor":
+shared/database/pool_monitor.py:130:5: error: Function is missing a return type
+annotation  [no-untyped-def]
+        async def warm_up_pool(self, connections: int | None = None):
+        ^
+shared/database/session.py: note: In member "get_engine" of class "DatabaseConfig":
+shared/database/session.py:48:38: error: Non-overlapping equality check (left
+operand type: "Literal['development', 'staging', 'production']", right operand
+type: "Literal['test']")  [comparison-overlap]
+                pool_class = NullPool if settings.ENVIRONMENT == "test" el...
+                                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+shared/database/session.py: note: In member "get_monitor" of class "DatabaseConfig":
+shared/database/session.py:134:16: error: Incompatible return value type (got
+"PoolMonitor | None", expected "PoolMonitor")  [return-value]
+            return cls._monitor
+                   ^~~~~~~~~~~~
+shared/database/session.py: note: In member "warm_up_pool" of class "DatabaseConfig":
+shared/database/session.py:164:5: error: Function is missing a return type
+annotation  [no-untyped-def]
+        async def warm_up_pool(cls, connections: int | None = None):
+        ^
+shared/database/redis.py: note: In member "__new__" of class "RedisConnectionManager":
+shared/database/redis.py:54:5: error: Function is missing a return type
+annotation  [no-untyped-def]
+        def __new__(cls, host: str = "localhost", port: int = 6379, db: in...
+        ^
+shared/database/redis.py:60:17: error: Cannot determine type of "_initialized" 
+[has-type]
+                    cls._instance._initialized = False
+                    ^~~~~~~~~~~~~~~~~~~~~~~~~~
+shared/database/redis.py: note: In member "__init__" of class "RedisConnectionManager":
+shared/database/redis.py:75:12: error: Cannot determine type of "_initialized" 
+[has-type]
+            if self._initialized:
+               ^~~~~~~~~~~~~~~~~
+shared/database/redis.py: note: In member "_create_async_pool" of class "RedisConnectionManager":
+shared/database/redis.py:142:16: error: Need type annotation for "pool" 
+[var-annotated]
+            pool = aioredis.ConnectionPool.from_url(
+                   ^
+shared/database/redis.py: note: In member "get_monitor" of class "RedisConnectionPool":
+shared/database/redis.py:333:16: error: Incompatible return value type (got
+"RedisPoolMonitor | None", expected "RedisPoolMonitor")  [return-value]
+            return cls._monitor
+                   ^~~~~~~~~~~~
+shared/utils/trading_helpers.py: note: In function "get_actual_order_type":
+shared/utils/trading_helpers.py:32:9: error: Statement is unreachable 
+[unreachable]
+            logger.warning(f"get_actual_order_type: order_data가 dict가 아님: ...
+            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~...
+shared/utils/trading_helpers.py:41:9: error: Returning Any from function
+declared to return "str"  [no-any-return]
+            return order_type
+            ^~~~~~~~~~~~~~~~~
+shared/utils/trading_helpers.py:49:17: error: Returning Any from function
+declared to return "str"  [no-any-return]
+                    return order_name
+                    ^~~~~~~~~~~~~~~~~
+shared/utils/trading_helpers.py: note: In function "parse_order_info":
+shared/utils/trading_helpers.py:140:9: error: Statement is unreachable 
+[unreachable]
+            logger.warning(f"parse_order_info: order_data가 dict가 아님: {type...
+            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~...
+shared/utils/trading_helpers.py: note: In function "get_perpetual_instruments":
+shared/utils/trading_helpers.py:230:9: error: Module "shared.database.redis"
+has no attribute "get_redis_client"  [attr-defined]
+            from shared.database.redis import get_redis_client
+            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+shared/utils/trading_helpers.py:237:13: error: Returning Any from function
+declared to return "list[dict[Any, Any]] | None"  [no-any-return]
+                return cached_data
+                ^~~~~~~~~~~~~~~~~~
+shared/utils/trading_helpers.py:251:13: error: Returning Any from function
+declared to return "list[dict[Any, Any]] | None"  [no-any-return]
+                return data['data']
+                ^~~~~~~~~~~~~~~~~~~
+shared/utils/trading_helpers.py: note: In function "round_to_qty":
+shared/utils/trading_helpers.py:312:5: error: Returning Any from function
+declared to return "int"  [no-any-return]
+        return rounded_contracts
+        ^~~~~~~~~~~~~~~~~~~~~~~~
+shared/utils/trading_helpers.py: note: In function "get_contract_size":
+shared/utils/trading_helpers.py:373:1: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+    async def get_contract_size(symbol: str, redis_client=None) -> float:
+    ^
+shared/utils/trading_helpers.py:386:13: error: Module "shared.database.redis"
+has no attribute "get_redis_client"  [attr-defined]
+                from shared.database.redis import get_redis_client
+                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+shared/utils/trading_helpers.py:408:9: error: Returning Any from function
+declared to return "float"  [no-any-return]
+            return contract_size
+            ^~~~~~~~~~~~~~~~~~~~
+shared/utils/trading_helpers.py: note: In function "get_tick_size_from_redis":
+shared/utils/trading_helpers.py:415:1: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+    async def get_tick_size_from_redis(symbol: str, redis_client=None) -> ...
+    ^
+shared/utils/trading_helpers.py:428:13: error: Module "shared.database.redis"
+has no attribute "get_redis_client"  [attr-defined]
+                from shared.database.redis import get_redis_client
+                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+shared/utils/trading_helpers.py: note: In function "get_minimum_qty":
+shared/utils/trading_helpers.py:449:1: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+    async def get_minimum_qty(symbol: str, redis_client=None) -> float:
+    ^
+shared/utils/trading_helpers.py:462:13: error: Module "shared.database.redis"
+has no attribute "get_redis_client"  [attr-defined]
+                from shared.database.redis import get_redis_client
+                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+shared/utils/trading_helpers.py: note: In function "round_to_tick_size":
+shared/utils/trading_helpers.py:508:1: error: Function is missing a type
+annotation for one or more arguments  [no-untyped-def]
+    async def round_to_tick_size(
+    ^
+shared/utils/trading_helpers.py:537:13: error: Incompatible types in assignment
+(expression has type "Decimal", variable has type "float")  [assignment]
+        value = Decimal(str(value))  # 부동소수점 오차 방지
+                ^~~~~~~~~~~~~~~~~~~
+shared/utils/trading_helpers.py:540:21: error: Incompatible types in assignment
+(expression has type "Decimal", variable has type "float | None")  [assignment]
+            tick_size = Decimal(str(tick_size))
+                        ^~~~~~~~~~~~~~~~~~~~~~~
+shared/utils/trading_helpers.py:541:19: error: "float" has no attribute
+"quantize"  [attr-defined]
+            rounded = (value / tick_size).quantize(Decimal("1"), rounding=...
+                      ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+shared/utils/trading_helpers.py:546:22: error: "float" has no attribute
+"quantize"  [attr-defined]
+            return float(value.quantize(Decimal("0.01"), rounding=ROUND_HA...
+                         ^~~~~~~~~~~~~~
+shared/utils/trading_helpers.py:559:15: error: "float" has no attribute
+"quantize"  [attr-defined]
+        rounded = value.quantize(Decimal(decimals), rounding=ROUND_HALF_UP...
+                  ^~~~~~~~~~~~~~
+shared/api/health.py: note: In function "health_check":
+shared/api/health.py:87:20: error: Incompatible return value type (got
+"JSONResponse", expected "dict[str, Any]")  [return-value]
+                return JSONResponse(status_code=status.HTTP_200_OK, conten...
+                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~...
+shared/api/health.py:89:20: error: Incompatible return value type (got
+"JSONResponse", expected "dict[str, Any]")  [return-value]
+                return JSONResponse(status_code=status.HTTP_200_OK, conten...
+                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~...
+shared/api/health.py:91:20: error: Incompatible return value type (got
+"JSONResponse", expected "dict[str, Any]")  [return-value]
+                return JSONResponse(status_code=status.HTTP_503_SERVICE_UN...
+                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~...
+shared/api/health.py:100:16: error: Incompatible return value type (got
+"JSONResponse", expected "dict[str, Any]")  [return-value]
+            return JSONResponse(
+                   ^
+shared/api/health.py: note: In function "database_health":
+shared/api/health.py:143:20: error: Incompatible return value type (got
+"JSONResponse", expected "dict[str, Any]")  [return-value]
+                return JSONResponse(status_code=status.HTTP_200_OK, conten...
+                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~...
+shared/api/health.py:145:20: error: Incompatible return value type (got
+"JSONResponse", expected "dict[str, Any]")  [return-value]
+                return JSONResponse(status_code=status.HTTP_200_OK, conten...
+                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~...
+shared/api/health.py:147:20: error: Incompatible return value type (got
+"JSONResponse", expected "dict[str, Any]")  [return-value]
+                return JSONResponse(status_code=status.HTTP_503_SERVICE_UN...
+                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~...
+shared/api/health.py:156:16: error: Incompatible return value type (got
+"JSONResponse", expected "dict[str, Any]")  [return-value]
+            return JSONResponse(
+                   ^
+shared/api/health.py: note: In function "redis_health":
+shared/api/health.py:200:20: error: Incompatible return value type (got
+"JSONResponse", expected "dict[str, Any]")  [return-value]
+                return JSONResponse(status_code=status.HTTP_200_OK, conten...
+                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~...
+shared/api/health.py:202:20: error: Incompatible return value type (got
+"JSONResponse", expected "dict[str, Any]")  [return-value]
+                return JSONResponse(status_code=status.HTTP_200_OK, conten...
+                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~...
+shared/api/health.py:204:20: error: Incompatible return value type (got
+"JSONResponse", expected "dict[str, Any]")  [return-value]
+                return JSONResponse(status_code=status.HTTP_503_SERVICE_UN...
+                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~...
+shared/api/health.py:213:16: error: Incompatible return value type (got
+"JSONResponse", expected "dict[str, Any]")  [return-value]
+            return JSONResponse(
+                   ^
+shared/api/health.py: note: In function "readiness_check":
+shared/api/health.py:247:20: error: Incompatible return value type (got
+"JSONResponse", expected "dict[str, str]")  [return-value]
+                return JSONResponse(
+                       ^
+shared/api/health.py:252:20: error: Incompatible return value type (got
+"JSONResponse", expected "dict[str, str]")  [return-value]
+                return JSONResponse(
+                       ^
+shared/api/health.py:259:16: error: Incompatible return value type (got
+"JSONResponse", expected "dict[str, str]")  [return-value]
+            return JSONResponse(
+                   ^
+Found 136 errors in 24 files (checked 65 source files)

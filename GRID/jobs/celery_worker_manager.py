@@ -4,6 +4,7 @@ Grid 트레이딩 Celery 워커 관리자
 """
 import logging
 import asyncio
+from typing import Any
 from GRID.jobs.celery_app import app as celery_app
 from GRID.jobs.celery_tasks import run_grid_trading, cancel_grid_tasks
 from GRID.database.redis_database import get_job_status
@@ -59,7 +60,7 @@ def get_worker_status():
         logger.error(f"Celery 워커 상태 조회 중 오류: {str(e)}")
         return {"active_workers": 0, "error": str(e)}
 
-def stop_grid_trading(user_id: int, exchange_name: str = 'okx'):
+def stop_grid_trading(user_id: int, exchange_name: str = 'okx') -> Any:
     """
     특정 사용자의 Grid 트레이딩 작업 중지
 
@@ -78,7 +79,7 @@ def stop_grid_trading(user_id: int, exchange_name: str = 'okx'):
         logger.error(f"Failed to cancel grid trading: {str(e)}")
         raise
 
-def get_grid_status(user_id: int, exchange_name: str = 'okx'):
+def get_grid_status(user_id: int, exchange_name: str = 'okx') -> dict[str, Any]:
     """
     특정 사용자의 Grid 트레이딩 상태 조회
 

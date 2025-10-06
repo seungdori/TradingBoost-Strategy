@@ -21,21 +21,22 @@ from shared.logging import get_logger
 
 logger = get_logger(__name__)
 
-# SQLite database paths
+# SQLite database paths (in shared/database directory)
+SQLITE_DB_DIR = project_root / "shared" / "database"
 SQLITE_DBS = {
-    "okx": "okx_users.db",
-    "binance": "binance_users.db",
-    "upbit": "upbit_users.db",
-    "bitget": "bitget_users.db",
-    "okx_spot": "okx_spot_users.db",
-    "binance_spot": "binance_spot_users.db",
-    "bitget_spot": "bitget_spot_users.db",
-    "bybit": "bybit_users.db",
-    "bybit_spot": "bybit_spot_users.db",
+    "okx": SQLITE_DB_DIR / "okx_users.db",
+    "binance": SQLITE_DB_DIR / "binance_users.db",
+    "upbit": SQLITE_DB_DIR / "upbit_users.db",
+    "bitget": SQLITE_DB_DIR / "bitget_users.db",
+    "okx_spot": SQLITE_DB_DIR / "okx_spot_users.db",
+    "binance_spot": SQLITE_DB_DIR / "binance_spot_users.db",
+    "bitget_spot": SQLITE_DB_DIR / "bitget_spot_users.db",
+    "bybit": SQLITE_DB_DIR / "bybit_users.db",
+    "bybit_spot": SQLITE_DB_DIR / "bybit_spot_users.db",
 }
 
 
-async def migrate_users_from_sqlite(exchange_name: str, db_path: str):
+async def migrate_users_from_sqlite(exchange_name: str, db_path: Path):
     """
     Migrate users from SQLite to PostgreSQL.
 
@@ -43,7 +44,7 @@ async def migrate_users_from_sqlite(exchange_name: str, db_path: str):
         exchange_name: Exchange identifier
         db_path: Path to SQLite database
     """
-    if not Path(db_path).exists():
+    if not db_path.exists():
         logger.warning(
             f"SQLite database not found for {exchange_name}, skipping"
         )

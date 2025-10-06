@@ -76,7 +76,7 @@ def setup_order_logger() -> logging.Logger:
     return order_logger
 
 
-def get_user_order_logger(user_id: str) -> logging.Logger:
+def get_user_order_logger(user_id: str | int) -> logging.Logger:
     """
     특정 사용자 ID 전용 주문 로거를 설정합니다.
     사용자별로 분리된 로그 파일을 생성합니다.
@@ -89,14 +89,15 @@ def get_user_order_logger(user_id: str) -> logging.Logger:
     """
     try:
         # 파라미터 안전성 검증
+        user_id_int: int
         try:
-            user_id = int(user_id)
+            user_id_int = int(user_id)
         except (ValueError, TypeError):
             logging.warning(f"유효하지 않은 user_id={user_id}, 기본값 0으로 설정합니다.")
-            user_id = 0
+            user_id_int = 0
 
         # 사용자 전용 로거 생성
-        logger_name = f'order_logger_user_{user_id}'
+        logger_name = f'order_logger_user_{user_id_int}'
         user_logger = logging.getLogger(logger_name)
         user_logger.setLevel(logging.INFO)
 
@@ -110,7 +111,7 @@ def get_user_order_logger(user_id: str) -> logging.Logger:
 
         # 파일 핸들러 설정
         user_file_handler = RotatingFileHandler(
-            filename=f'{log_dir}/user_{user_id}_orders.log',
+            filename=f'{log_dir}/user_{user_id_int}_orders.log',
             maxBytes=5*1024*1024,  # 5MB
             backupCount=10,
             encoding='utf-8'
@@ -135,15 +136,15 @@ def get_user_order_logger(user_id: str) -> logging.Logger:
 
 
 def log_order(
-    user_id: str,
+    user_id: str | int,
     symbol: str,
     action_type: str,
     position_side: str,
-    price: float = None,
-    quantity: float = None,
-    level: int = None,
-    **additional_data
-):
+    price: float | None = None,
+    quantity: float | None = None,
+    level: int | None = None,
+    **additional_data: Any
+) -> None:
     """
     트레이딩 주문 정보를 로깅합니다.
 
@@ -159,14 +160,15 @@ def log_order(
     """
     try:
         # 파라미터 안전성 검증
+        user_id_int: int
         try:
-            user_id = int(user_id)
+            user_id_int = int(user_id)
         except (ValueError, TypeError):
-            user_id = 0
+            user_id_int = 0
             additional_data['original_user_id'] = str(user_id)
 
         log_data = {
-            'user_id': user_id,
+            'user_id': user_id_int,
             'symbol': symbol,
             'action_type': action_type,
             'position_side': position_side,
@@ -206,7 +208,7 @@ def log_order(
         order_logger = logging.getLogger('order_logger')
         order_logger.handle(record)
 
-        user_logger = get_user_order_logger(user_id)
+        user_logger = get_user_order_logger(user_id_int)
         user_logger.handle(record)
 
     except Exception as e:
@@ -221,7 +223,7 @@ class AlertJSONFormatter(logging.Formatter):
     """알림 로그 전용 JSON 포맷터"""
 
     def format(self, record: logging.LogRecord) -> str:
-        log_data = {
+        log_data: dict[str, Any] = {
             'timestamp': datetime.now().isoformat(),
             'level': record.levelname,
             'message': record.getMessage()
@@ -236,7 +238,7 @@ class AlertJSONFormatter(logging.Formatter):
             exc_type, exc_value, exc_traceback = record.exc_info
             formatted_traceback = ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback))
             log_data['exception'] = {
-                'type': exc_type.__name__,
+                'type': exc_type.__name__ if exc_type else 'Unknown',
                 'message': str(exc_value),
                 'traceback': formatted_traceback
             }
@@ -275,13 +277,13 @@ def setup_alert_logger() -> logging.Logger:
 
 
 def alert_log(
-    user_id: str,
+    user_id: str | int,
     symbol: str,
     message: str,
     level: str = 'INFO',
-    exception: Exception = None,
-    **additional_data
-):
+    exception: Exception | None = None,
+    **additional_data: Any
+) -> None:
     """
     봇의 시작, 종료, 오류 등의 중요 알림 메시지를 로깅합니다.
 
@@ -295,10 +297,11 @@ def alert_log(
     """
     try:
         # 파라미터 안전성 검증
+        user_id_int: int
         try:
-            user_id = int(user_id)
+            user_id_int = int(user_id)
         except (ValueError, TypeError):
-            user_id = 0
+            user_id_int = 0
             additional_data['original_user_id'] = str(user_id)
 
         try:
@@ -308,7 +311,7 @@ def alert_log(
 
         # 알림 데이터 준비
         alert_data = {
-            'user_id': user_id,
+            'user_id': user_id_int,
             'symbol': symbol,
             'message': message,
             'alert_type': 'system_alert'
@@ -355,7 +358,7 @@ class DetailedJsonFormatter(logging.Formatter):
     """디버그 로그 전용 상세 JSON 포맷터"""
 
     def format(self, record: logging.LogRecord) -> str:
-        log_data = {
+        log_data: dict[str, Any] = {
             'timestamp': datetime.now().isoformat(),
             'level': record.levelname,
             'module': record.module,
@@ -373,7 +376,7 @@ class DetailedJsonFormatter(logging.Formatter):
             exc_type, exc_value, exc_traceback = record.exc_info
             formatted_traceback = ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback))
             log_data['exception'] = {
-                'type': exc_type.__name__,
+                'type': exc_type.__name__ if exc_type else 'Unknown',
                 'message': str(exc_value),
                 'traceback': formatted_traceback
             }
@@ -381,7 +384,7 @@ class DetailedJsonFormatter(logging.Formatter):
         return json.dumps(log_data, ensure_ascii=False, default=str)
 
 
-def setup_debug_logger(name='debug_logger') -> logging.Logger:
+def setup_debug_logger(name: str = 'debug_logger') -> logging.Logger:
     """
     디버깅 목적의 특별 로거를 설정합니다.
     복잡한 컴포넌트나 모듈의 상세 동작을 추적하고 디버깅하는 데 사용됩니다.
@@ -423,9 +426,9 @@ def log_debug(
     function: str,
     message: str,
     level: str = 'DEBUG',
-    exception: Exception = None,
-    **additional_data
-):
+    exception: Exception | None = None,
+    **additional_data: Any
+) -> None:
     """
     디버깅용 로그를 기록합니다.
     복잡한 로직이나 특정 모듈의 동작을 상세하게 추적할 때 사용합니다.
@@ -480,7 +483,7 @@ debug_logger = setup_debug_logger()
 # 편의 함수
 # ============================================================================
 
-def log_bot_start(user_id: str, symbol: str, config: dict = None):
+def log_bot_start(user_id: str, symbol: str, config: dict[str, Any] | None = None) -> None:
     """트레이딩 봇 시작을 로깅합니다."""
     message = f"트레이딩 봇 시작 - {symbol}"
     additional_data = {}
@@ -510,11 +513,12 @@ def log_bot_start(user_id: str, symbol: str, config: dict = None):
         symbol=symbol,
         message=message,
         level='INFO',
+        exception=None,
         **additional_data
     )
 
 
-def log_bot_stop(user_id: str, symbol: str, reason: str = None):
+def log_bot_stop(user_id: str, symbol: str, reason: str | None = None) -> None:
     """트레이딩 봇 종료를 로깅합니다."""
     message = f"트레이딩 봇 종료 - {symbol}"
     if reason:
@@ -530,7 +534,7 @@ def log_bot_stop(user_id: str, symbol: str, reason: str = None):
     )
 
 
-def log_bot_error(user_id: str, symbol: str, error_message: str, exception: Exception = None, **additional_data):
+def log_bot_error(user_id: str, symbol: str, error_message: str, exception: Exception | None = None, **additional_data: Any) -> None:
     """트레이딩 봇 오류를 로깅합니다."""
     message = f"트레이딩 봇 오류 - {symbol} - {error_message}"
 

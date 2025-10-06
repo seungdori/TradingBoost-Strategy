@@ -8,7 +8,7 @@ def get_progress(exchange_name: str, enter_strategy: str) -> AiSearchProgress:
                                              enter_strategy=enter_strategy)
 
 
-def init_progress(dto: AiSearchStartFeatureDto, status: str):
+def init_progress(dto: AiSearchStartFeatureDto, status: str) -> None:
     ai_search_repository.update_progress(
         dto=AiSearchProgress(
             exchange_name=dto.exchange_name,
@@ -21,5 +21,5 @@ def init_progress(dto: AiSearchStartFeatureDto, status: str):
     )
 
 
-def update_progress(dto: AiSearchProgress):
+def update_progress(dto: AiSearchProgress) -> None:
     ai_search_repository.update_progress(dto)

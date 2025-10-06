@@ -1,8 +1,8 @@
-from shared.dtos.exchange import ExchangeApiKeyDto, ApiKeys
+from shared.dtos.exchange import ExchangeApiKeyDto, ApiKeyDto
 from shared.config import settings
 import logging
 import json
-from typing import Dict, Optional
+from typing import Dict, Optional, Mapping, cast
 import redis.asyncio as redis
 
 logger = logging.getLogger(__name__)
@@ -24,135 +24,135 @@ async def _get_redis_client():
         )
 
 class ApiKeyStore:
-    def __init__(self, redis_client, user_id: str):
+    def __init__(self, redis_client: redis.Redis, user_id: str) -> None:
         self.redis_client = redis_client
         self.key_prefix = f"user:{user_id}:exchange:api_keys"
-        
-    async def get_binance_keys(self) -> ApiKeys:
+
+    async def get_binance_keys(self) -> ApiKeyDto:
         """Binance API 키 조회"""
         try:
             key_data = await self.redis_client.hgetall(f"{self.key_prefix}:binance")
             if not key_data:
                 # 설정에서 기본값 사용
-                return ApiKeys(
+                return ApiKeyDto(
                     api_key=settings.BINANCE_API_KEY if hasattr(settings, 'BINANCE_API_KEY') else "",
-                    secret=settings.BINANCE_SECRET_KEY if hasattr(settings, 'BINANCE_SECRET_KEY') else "",
+                    secret_key=settings.BINANCE_SECRET_KEY if hasattr(settings, 'BINANCE_SECRET_KEY') else "",
                     password=None
                 )
-            return ApiKeys(
+            return ApiKeyDto(
                 api_key=key_data.get('api_key', ''),
-                secret=key_data.get('secret', ''),
+                secret_key=key_data.get('secret_key', ''),
                 password=None
             )
         except Exception as e:
             logger.error(f"Binance API 키 조회 실패: {str(e)}")
             raise
         
-    async def get_upbit_keys(self) -> ApiKeys:
+    async def get_upbit_keys(self) -> ApiKeyDto:
         """Upbit API 키 조회"""
         try:
             key_data = await self.redis_client.hgetall(f"{self.key_prefix}:upbit")
             if not key_data:
                 # 설정에서 기본값 사용
-                return ApiKeys(
+                return ApiKeyDto(
                     api_key=settings.UPBIT_API_KEY if hasattr(settings, 'UPBIT_API_KEY') else "",
-                    secret=settings.UPBIT_SECRET_KEY if hasattr(settings, 'UPBIT_SECRET_KEY') else "",
+                    secret_key=settings.UPBIT_SECRET_KEY if hasattr(settings, 'UPBIT_SECRET_KEY') else "",
                     password=None
                 )
-            return ApiKeys(
+            return ApiKeyDto(
                 api_key=key_data.get('api_key', ''),
-                secret=key_data.get('secret', ''),
+                secret_key=key_data.get('secret_key', ''),
                 password=None
             )
         except Exception as e:
             logger.error(f"Upbit API 키 조회 실패: {str(e)}")
             raise
-        
-    async def get_bitget_keys(self) -> ApiKeys:
+
+    async def get_bitget_keys(self) -> ApiKeyDto:
         """Bitget API 키 조회"""
         try:
             key_data = await self.redis_client.hgetall(f"{self.key_prefix}:bitget")
             if not key_data:
                 # 설정에서 기본값 사용
-                return ApiKeys(
+                return ApiKeyDto(
                     api_key=settings.BITGET_API_KEY if hasattr(settings, 'BITGET_API_KEY') else "",
-                    secret=settings.BITGET_SECRET_KEY if hasattr(settings, 'BITGET_SECRET_KEY') else "",
+                    secret_key=settings.BITGET_SECRET_KEY if hasattr(settings, 'BITGET_SECRET_KEY') else "",
                     password=settings.BITGET_PASSPHRASE if hasattr(settings, 'BITGET_PASSPHRASE') else ""
                 )
-            return ApiKeys(
+            return ApiKeyDto(
                 api_key=key_data.get('api_key', ''),
-                secret=key_data.get('secret', ''),
+                secret_key=key_data.get('secret_key', ''),
                 password=key_data.get('password', '')
             )
         except Exception as e:
             logger.error(f"Bitget API 키 조회 실패: {str(e)}")
             raise
-        
-    async def get_okx_keys(self) -> ApiKeys:
+
+    async def get_okx_keys(self) -> ApiKeyDto:
         """OKX API 키 조회"""
         try:
             key_data = await self.redis_client.hgetall(f"{self.key_prefix}:okx")
             if not key_data:
                 # 설정에서 기본값 사용
-                return ApiKeys(
+                return ApiKeyDto(
                     api_key=settings.OKX_API_KEY if hasattr(settings, 'OKX_API_KEY') else "",
-                    secret=settings.OKX_SECRET_KEY if hasattr(settings, 'OKX_SECRET_KEY') else "",
+                    secret_key=settings.OKX_SECRET_KEY if hasattr(settings, 'OKX_SECRET_KEY') else "",
                     password=settings.OKX_PASSPHRASE if hasattr(settings, 'OKX_PASSPHRASE') else ""
                 )
-            return ApiKeys(
+            return ApiKeyDto(
                 api_key=key_data.get('api_key', ''),
-                secret=key_data.get('secret', ''),
+                secret_key=key_data.get('secret_key', ''),
                 password=key_data.get('password', '')
             )
         except Exception as e:
             logger.error(f"OKX API 키 조회 실패: {str(e)}")
             raise
         
-    async def set_binance_keys(self, api_key: str, secret: str) -> None:
+    async def set_binance_keys(self, api_key: str, secret_key: str) -> None:
         """Binance API 키 설정"""
         try:
-            await self.redis_client.hmset(f"{self.key_prefix}:binance", {
+            await self.redis_client.hset(f"{self.key_prefix}:binance", mapping=cast(Mapping[str | bytes, bytes | float | int | str], {
                 'api_key': api_key,
-                'secret': secret
-            })
+                'secret_key': secret_key
+            }))
             logger.info("Binance API 키 설정 완료")
         except Exception as e:
             logger.error(f"Binance API 키 설정 실패: {str(e)}")
             raise
-        
-    async def set_upbit_keys(self, api_key: str, secret: str) -> None:
+
+    async def set_upbit_keys(self, api_key: str, secret_key: str) -> None:
         """Upbit API 키 설정"""
         try:
-            await self.redis_client.hmset(f"{self.key_prefix}:upbit", {
+            await self.redis_client.hset(f"{self.key_prefix}:upbit", mapping=cast(Mapping[str | bytes, bytes | float | int | str], {
                 'api_key': api_key,
-                'secret': secret
-            })
+                'secret_key': secret_key
+            }))
             logger.info("Upbit API 키 설정 완료")
         except Exception as e:
             logger.error(f"Upbit API 키 설정 실패: {str(e)}")
             raise
-        
-    async def set_bitget_keys(self, api_key: str, secret: str, password: str) -> None:
+
+    async def set_bitget_keys(self, api_key: str, secret_key: str, password: Optional[str] = None) -> None:
         """Bitget API 키 설정"""
         try:
-            await self.redis_client.hmset(f"{self.key_prefix}:bitget", {
+            await self.redis_client.hset(f"{self.key_prefix}:bitget", mapping=cast(Mapping[str | bytes, bytes | float | int | str], {
                 'api_key': api_key,
-                'secret': secret,
-                'password': password
-            })
+                'secret_key': secret_key,
+                'password': password or ''
+            }))
             logger.info("Bitget API 키 설정 완료")
         except Exception as e:
             logger.error(f"Bitget API 키 설정 실패: {str(e)}")
             raise
-        
-    async def set_okx_keys(self, api_key: str, secret: str, password: str) -> None:
+
+    async def set_okx_keys(self, api_key: str, secret_key: str, password: Optional[str] = None) -> None:
         """OKX API 키 설정"""
         try:
-            await self.redis_client.hmset(f"{self.key_prefix}:okx", {
+            await self.redis_client.hset(f"{self.key_prefix}:okx", mapping=cast(Mapping[str | bytes, bytes | float | int | str], {
                 'api_key': api_key,
-                'secret': secret,
-                'password': password
-            })
+                'secret_key': secret_key,
+                'password': password or ''
+            }))
             logger.info("OKX API 키 설정 완료")
         except Exception as e:
             logger.error(f"OKX API 키 설정 실패: {str(e)}")
@@ -160,16 +160,16 @@ class ApiKeyStore:
 
 # ExchangeStore 클래스 정의
 class ExchangeStore:
-    def __init__(self, redis_client):
+    def __init__(self, redis_client: redis.Redis) -> None:
         self._key_store = ApiKeyStore(redis_client, user_id="default")
-        
+
     def get_key_store(self) -> ApiKeyStore:
         return self._key_store
 
 # 전역 인스턴스 생성 (redis_client는 외부에서 주입받아야 함)
 # exchange_store = ExchangeStore(redis_client)  # 사용 시 redis_client를 전달받아야 함
 
-async def get_exchange_api_keys(exchange_name: str, redis_client=None) -> ApiKeys:
+async def get_exchange_api_keys(exchange_name: str, redis_client: Optional[redis.Redis] = None) -> ApiKeyDto:
     """
     거래소 이름에 따라 API 키 정보를 조회합니다.
 
@@ -214,10 +214,10 @@ async def get_exchange_api_keys(exchange_name: str, redis_client=None) -> ApiKey
         return result
     finally:
         # 자동 생성한 클라이언트는 닫기
-        if should_close:
-            await redis_client.aclose()
+        if should_close and redis_client:
+            await redis_client.close()
 
-async def update_exchange_api_keys(dto: ExchangeApiKeyDto, redis_client=None) -> ApiKeys:
+async def update_exchange_api_keys(dto: ExchangeApiKeyDto, redis_client: Optional[redis.Redis] = None) -> ApiKeyDto:
     """
     거래소 API 키 정보를 업데이트합니다.
 
@@ -247,25 +247,25 @@ async def update_exchange_api_keys(dto: ExchangeApiKeyDto, redis_client=None) ->
         key_store: ApiKeyStore = exchange_store.get_key_store()
 
         if exchange_name == 'binance':
-            await key_store.set_binance_keys(api_key=api_key, secret=secret)
+            await key_store.set_binance_keys(api_key=api_key, secret_key=secret)
             result = await key_store.get_binance_keys()
         elif exchange_name == 'upbit':
-            await key_store.set_upbit_keys(api_key=api_key, secret=secret)
+            await key_store.set_upbit_keys(api_key=api_key, secret_key=secret)
             result = await key_store.get_upbit_keys()
         elif exchange_name == 'bitget':
-            await key_store.set_bitget_keys(api_key=api_key, secret=secret, password=password)
+            await key_store.set_bitget_keys(api_key=api_key, secret_key=secret, password=password)
             result = await key_store.get_bitget_keys()
         elif exchange_name == 'okx':
-            await key_store.set_okx_keys(api_key=api_key, secret=secret, password=password)
+            await key_store.set_okx_keys(api_key=api_key, secret_key=secret, password=password)
             result = await key_store.get_okx_keys()
         elif exchange_name == 'binance_spot':
-            await key_store.set_binance_keys(api_key=api_key, secret=secret)
+            await key_store.set_binance_keys(api_key=api_key, secret_key=secret)
             result = await key_store.get_binance_keys()
         elif exchange_name == 'bitget_spot':
-            await key_store.set_bitget_keys(api_key=api_key, secret=secret, password=password)
+            await key_store.set_bitget_keys(api_key=api_key, secret_key=secret, password=password)
             result = await key_store.get_bitget_keys()
         elif exchange_name == 'okx_spot':
-            await key_store.set_okx_keys(api_key=api_key, secret=secret, password=password)
+            await key_store.set_okx_keys(api_key=api_key, secret_key=secret, password=password)
             result = await key_store.get_okx_keys()
         else:
             raise Exception('Unknown exchange')
@@ -273,11 +273,11 @@ async def update_exchange_api_keys(dto: ExchangeApiKeyDto, redis_client=None) ->
         return result
     finally:
         # 자동 생성한 클라이언트는 닫기
-        if should_close:
-            await redis_client.aclose()
+        if should_close and redis_client:
+            await redis_client.close()
 
 # 사용자별 API 키 관리 함수
-async def get_user_api_keys(user_id: str, redis_client=None) -> Dict[str, str]:
+async def get_user_api_keys(user_id: str, redis_client: Optional[redis.Redis] = None) -> dict[str, str]:
     """
     사용자 ID를 기반으로 Redis에서 API 키를 가져오는 함수
 
@@ -303,5 +303,5 @@ async def get_user_api_keys(user_id: str, redis_client=None) -> Dict[str, str]:
         raise
     finally:
         # 자동 생성한 클라이언트는 닫기
-        if should_close:
-            await redis_client.aclose()
+        if should_close and redis_client:
+            await redis_client.close()

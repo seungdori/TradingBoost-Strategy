@@ -81,7 +81,7 @@ class TradingAccessService:
         logger.info(
             "Getting whitelist",
             extra={"exchange": exchange_name, "user_id": user_id}
-        """
+        )
         return await self.symbol_repo.get_whitelist(exchange_name, user_id)
 
     async def get_access_list(

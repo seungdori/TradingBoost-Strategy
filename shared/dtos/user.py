@@ -30,7 +30,7 @@ class UserWithoutPasswordDto(BaseModel):
     user_id: str
 
     @classmethod
-    def from_user_dto(cls, user_dto: dict):
+    def from_user_dto(cls, user_dto: dict[str, str]) -> "UserWithoutPasswordDto":
         return cls(user_id=user_dto['user_id'])
 
 

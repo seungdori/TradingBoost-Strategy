@@ -86,12 +86,12 @@ class AiSearchProgressStore:
         }
 
     def get_progress(self, exchange_name: str, enter_strategy: str) -> AiSearchProgress:
-        key = (exchange_name.lower() ,enter_strategy.lower())
+        key = (exchange_name.lower(), '그리드', enter_strategy.lower())
         if key in self.__progress:
             return self.__progress[key]
         else:
             # Handle case where specific strategy is not required/used
-            for (exchange, enter_strategy), progress in self.__progress.items():
+            for (exchange, grid_type, strategy), progress in self.__progress.items():
                 if exchange == exchange_name.lower():
                     return progress
             raise ValueError(f'Unknown exchange or strategy combination: {exchange_name}, {enter_strategy}')
@@ -100,8 +100,8 @@ class AiSearchProgressStore:
             self,
             exchange_name: str, enter_strategy: str, current_progress_symbol: str,
             current_completed_symbol_count: int, current_total_symbol_count: int, status: str
-    ):
-        key = (exchange_name.lower(), enter_strategy.lower())
+    ) -> None:
+        key = (exchange_name.lower(), '그리드', enter_strategy.lower())
         if key in self.__progress:
             progress = self.__progress[key]
             progress.current_progress_symbol = current_progress_symbol

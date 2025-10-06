@@ -4,10 +4,10 @@ Moving Average indicators
 import math
 
 
-def calc_sma(series, length: int):
+def calc_sma(series: list[float], length: int) -> list[float | None]:
     """Simple Moving Average"""
     n = len(series)
-    out = [None]*n
+    out: list[float | None] = [None]*n
     if length <= 0:
         return out
 
@@ -128,10 +128,10 @@ def calc_vidya(series, smooth_period=9):
     return result
 
 
-def calc_jma(series, length=5, phase=50, power=2):
+def calc_jma(series: list[float], length: int = 5, phase: int = 50, power: int = 2) -> list[float | None]:
     """Jurik Moving Average"""
     n = len(series)
-    out = [None]*n
+    out: list[float | None] = [None]*n
     if n == 0:
         return out
 

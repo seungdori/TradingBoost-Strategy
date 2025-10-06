@@ -32,14 +32,15 @@ from GRID.core.redis import (
 from GRID.core.websocket import log_exception, send_heartbeat, ws_client
 
 # Utils
-from GRID.utils.validators import parse_bool, check_order_validity
+from shared.utils import parse_bool
+from shared.validation.trading_validators import check_order_validity
 from GRID.utils.price import (
     round_to_upbit_tick_size,
     get_order_price_unit_upbit,
     get_corrected_rounded_price,
     get_min_notional
 )
-from GRID.utils.precision import (
+from shared.utils.exchange_precision import (
     get_upbit_precision,
     get_price_precision,
     adjust_price_precision
@@ -57,7 +58,7 @@ from GRID.utils.redis_helpers import (
     get_order_placed,
     reset_order_placed
 )
-from GRID.utils.async_helpers import async_debounce, custom_sleep
+from shared.utils.async_helpers import async_debounce, custom_sleep
 
 # Handlers
 from GRID.handlers.upbit import process_upbit_balance, handle_upbit
@@ -135,13 +136,14 @@ from GRID.services.user_management_service import (
 # ==================== Grid Trading Core ====================
 from GRID.trading.grid_core import (
     calculate_grid_levels,
-    create_short_orders,
     place_grid_orders,
-    periodic_15m_logic,
-    long_logic,
-    short_logic,
-    check_order_status,
 )
+
+# ==================== Grid Trading Modules ====================
+# Note: create_short_orders는 order_service에서 import (중복 방지)
+from GRID.trading.grid_modules.grid_entry_logic import long_logic, short_logic
+from GRID.trading.grid_modules.grid_periodic_logic import periodic_15m_logic
+from GRID.trading.grid_modules.grid_monitoring import check_order_status
 
 # ==================== Monitoring  ====================
 from GRID.monitoring.position_monitor import (
@@ -184,9 +186,9 @@ from GRID.main.grid_main import (
 )
 
 # ==================== 전역 변수 ====================
-completed_tasks = set()
-running_symbols = set()
-completed_symbols = set()
+completed_tasks: set[str] = set()
+running_symbols: set[str] = set()
+completed_symbols: set[str] = set()
 manager = ConnectionManager()
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

@@ -3,7 +3,7 @@
 GRID와 HYPERRSI 프로젝트에서 공통으로 사용하는 트레이딩 관련 데이터 모델
 """
 from typing import Optional, List
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ValidationInfo
 from enum import Enum
 
 
@@ -129,7 +129,7 @@ class TradingDataDto(BaseModel):
 
     @field_validator('long_tp2_price')
     @classmethod
-    def validate_tp2_greater_than_tp1(cls, v: float, info) -> float:
+    def validate_tp2_greater_than_tp1(cls, v: float, info: ValidationInfo) -> float:
         """TP2가 TP1보다 큰지 검증"""
         if 'long_tp1_price' in info.data and v <= info.data['long_tp1_price']:
             raise ValueError('long_tp2_price must be greater than long_tp1_price')
@@ -137,7 +137,7 @@ class TradingDataDto(BaseModel):
 
     @field_validator('long_tp3_price')
     @classmethod
-    def validate_tp3_greater_than_tp2(cls, v: float, info) -> float:
+    def validate_tp3_greater_than_tp2(cls, v: float, info: ValidationInfo) -> float:
         """TP3가 TP2보다 큰지 검증"""
         if 'long_tp2_price' in info.data and v <= info.data['long_tp2_price']:
             raise ValueError('long_tp3_price must be greater than long_tp2_price')

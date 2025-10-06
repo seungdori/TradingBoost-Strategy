@@ -6,9 +6,9 @@ import numpy as np
 from collections import deque
 
 
-def calc_stddev(series, length):
+def calc_stddev(series: list[float], length: int) -> list[float]:
     """표준편차(STDEV)"""
-    window = deque()
+    window: deque[float] = deque()
     sum_ = 0.0
     sum_sq = 0.0
     result = []
