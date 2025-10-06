@@ -500,3 +500,151 @@ async def get_all_users(exchange: str) -> List[tuple]:
         user_repo = UserRepositoryPG(session)
         users = await user_repo.get_all_by_exchange(exchange)
         return [(user.user_id,) for user in users]
+
+
+async def delete_user(exchange_name: str, user_id: int) -> None:
+    """
+    Delete a user from the database.
+
+    Args:
+        exchange_name: Exchange name
+        user_id: User identifier
+    """
+    async with get_grid_db() as session:
+        user_repo = UserRepositoryPG(session)
+        await user_repo.delete(user_id, exchange_name)
+        await session.commit()
+        logger.info(f"User {user_id} deleted from {exchange_name}")
+
+        # Remove from global cache
+        global user_keys
+        if user_id in user_keys:
+            del user_keys[user_id]
+
+
+# =============================================================================
+# Blacklist Operations
+# =============================================================================
+
+async def add_to_blacklist(
+    exchange_name: str,
+    user_id: int,
+    symbol: str
+) -> None:
+    """
+    Add a symbol to user's blacklist.
+
+    Args:
+        exchange_name: Exchange name
+        user_id: User identifier
+        symbol: Symbol to blacklist
+    """
+    async with get_grid_db() as session:
+        symbol_repo = SymbolListRepositoryPG(session)
+        await symbol_repo.add_to_blacklist(user_id, exchange_name, symbol)
+        await session.commit()
+        logger.info(f"Added {symbol} to blacklist for user {user_id}")
+
+
+async def get_blacklist(exchange_name: str, user_id: int) -> List[str]:
+    """
+    Get user's blacklist symbols.
+
+    Args:
+        exchange_name: Exchange name
+        user_id: User identifier
+
+    Returns:
+        List of blacklisted symbols
+    """
+    async with get_grid_db() as session:
+        symbol_repo = SymbolListRepositoryPG(session)
+        symbols = await symbol_repo.get_blacklist(user_id, exchange_name)
+        return symbols
+
+
+async def remove_from_blacklist(
+    exchange_name: str,
+    user_id: int,
+    symbol: str
+) -> bool:
+    """
+    Remove a symbol from user's blacklist.
+
+    Args:
+        exchange_name: Exchange name
+        user_id: User identifier
+        symbol: Symbol to remove
+
+    Returns:
+        True if removed, False if not found
+    """
+    async with get_grid_db() as session:
+        symbol_repo = SymbolListRepositoryPG(session)
+        result = await symbol_repo.remove_from_blacklist(user_id, exchange_name, symbol)
+        await session.commit()
+        return result
+
+
+# =============================================================================
+# Whitelist Operations
+# =============================================================================
+
+async def add_to_whitelist(
+    exchange_name: str,
+    user_id: int,
+    symbol: str
+) -> None:
+    """
+    Add a symbol to user's whitelist.
+
+    Args:
+        exchange_name: Exchange name
+        user_id: User identifier
+        symbol: Symbol to whitelist
+    """
+    async with get_grid_db() as session:
+        symbol_repo = SymbolListRepositoryPG(session)
+        await symbol_repo.add_to_whitelist(user_id, exchange_name, symbol)
+        await session.commit()
+        logger.info(f"Added {symbol} to whitelist for user {user_id}")
+
+
+async def get_whitelist(exchange_name: str, user_id: int) -> List[str]:
+    """
+    Get user's whitelist symbols.
+
+    Args:
+        exchange_name: Exchange name
+        user_id: User identifier
+
+    Returns:
+        List of whitelisted symbols
+    """
+    async with get_grid_db() as session:
+        symbol_repo = SymbolListRepositoryPG(session)
+        symbols = await symbol_repo.get_whitelist(user_id, exchange_name)
+        return symbols
+
+
+async def remove_from_whitelist(
+    exchange_name: str,
+    user_id: int,
+    symbol: str
+) -> bool:
+    """
+    Remove a symbol from user's whitelist.
+
+    Args:
+        exchange_name: Exchange name
+        user_id: User identifier
+        symbol: Symbol to remove
+
+    Returns:
+        True if removed, False if not found
+    """
+    async with get_grid_db() as session:
+        symbol_repo = SymbolListRepositoryPG(session)
+        result = await symbol_repo.remove_from_whitelist(user_id, exchange_name, symbol)
+        await session.commit()
+        return result

@@ -41,12 +41,17 @@ async def init_grid_db():
     Initialize GRID database tables.
 
     Creates all GRID-specific tables if they don't exist.
+    Includes both user models and trading models.
 
     Raises:
         DatabaseException: Database initialization failed
     """
     try:
         logger.info("Initializing GRID database tables...")
+
+        # Import models to register them with SQLAlchemy
+        from GRID.models import user  # User, TelegramID, Job, Blacklist, Whitelist
+        from GRID.models import trading  # Entry, TakeProfit, StopLoss, WinRate
 
         engine = DatabaseConfig.get_engine()
 
