@@ -23,7 +23,7 @@ import hashlib
 import time
 from GRID.trading.redis_connection_manager import RedisConnectionManager
 from GRID.trading.shared_state import cancel_state, user_keys
-from typing import Dict, List, Any, Optional, Tuple, Union
+from typing import Dict, List, Any, Optional, Tuple, Union, AsyncIterator, cast
 import redis.asyncio as aioredis
 from shared.config import settings
 from shared.utils import retry_async, parse_bool
@@ -66,10 +66,10 @@ async def get_redis():
     
     return redis_connection
 
-async def close_redis():
+async def close_redis() -> None:
     global redis_connection
     if redis_connection:
-        await redis_connection.aclose()
+        await redis_connection.close()
         redis_connection = None
 
 
@@ -158,7 +158,7 @@ async def set_user_data(exchange_name: str, user_id: int, data: Dict[str, Any], 
         await redis.hmset(user_key, serialized_data)
 
 
-async def should_log(redis: Any, log_interval: int = 30):
+async def should_log(redis: Any, log_interval: int = 30) -> bool:
     log_key = "last_log_time"
     if await redis.set(log_key, "1", nx=True, ex=log_interval):
         return True
@@ -168,7 +168,7 @@ async def should_log(redis: Any, log_interval: int = 30):
 #================================================================================================
 
 
-async def get_exchange_instance(exchange_name: str, user_id: str):
+async def get_exchange_instance(exchange_name: str, user_id: str) -> Any:
     key = f"{exchange_name}:{user_id}"
     current_time = time.time()
     
@@ -223,7 +223,7 @@ async def create_exchange_instance(exchange_name, user_id):
 
 
 @asynccontextmanager
-async def manage_exchange_instance(exchange_name: str, user_id: str):
+async def manage_exchange_instance(exchange_name: str, user_id: str) -> AsyncIterator[Any]:
     instance = await get_exchange_instance(exchange_name, user_id)
     try:
         yield instance
@@ -232,11 +232,11 @@ async def manage_exchange_instance(exchange_name: str, user_id: str):
         exchange_instances[f"{exchange_name}:{user_id}"]['last_used'] = time.time()
 
 # Cleanup function
-async def cleanup_connections():
+async def cleanup_connections() -> None:
     global redis_connection, exchange_instances
     try:
         if redis_connection:
-            await redis_connection.aclose()
+            await redis_connection.close()
             redis_connection = None
         for instance in exchange_instances.values():
             if 'instance' in instance and hasattr(instance['instance'], 'close'):
@@ -290,7 +290,7 @@ async def centralized_order_cancellation(exchange_name):
                     try:
                         all_orders = await exchange_instance.fetch_open_orders()
                         print(f"Total open orders: {len(all_orders)}")
-                        orders_by_symbol = {}
+                        orders_by_symbol: dict[str, list[Any]] = {}
                         for order in all_orders:
                             if 'info' not in order or 'instId' not in order['info']:
                                 print(f"Warning: Order without 'instId' key: {order}")
@@ -305,15 +305,15 @@ async def centralized_order_cancellation(exchange_name):
                         
                         running_symbols = json.loads(await redis.hget(user_key, 'running_symbols') or '[]')
                         logger.info(f"Starting order cancellation for user {user_id}. Running symbols: {running_symbols}")
-                        
-                        tasks = []
+
+                        tasks: list[Any] = []
                         for symbol_name in running_symbols:
                             print(f"{symbol_name}에 대한 주문 취소 시작")
                             if symbol_name in orders_by_symbol:
                                 symbol_orders = orders_by_symbol[symbol_name]
                                 #print(f"{symbol_orders}에 대한 주문 취소 시작")
                                 if exchange_name == 'upbit':
-                                    task = strategy.cancel_all_limit_orders(exchange_instance, symbol_name, user_id, symbol_orders)
+                                    task = strategy.cancel_all_limit_orders(exchange_instance, symbol_name, user_id)
                                 else:
                                     task = cancel_all_limit_orders_batch(exchange_instance, symbol_name, user_id, symbol_orders)
                                 tasks.append(task)
@@ -425,7 +425,7 @@ async def cancel_orders_batch(exchange_instance, orders_to_cancel, symbol_name):
 # SET USER STATUS
 #================================================================================================
 
-async def check_status_loop(exchange_name : str):
+async def check_status_loop(exchange_name : str) -> None:
     redis = await get_redis_connection()
     zero_count = {}  # 각 사용자의 연속된 0 카운트를 저장하는 딕셔너리
     first_zero_time = {}  # 각 사용자의 첫 번째 0이 발생한 시간을 저장하는 딕셔너리
@@ -448,7 +448,7 @@ async def check_status_loop(exchange_name : str):
                         await redis.hset(user_key, 'is_stopped', '0')
                         await redis.hset(user_key, 'stop_task_only', '0')
                     else:
-                        all_order_length = await fetch_open_orders_length(redis, user_id)
+                        all_order_length = await fetch_open_orders_length(redis, int(user_id))
                         #print(f"{user_id}의 모든 주문 길이: {all_order_length}")
                         if all_order_length == 0: 
                             
@@ -485,7 +485,7 @@ async def check_status_loop(exchange_name : str):
         
         await asyncio.sleep(60)  # 1분 대기
                         
-async def get_request_body(redis, exchange_id : str , user_id : int) -> str | None:
+async def get_request_body(redis: Any, exchange_id : str , user_id : int) -> str | None:
     """Redis에서 request_body를 가져옴"""
     redis_key = f"{exchange_id}:request_body:{user_id}"
     value = await redis.get(redis_key)
@@ -493,7 +493,7 @@ async def get_request_body(redis, exchange_id : str , user_id : int) -> str | No
         value = await redis.get(f"{exchange_id}:request_body:{user_id}:backup")
         if value is None:
             value = await redis.get(f"{exchange_id}:request_body:{user_id}:*")
-    return value
+    return cast(str | None, value)
                    
                 
 
@@ -576,10 +576,12 @@ async def reset_cache():
     
     for pattern in patterns:
         cursor = '0'
-        while cursor != 0:
+        while True:
             cursor, keys = await redis_client.scan(cursor=cursor, match=pattern, count=100)
             if keys:
                 await redis_client.delete(*keys)
+            if cursor == '0':
+                break
     print("Cache reset completed")
     
 
@@ -708,7 +710,7 @@ async def check_and_update_positions(exchange_name):
         print(traceback.format_exc())
         await asyncio.sleep(5)
 
-async def get_and_cache_all_positions(uri, API_KEY, SECRET_KEY, PASSPHRASE, redis: Redis, user_id: int):
+async def get_and_cache_all_positions(uri: str, API_KEY: str, SECRET_KEY: str, PASSPHRASE: str, redis: aioredis.Redis, user_id: str) -> list[Any] | None:
     cache_key = f'okx:positions:{user_id}'
     async with websockets.connect(uri) as websocket:
         # Perform authentication
@@ -766,7 +768,7 @@ async def get_and_cache_all_positions(uri, API_KEY, SECRET_KEY, PASSPHRASE, redi
                     #current_time = int(time.time())
                     await redis.set(cache_key, json.dumps(positions_data), ex=20)  # Cache for 10 seconds
                     #print(f"Updated position data for user {user_id}")
-                    return positions_data
+                    return cast(list[Any], positions_data)
         except asyncio.TimeoutError:
             print(f"Timeout occurred while waiting for position data for user {user_id}")
         except Exception as e:
@@ -774,14 +776,14 @@ async def get_and_cache_all_positions(uri, API_KEY, SECRET_KEY, PASSPHRASE, redi
         
         return None
 
-async def update_user_positions(redis: Redis, user_id: str, user_data: dict):
+async def update_user_positions(redis: aioredis.Redis, user_id: str, user_data: dict[str, Any]) -> None:
     uri = "wss://ws.okx.com:8443/ws/v5/private"
     
     # Get user data from Redis
     user_key = f'okx:user:{user_id}'
-    API_KEY = user_data.get('api_key')
-    SECRET_KEY = user_data.get('api_secret')
-    PASSPHRASE = user_data.get('password')
+    API_KEY = cast(str, user_data.get('api_key'))
+    SECRET_KEY = cast(str, user_data.get('api_secret'))
+    PASSPHRASE = cast(str, user_data.get('password'))
 
     await get_and_cache_all_positions(uri, API_KEY, SECRET_KEY, PASSPHRASE, redis, user_id)
 
@@ -850,12 +852,12 @@ async def check_and_cancel_duplicate_order(
         return False, None
 
 
-async def fetch_open_orders_length(redis, user_id : int):
+async def fetch_open_orders_length(redis: Any, user_id : int) -> int:
     all_orders_key = f"orders:{user_id}"
     all_orders = await redis.hgetall(all_orders_key)
     return len(all_orders)
 
-async def fetch_and_store_orders(exchange_name: str, user_id: str, exchange_instance: Any, okay_to_log : bool ,redis: Any):
+async def fetch_and_store_orders(exchange_name: str, user_id: str, exchange_instance: Any, okay_to_log : bool ,redis: Any) -> dict[str, list[dict[str, Any]]]:
     logger = logging.getLogger('order_fetching')
     user_key = f'{exchange_name}:user:{user_id}'
 
@@ -930,11 +932,11 @@ async def fetch_and_store_orders(exchange_name: str, user_id: str, exchange_inst
         return {}
 
 # Modified order fetching loop with controlled concurrency
-async def order_fetching_loop(exchange_name: str, max_concurrent: int = 10):
+async def order_fetching_loop(exchange_name: str, max_concurrent: int = 10) -> None:
     logger = logging.getLogger('order_fetching')
     semaphore = asyncio.Semaphore(max_concurrent)
 
-    async def process_user(user_id: str, user_data: Dict[str, Any], okay_to_log: bool):
+    async def process_user(user_id: str, user_data: Dict[str, Any], okay_to_log: bool) -> None:
         async with semaphore:
             async with manage_redis_connection() as redis, manage_exchange_instance(exchange_name, user_id) as exchange_instance:
                 await fetch_and_store_orders(exchange_name, user_id, exchange_instance, okay_to_log, redis=redis)

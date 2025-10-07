@@ -72,14 +72,14 @@ class Position(RedisModel):
 """
 # 저장
 settings = UserSettings(use_sl=True, leverage=20)
-await settings.save(redis_client, f"user:{user_id}")
+await settings.save(f"user:{user_id}")
 
 # 조회
-settings = await UserSettings.get(redis_client, f"user:{user_id}")
+settings = await UserSettings.get(f"user:{user_id}")
 if settings:
     print(settings.use_sl)  # True (bool 타입)
 
 # 수정
 settings.leverage = 25
-await settings.save(redis_client, f"user:{user_id}")
+await settings.save(f"user:{user_id}")
 """

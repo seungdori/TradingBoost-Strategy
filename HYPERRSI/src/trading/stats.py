@@ -1,6 +1,6 @@
 from typing import Dict, List, Optional, Union, Any
 import json
-from HYPERRSI.src.core.database import redis_client
+
 from HYPERRSI.src.trading.models import Position
 from datetime import datetime
 from shared.logging import get_logger, log_order
@@ -13,6 +13,21 @@ from datetime import datetime
 import time
 
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
+
+
+# Module-level attribute for backward compatibility
+def __getattr__(name):
+    if name == "redis_client":
+        return _get_redis_client()
+    raise AttributeError(f"module has no attribute {name}")
 
 # Redis key formats
 def get_redis_key(user_id: Union[str, int], key_type: str) -> str:
@@ -544,9 +559,6 @@ async def get_user_trading_statistics( user_id: str) -> dict:
                 
                 # PnL 계산 시도
                 try:
-                    order_type = data.get('order_type', 'unknown')
-                    timestamp = data.get('last_updated_time', data.get('create_time', '0'))
-                    
                     # None 값 처리 로직 추가
                     filled_contracts_str = data.get('filled_contracts_amount', '0')
                     filled_contracts = float(filled_contracts_str) if filled_contracts_str != 'None' else 0
@@ -830,7 +842,7 @@ async def generate_pnl_statistics_image(user_id: str) -> str:
         
         # 그래프 생성 (누적 PnL 단일 그래프)
         plt.style.use('dark_background')  # 다크 테마 적용
-        fig, ax = plt.subplots(figsize=(12, 8), facecolor='black')
+        _, ax = plt.subplots(figsize=(12, 8), facecolor='black')
         
         # 누적 PnL 선 그래프
         ax.plot(df.index, df['cumulative_pnl'], color='cyan', linewidth=2)

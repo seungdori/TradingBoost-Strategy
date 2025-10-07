@@ -2,11 +2,19 @@ import pandas as pd
 import numpy as np
 from typing import Union, Optional, Tuple, Dict
 from functools import lru_cache
-from HYPERRSI.src.core.database import redis_client
+
 from shared.logging import get_logger
 import json
 from HYPERRSI.src.trading.models import get_timeframe
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 
 class TrendStateCalculatorException(Exception):
     """TrendStateCalculator 관련 예외"""

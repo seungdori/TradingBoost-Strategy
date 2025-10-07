@@ -141,7 +141,7 @@ async def run_task(symbol, queue, initial_investment, direction, grid_levels, gr
                         return symbol
                     else: 
                         print(f"Task for {symbol} failed. Finding new task...")
-                        new_task = await task_completed(task=order_task, new_symbol=symbol, symbol_queue=queue, exchange_name=exchange_name, user_id=user_id)
+                        new_task = await task_completed(task=order_task, new_symbol=symbol, symbol_queue=queue, exchange_name=exchange_name, user_id=user_id) # type: ignore[call-arg]
                         return new_task
                 #await task_completed(task=order_task, new_symbol=symbol, symbol_queue=queue, exchange_name=exchange_name, user_id=user_id)
                 if any(isinstance(result, Exception) for result in results):
@@ -161,7 +161,7 @@ async def run_task(symbol, queue, initial_investment, direction, grid_levels, gr
         return None
 
 
-async def task_completed(task, new_symbol, exchange_name: str, user_id: str):
+async def task_completed(task: Any, new_symbol: str, exchange_name: str, user_id: str) -> Any:
     print(f'매개변수 확인. task: {task}, new_symbol: {new_symbol}, exchange_name: {exchange_name}, user_id: {user_id}')
     redis = await get_redis_connection()
     try:
@@ -213,7 +213,7 @@ async def task_completed(task, new_symbol, exchange_name: str, user_id: str):
                 for symbol in filtered_symbols[:limit]:
                     print(f"filtered_symbols[:limit] : {filtered_symbols[:limit]}")
                     print(f"symbol {symbol}")
-                    symbol_queues = {symbol: asyncio.Queue(maxsize=1)}
+                    symbol_queues = {symbol: asyncio.Queue(maxsize=1)} # type: ignore[var-annotated]
                     message = f"🚀 {user_id} 새로운 심볼{new_entry_symbols}에 대한 매매를 시작합니다."
                     await (create_new_task(new_symbol=symbol, symbol_queues=symbol_queues, 
                                                               initial_investment=initial_capital_list, direction=direction, 
@@ -507,7 +507,7 @@ async def create_recovery_tasks(user_id, exchange_name, direction, symbol_queues
                 print(f"Successfully created {len(recovery_tasks)} recovery tasks for user {user_id}.")
                 await telegram_message.send_telegram_message(
                     f"{user_id}: 새로운 심볼 {new_symbols[:1]}로 재진입", 
-                    exchange_name, user_id, debug=True
+                    exchange_name, user_id
                 )
                 return recovery_tasks
             else:
@@ -717,7 +717,7 @@ async def create_tasks(
         await redis.hset(user_key, 'tasks', json.dumps([task.get_name() for task in created_tasks]))
         
         # 태스크 완료 처리
-        await monitor_and_handle_tasks(
+        await monitor_and_handle_tasks( # type: ignore[name-defined]
             created_tasks, exchange_name, user_id, symbol_queues, initial_investment, 
             direction, timeframe, grid_num, leverage, stop_loss, numbers_to_entry, 
             exchange_instance, custom_stop, user_key, redis
@@ -904,7 +904,7 @@ async def create_new_task(new_symbol, symbol_queues, initial_investment, directi
         queue = symbol_queues[new_symbol]
         main_task = asyncio.create_task(run_task(new_symbol, queue, initial_investment, direction, grid_levels, grid_num, exchange_name, leverage, timeframe, stop_loss, numbers_to_entry, user_id, exchange_instance=exchange_instance, force_restart=force_restart))
         tasks.append(main_task)
-        await redis_database.add_tasks(user_id, main_task, exchange_name)
+        await redis_database.add_tasks(user_id, main_task, exchange_name) # type: ignore[arg-type]
 
         # Custom Stop 모니터링 태스크 생성 (필요한 경우)
         if custom_stop:
@@ -932,7 +932,7 @@ async def create_stop_loss_task(exchange_name, user_id, tasks):
     try:
         monitor_sl_task = asyncio.create_task(monitor_positions(exchange_name, user_id))
         tasks.append(monitor_sl_task)
-        await redis_database.add_tasks(user_id, monitor_sl_task, exchange_name)
+        await redis_database.add_tasks(user_id, monitor_sl_task, exchange_name) # type: ignore[arg-type]
         print(f"Created stop loss monitoring task for user {user_id}")
     except Exception as e:
         print(f"Error creating stop loss task for user {user_id}: {e}")
@@ -945,7 +945,7 @@ async def create_custom_stop_task(exchange_name, user_id, custom_stop, tasks):
     try:
         monitor_custom_stop_task = asyncio.create_task(monitor_custom_stop(exchange_name, user_id, custom_stop))
         tasks.append(monitor_custom_stop_task)
-        await redis_database.add_tasks(user_id, monitor_custom_stop_task, exchange_name)
+        await redis_database.add_tasks(user_id, monitor_custom_stop_task, exchange_name) # type: ignore[arg-type]
         print(f"Created custom stop monitoring task for user {user_id}")
     except Exception as e:
         print(f"Error creating custom stop task for user {user_id}: {e}")

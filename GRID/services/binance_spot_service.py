@@ -25,7 +25,7 @@ def revalidate_binance_spot_cache():
 async def get_binance_spot_account_balance():
     # Todo: refactor after
     global binance_spot_account_balance_cache, binance_spot_account_balance_cache_expiry
-    binance_spot_client = exchange_store.get_binance_spot_instance()
+    binance_spot_client = exchange_store.get_binance_instance()
 
     try:
         if ((not cache_expired(binance_spot_account_balance_cache_expiry))
@@ -67,7 +67,7 @@ async def get_binance_spot_wallet():
 async def get_binance_spot_tickers():
     # Todo: refactor after
     global binance_spot_mark_price_cache, binance_spot_mark_price_cache_expiry
-    client = exchange_store.get_binance_spot_instance()
+    client = exchange_store.get_binance_instance()
 
     try:
         if ((not cache_expired(binance_spot_mark_price_cache_expiry))
@@ -88,7 +88,7 @@ async def get_binance_spot_tickers():
 
 async def fetch_binance_spot_positions():
     print('[FETCH BINACE SPOT POSITIONS]')
-    exchange = exchange_store.get_binance_spot_instance()
+    exchange = exchange_store.get_binance_instance()
     positions: list[Any] = []
 
     try:

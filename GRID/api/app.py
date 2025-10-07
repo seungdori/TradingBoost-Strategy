@@ -37,6 +37,7 @@ from shared.logging import setup_json_logger
 # Legacy imports (for backward compatibility)
 from GRID.trading.redis_connection_manager import RedisConnectionManager
 from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
 
 # Setup structured logging
 logger = setup_json_logger("grid")
@@ -47,18 +48,18 @@ process_pool = None
 
 
 
-async def get_request_body(redis, exchange_id : str , user_id : int) -> str | None:
+async def get_request_body(redis: Any, exchange_id : str , user_id : int) -> str | None:
     """Redis에서 request_body를 가져옴"""
     redis_key = f"{exchange_id}:request_body:{user_id}"
-    value = await redis.get(redis_key)
+    value: str | None = await redis.get(redis_key)
     return value
 
 
-async def get_redis_connection():
+async def get_redis_connection() -> Any:
     return aioredis.from_url('redis://localhost', encoding='utf-8', decode_responses=True)
 
 
-async def check_parent_process(parent_pid: int):
+async def check_parent_process(parent_pid: int) -> None:
     """Background task to check if the parent process is still alive."""
     while True:
         await asyncio.sleep(10)  # Check every 10 seconds
@@ -75,7 +76,7 @@ def get_app_port(app: FastAPI) -> int:
 
 
 
-async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: BackgroundTasks, force_restart = False):
+async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: BackgroundTasks, force_restart: bool = False) -> None:
     request_body = await request.json()
     exchange_name = dto.exchange_name
     #try:
@@ -104,13 +105,13 @@ async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: Ba
         api_keys = dto.api_key
         api_secret = dto.api_secret
         password = dto.password
-        user_id = int(dto.user_id)
+        user_id = int(dto.user_id) if dto.user_id is not None else 0
         custom_stop = dto.custom_stop
         telegram_id = dto.telegram_id
-        
+
         # enter_symbol_amount_list 처리 로직 (변경 없음)
         if enter_symbol_amount_list is None:
-            enter_symbol_amount_list = [(max(0, enter_symbol_amount_list[0])) for i in range(grid_num)]
+            enter_symbol_amount_list = [0.0 for i in range(grid_num)]
         elif len(enter_symbol_amount_list) < grid_num:
             diff = grid_num - len(enter_symbol_amount_list)
             last_value = max(enter_symbol_amount_list[-1], 0)
@@ -146,7 +147,7 @@ async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: Ba
         await redis.close()
 
 
-async def restart_running_bots(app: FastAPI):
+async def restart_running_bots(app: FastAPI) -> None:
     redis = await get_redis_connection()
     current_port = get_app_port(app)
     print(f"Restarting running bots on {current_port}")
@@ -181,7 +182,7 @@ async def restart_running_bots(app: FastAPI):
                     # 가짜 Request 객체에 json 메서드 추가
                     async def fake_json():
                         return dto.model_dump()
-                    fake_request.json = fake_json
+                    fake_request.json = fake_json  # type: ignore[method-assign]
                     
                     background_tasks = BackgroundTasks()
                     await update_user_data(exchange_id, user_id)
@@ -193,7 +194,7 @@ async def restart_running_bots(app: FastAPI):
                     print(f"Error restarting bot for user {user_id}: {str(e)}")
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan with new infrastructure integration"""
     port = None
     try:
@@ -265,10 +266,10 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Error during shutdown", exc_info=True)
         finally:
-            redis_connection.close_connection()
+            redis_connection.close_connection()  # type: ignore[attr-defined]
 
 
-async def save_running_symbols(app: FastAPI):
+async def save_running_symbols(app: FastAPI) -> None:
     redis = await get_redis_connection()
     try:
         for exchange_id in ['binance', 'upbit', 'bitget', 'binance_spot', 'bitget_spot', 'okx', 'okx_spot', 'bybit', 'bybit_spot']:

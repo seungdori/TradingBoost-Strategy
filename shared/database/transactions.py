@@ -96,7 +96,6 @@ async def transactional(
 
             # Check if this is a deadlock error
             # PostgreSQL: 40P01 (deadlock_detected)
-            # SQLite: doesn't have deadlock errors in the same way
             is_deadlock = (
                 e.orig is not None and
                 hasattr(e.orig, 'pgcode') and

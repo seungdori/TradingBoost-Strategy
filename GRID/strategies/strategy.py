@@ -11,16 +11,16 @@ import logging
 from HYPERRSI import telegram_message
 from queue import Queue
 from datetime import datetime, timedelta
-import pytz
+import pytz  # type: ignore[import-untyped]
 import aiohttp
 import math
 import traceback
 from GRID.database import redis_database as database
 import random
+from typing import Any, Optional
 global order_ids
 
-order_ids = {}
-import aiosqlite
+order_ids: dict[str, Any] = {}
 from shared.utils import retry_async
 
 seoul_timezone = pytz.timezone('Asia/Seoul')
@@ -28,14 +28,14 @@ now = datetime.now(tz=seoul_timezone)
 
 
 class MemoryCache:
-    def __init__(self):
-        self._cache = {}
+    def __init__(self) -> None:
+        self._cache: dict[str, tuple[Any, datetime]] = {}
 
-    def set(self, key, value, ttl_seconds):
+    def set(self, key: str, value: Any, ttl_seconds: int) -> None:
         expiry = datetime.now() + timedelta(seconds=ttl_seconds)
         self._cache[key] = (value, expiry)
 
-    def get(self, key):
+    def get(self, key: str) -> Any | None:
         if key in self._cache:
             value, expiry = self._cache[key]
             if datetime.now() < expiry:
@@ -44,7 +44,7 @@ class MemoryCache:
                 del self._cache[key]
         return None
 
-    def clear_expired(self):
+    def clear_expired(self) -> None:
         now = datetime.now()
         self._cache = {k: v for k, v in self._cache.items() if v[1] > now}
         
@@ -58,7 +58,7 @@ RETRY_DELAY = 3  # 재시도 사이의 대기 시간(초)
 # retry_async is now imported from shared.utils
 
 
-async def get_exchange_instance(exchange_name, user_id):
+async def get_exchange_instance(exchange_name: str, user_id: str) -> Any | None:
     exchange_name = str(exchange_name).lower()
     try:
         if exchange_name == 'binance':
@@ -74,7 +74,7 @@ async def get_exchange_instance(exchange_name, user_id):
         elif exchange_name == 'bitget_spot':
             exchange_instance = await instance.get_bitget_spot_instance(user_id)
             direction = 'long'
-        
+
         elif exchange_name == 'okx':
             try:
                 print('okx instance 호출', user_id)
@@ -92,7 +92,7 @@ async def get_exchange_instance(exchange_name, user_id):
 
 
 
-def safe_abs(input_value):
+def safe_abs(input_value: Any) -> float | str:
     try:
         # 문자열을 실수로 변환
         numeric_value = float(input_value)
@@ -103,11 +103,14 @@ def safe_abs(input_value):
         return "ValueError: input_value must be a number or a string that represents a number"
 
 
-async def change_leverage(exchange_name, symbol, leverage, user_id, retries=2, delay=2):
+async def change_leverage(exchange_name: str, symbol: str, leverage: int | str, user_id: str, retries: int = 2, delay: int = 2) -> Any | None:
     leverage_int = int(leverage)
+    exchange = None
     try:
 
         exchange = await get_exchange_instance(exchange_name, user_id)
+        if exchange is None:
+            return None
         if exchange_name.lower() not in ['binance', 'bitget', 'okx']:
             raise ValueError(f"레버리지 설정은 바이낸스/비트겟/okx에서만 가능합니다. {exchange}" )
 
@@ -117,7 +120,7 @@ async def change_leverage(exchange_name, symbol, leverage, user_id, retries=2, d
                     response = await exchange.set_leverage(leverage_int, symbol, params={'contract_type': 'swap','position_mode': 'single','marginCoin': 'USDT'})
                     print(f"Attempt {attempt}: Success", response)
                     return response  # 성공 시 반복 종료
-                else : 
+                else:
                     try:
                         response = await exchange.set_leverage(leverage_int, symbol)
                         print(f"Attempt {attempt}: Success", response)
@@ -129,117 +132,29 @@ async def change_leverage(exchange_name, symbol, leverage, user_id, retries=2, d
                             key = f"{exchange_name}:user:{user_id}"
                             await redis.hset(key, mapping={'is_running': '0'})
                             await exchange.close()
-                            return
+                            return None
                         print(f"Attempt {attempt}: An error occurred change leverage {symbol} because : {e}")
-                        return
+                        return None
             except Exception as e:
                 print(f"Attempt {attempt}: An error occurred3a: {e}")
                 if attempt == retries:
                     asyncio.create_task(telegram_message.send_telegram_message(f"Final attempt failed: {e}", exchange, debug=True))
                     raise  # 마지막 시도에서도 실패한 경우, 메시지를 보내고 반복 종료
                 await asyncio.sleep(delay)  # 지정된 딜레이 후에 다시 시도 # Todo: Performance check
+        return None
     finally:
         if exchange is not None:
             await exchange.close()
         
 
-def get_corrected_rounded_price(price):
-    # 호가 구조에 맞춰 가격을 내림 처리합니다.
-    if price < 10:
-        unit = Decimal('0.01')
-    elif price < 100:
-        unit = Decimal('0.1')
-    elif price < 1000:
-        unit = Decimal('1')
-    elif price < 10000:
-        unit = Decimal('5')
-    elif price < 50000:
-        unit = Decimal('10')
-    elif price < 100000:
-        unit = Decimal('50')
-    elif price < 500000:
-        unit = Decimal('100')
-    elif price < 1000000:
-        unit = Decimal('500')
-    else:
-        unit = Decimal('1000')
+from shared.utils.exchange_precision import (
+    get_corrected_rounded_price,
+    get_order_price_unit_upbit as get_order_price_unit,
+    round_to_upbit_tick_size as round_to_tick_size
+)
 
-    # Decimal을 사용하여 내림 처리된 가격을 반환합니다.
-    price = Decimal(str(price))
-    adjusted_price = price // unit * unit
-    return float(adjusted_price)
-
-
-
-
-def get_order_price_unit(price):
-    """
-    Returns the order price unit based on the given price according to the provided criteria.
-
-    :param price: The price for which the order price unit is to be determined.
-    :return: The order price unit.
-    """
-    if price >= 2000000:
-        return 2000
-    elif 1000000 <= price < 2000000:
-        return 1000
-    elif 500000 <= price < 1000000:
-        return 500
-    elif 100000 <= price < 500000:
-        return 100
-    elif 10000 <= price < 100000:
-        return 50
-    elif 1000 <= price < 10000:
-        return 10
-    elif 100 <= price < 1000:
-        return 1
-    elif 10 <= price < 100:
-        return 0.1
-    elif 1 <= price < 10:
-        return 0.01
-    elif 0.1 <= price < 1:
-        return 0.001
-    elif 0.01 <= price < 0.1:
-        return 0.0001
-    elif 0.001 <= price < 0.01:
-        return 0.00001
-    elif 0.0001 <= price < 0.001:
-        return 0.000001
-    else:
-        return 0.1
-
-
-def round_to_tick_size(amount):
-    # 입력된 값이 문자열이고, 비어 있지 않은 경우 float로 변환
-    if isinstance(amount, str) and amount.strip():
-        try:
-            amount = float(amount)
-        except ValueError:
-            # 변환 실패 시, 오류 메시지를 반환하거나 None을 반환할 수 있습니다.
-            return None
-    elif isinstance(amount, str):
-        # 빈 문자열이거나 공백만 있는 경우
-        return None
-
-    # 이하 로직은 동일하게 유지
-    if amount >= 1000:
-        tick_size = Decimal('0.1')
-    elif amount >= 100:
-        tick_size = Decimal('0.01')
-    elif amount >= 1:
-        tick_size = Decimal('0.01')
-    elif amount >= 0.01:
-        tick_size = Decimal('0.0001')
-    elif amount >= 0.0001:
-        tick_size = Decimal('0.0001')
-    else:
-        tick_size = Decimal('0.0001')
-
-    # Adjust the rounding to round half away from zero using Decimal
-    amount_decimal = Decimal(str(amount))
-    rounded_amount = amount_decimal.quantize(tick_size, rounding=ROUND_HALF_UP)
-
-    return float(rounded_amount)
+# Backward compatibility: re-export functions
+__all__ = ['get_corrected_rounded_price', 'get_order_price_unit', 'round_to_tick_size']
 
 ####거래소별 들어오는 심볼명#####
 #binance -> 'ALTUSDT' 형식
@@ -248,7 +163,7 @@ def round_to_tick_size(amount):
 
 
 
-async def close_position(exchange, symbol, side, quantity, user_id):
+async def close_position(exchange: Any, symbol: str, side: str, quantity: float, user_id: str) -> None:
     print('close position호출')
     exchange_flag = False
     if not isinstance(exchange, ccxt.Exchange):
@@ -280,7 +195,7 @@ async def close_position(exchange, symbol, side, quantity, user_id):
             await exchange.close()
 
 
-async def close(exchange, symbol, order_id=None, qty: float = None, qty_perc: int = None, message = None, action: str = None, user_id = None):
+async def close(exchange: Any, symbol: str, order_id: str | None = None, qty: float | None = None, qty_perc: int | None = None, message: str | None = None, action: str | None = None, user_id: str | None = None) -> Any | None:
     quantity = 0.0
     new_instance = False
     print(f"close주문의 orderid : {order_id}")
@@ -292,7 +207,7 @@ async def close(exchange, symbol, order_id=None, qty: float = None, qty_perc: in
     # qty 변수의 타입과 값을 출력
     initial_qty = safe_abs(qty) if qty is not None else None
     print(f"qty 변수 타입: {type(qty)}, 값: {initial_qty}")
-    if type(qty) == str or type(qty) == int:
+    if qty is not None and isinstance(qty, (str, int)):
         qty = float(qty)
     print(f"변환 후 qty 변수 타입: {type(qty)}, 값: {qty}")
     try:
@@ -303,6 +218,7 @@ async def close(exchange, symbol, order_id=None, qty: float = None, qty_perc: in
         print(traceback.format_exc())
         # 업비트 또는 빗썸 거래소인 경우
     try:
+        order = None
         if (exchange.id).lower() == 'okx':
             market_type = exchange.options.get('defaultType', 'No market type set')
             if market_type == 'future':
@@ -326,8 +242,8 @@ async def close(exchange, symbol, order_id=None, qty: float = None, qty_perc: in
                 base_currency = symbol.split('-')[1]  # 'KRW-ETC'에서 'ETC'를 추출
                 free_balance = balance['free'].get(base_currency)  # 사용 가능 잔고 추출
                 # qty가 float 타입인지 확인
-                if not isinstance(qty, float) and qty is not None:
-                    print(f"{exchange}: qty는 float 타입이어야 합니다. 현재 타입: {type(qty)}")
+                if qty is not None and not isinstance(qty, float):
+                    print(f"{exchange}: qty는 float 타입이어야 합니다. 현재 타입: {type(qty)}")  # type: ignore[unreachable]
                     return None
                 if qty is None:
                     qty = free_balance
@@ -387,7 +303,7 @@ async def close(exchange, symbol, order_id=None, qty: float = None, qty_perc: in
             #    asyncio.create_task(telegram_message.send_telegram_message(message, exchange))
             #    return
             #else:
-                return
+                return None
         else:
             print(f'퀀티티 : {quantity}')
             if qty_perc is not None:
@@ -416,28 +332,30 @@ async def close(exchange, symbol, order_id=None, qty: float = None, qty_perc: in
         return order  # 생성된 주문 반환
     except ccxt.InvalidOrder as e:
         print(f"최소 주문량 오류, 주문을 스킵합니다: {e}")
-        pass
+        return None
     except Exception as e:
         print(f"close 주문 예외 발생: {e}, qty : {qty}")
         print(traceback.format_exc())
         try:
-            await adjust_order_amount(exchange, symbol, qty, message)
+            if qty is not None:
+                await adjust_order_amount(exchange, symbol, float(qty), message)
         except Exception as e:
             logging.error(f"종료 주문 중 오류 발생: {e} qty : {qty}")
             print(traceback.format_exc())
+        return None
     finally:
         if new_instance:
             await exchange.close()
 
 
-def safe_decimal_convert(value):
+def safe_decimal_convert(value: Any) -> Decimal | None:
     if value is None:
         print('safe decimal convert에서 value가 None입니다.')
         return None
     if isinstance(value, dict):
         value = next(iter(value.values()))
     if isinstance(value, (int, float)):
-        return Decimal(str(value))    
+        return Decimal(str(value))
 
     try:
         return Decimal(str(value).strip())
@@ -446,7 +364,7 @@ def safe_decimal_convert(value):
         return None
 
 
-async def place_order(exchange, symbol, order_type, side, amount, price=None):
+async def place_order(exchange: Any, symbol: str, order_type: str, side: str, amount: Any, price: Any = None) -> Any | None:
     print(f"place {symbol} order amount : {amount} on {price}")
     #UPBIT 전용 for GRID#
     await asyncio.sleep(0.1)
@@ -524,7 +442,7 @@ async def place_order(exchange, symbol, order_type, side, amount, price=None):
         return None
 
 
-async def check_order_status(exchange, symbol, order_id, max_retries=3, delay=2):
+async def check_order_status(exchange: Any, symbol: str, order_id: str, max_retries: int = 3, delay: int = 2) -> Any | None:
     retry_count = 0
     while retry_count < max_retries:
         try:
@@ -542,18 +460,18 @@ async def check_order_status(exchange, symbol, order_id, max_retries=3, delay=2)
             else:
                 print("주문 상태 조회 실패. 최대 재시도 횟수 도달.")
                 return None
- 
+    return None
 
 
-async def cancel_all_limit_orders(exchange, symbol, user_id=None, side=None):
+async def cancel_all_limit_orders(exchange: Any, symbol: str, user_id: str | None = None, side: str | None = None) -> tuple[list[str], list[tuple[str, str]]]:
     print(f"Cancelling symbol : {symbol}" + (f" with side: {side}" if side else ""))
     retry_delay = 2
     max_retries = 4
     retry_attempts = 0
     exchange_name = str(exchange).lower()
     close_instance_flag = False
-    cancelled_orders = []
-    failed_orders = []
+    cancelled_orders: list[str] = []
+    failed_orders: list[tuple[str, str]] = []
 
     # side 값 정규화
     normalized_side = None
@@ -626,10 +544,10 @@ async def cancel_all_limit_orders(exchange, symbol, user_id=None, side=None):
         if close_instance_flag:
             await exchange.close()
             close_instance_flag = False
-            
-            
-            
-async def cancel_orders_individually(exchange, symbol, order_ids, cancelled_orders, failed_orders):
+    return cancelled_orders, failed_orders
+
+
+async def cancel_orders_individually(exchange: Any, symbol: str, order_ids: list[str], cancelled_orders: list[str], failed_orders: list[tuple[str, str]]) -> None:
     for order_id in order_ids:
         try:
             await exchange.cancel_order(order_id, symbol)
@@ -642,7 +560,7 @@ async def cancel_orders_individually(exchange, symbol, order_ids, cancelled_orde
                 failed_orders.append((order_id, str(e)))
         await asyncio.sleep(0.35)  # 개별 취소 사이에 짧은 지연 추가    
 
-async def cancel_long_limit_orders(exchange, symbol):
+async def cancel_long_limit_orders(exchange: Any, symbol: str) -> str | None:
     retry_delay =2
     max_retries = 3
     retry_attempts = 0
@@ -669,9 +587,9 @@ async def cancel_long_limit_orders(exchange, symbol):
             retry_attempts += 1
             await asyncio.sleep(retry_delay)
 
-    return
+    return None
 
-async def cancel_short_limit_orders(exchange, symbol):
+async def cancel_short_limit_orders(exchange: Any, symbol: str) -> str | None:
     retry_delay =2
     max_retries = 3
     retry_attempts = 0
@@ -698,10 +616,10 @@ async def cancel_short_limit_orders(exchange, symbol):
             retry_attempts += 1
             await asyncio.sleep(retry_delay)
 
-    return
+    return None
 
 
-async def close_remain_position(exchange, symbol):
+async def close_remain_position(exchange: Any, symbol: str) -> Any | None:
     max_retries=3
     retry_delay=2
     retry_count = 0
@@ -728,18 +646,20 @@ async def close_remain_position(exchange, symbol):
             retry_count += 1
     if retry_count >= max_retries:
         print("Max retries reached, giving up.")
-        return None  # 또는 실패를 나타내는 다른 값
+    return None
 
 
 
 
-async def adjust_order_amount(exchange, symbol, qty, message=None):
+async def adjust_order_amount(exchange: Any, symbol: str, qty: float, message: str | None = None) -> Any | None:
     try:
+        positions: Any = None
+        free_balance: Any = 0.0
 
         if exchange.name.lower() == 'okx':
             print(symbol)
             positions = await exchange.private_get_account_positions()
-            #position = await okx.fetch_positions(symbol) 
+            #position = await okx.fetch_positions(symbol)
             print(positions)
             base_currency = symbol
             free_balance = int(positions['pos'])
@@ -758,7 +678,10 @@ async def adjust_order_amount(exchange, symbol, qty, message=None):
         if exchange.name.lower() == 'upbit':
             base_currency = symbol.split('-')[1]  # 'KRW-ETC'에서 'ETC'를 추출
             print(base_currency)
-            target_position = next((position for position in positions if position['symbol'] == symbol), None)
+            if positions is not None:
+                target_position = next((position for position in positions if position['symbol'] == symbol), None)
+            else:
+                target_position = None
             free_balance = float(balance[symbol]['positionAmt'])
             # 해당 심볼의 positionAmt 얻기
             if target_position:
@@ -812,11 +735,10 @@ async def adjust_order_amount(exchange, symbol, qty, message=None):
 
         return None
 
-async def check_position(exchange, symbol):
+async def check_position(exchange: Any, symbol: str) -> Any:
     # 포지션 확인
     positions = await exchange.fetchPositions([symbol])
     print(positions)
     await exchange.close()
     return positions
-
 

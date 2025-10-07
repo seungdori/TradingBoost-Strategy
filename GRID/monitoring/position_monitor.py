@@ -85,9 +85,9 @@ async def monitor_tp_orders_websocekts(exchange_name, symbol_name, user_id, leve
                     print("❗️DEBUG: 익절 주문 수량이 0입니다. 확인이 필요합니다")
                     print(f"❗️DEBUG: 익절 주문 정보: {info}")
                     #print(f"take_profit_orders_info: {take_profit_orders_info}")
-                    #asyncio.create_task(telegram_message.send_telegram_message(f"❗️DEBUG: {symbol_name}의 익절 주문 수량이 0입니다. 확인이 필요합니다", exchange_name, user_id, debug = True))
+                    #asyncio.create_task(telegram_message.send_telegram_message(f"❗️DEBUG: {symbol_name}의 익절 주문 수량이 0입니다. 확인이 필요합니다", exchange_name, user_id))
                 take_profit_orders_info[str(level)] = {"order_id": None, "quantity": 0, "target_price": 0, "active": False, "side": None}
-                await update_take_profit_orders_info(redis, exchange_name, user_id, symbol_name, level_index, order_id = None, new_price = 0.0, quantity = 0.0, active = False, side = False)
+                await update_take_profit_orders_info(redis, exchange_name, user_id, symbol_name, level_index, order_id = None, new_price = 0.0, quantity = 0.0, active = False, side = None)
                 print(f"{user_id} : {symbol_name}의 {level}번째 그리드 익절 주문이 체결되었습니다.")
             elif order['status'] == 'canceled':
                 current_time = datetime.now()
@@ -129,7 +129,7 @@ async def monitor_tp_orders_websocekts(exchange_name, symbol_name, user_id, leve
                                 #await exchange_instance.cancel_order(info["order_id"], symbol_name) #<-- batch 주문으로 중앙화 
                             except Exception as e:
                                 print(f"익절 주문 취소 실패. {symbol_name} {level}레벨, {info['order_id']}")
-                                await telegram_message.send_telegram_message(f"익절 주문 취소 실패: {e}", exchange_name, user_id, debug = True)
+                                await telegram_message.send_telegram_message(f"익절 주문 취소 실패: {e}", exchange_name, user_id)
                     return
                 except Exception as e:
                     print(f"익절 관리 종료 혹은 주문 취소할 것 없음 Monitor_tp_orders: {e}")
@@ -139,12 +139,12 @@ async def monitor_tp_orders_websocekts(exchange_name, symbol_name, user_id, leve
                     if info["active"] and info["order_id"] is not None:
                         try:
                             #print(f" {symbol_name} 레벨 {level} 익절 주문 감시 시작")
-                            order = await exchange_instance.fetch_order(info["order_id"], symbol_name)
+                            order = await exchange_instance.fetch_order(info["order_id"], symbol_name) # type: ignore[union-attr]
                             await handle_order_update(order, level, symbol_name)
                         except Exception as e:
                             if 'Order does not exist' in str(e):
                                 print(f"{user_id} : 익절 주문이 존재하지 않음. {symbol_name} {level}레벨, {info['order_id']}")
-                                await update_take_profit_orders_info(redis, exchange_name, user_id, symbol_name, level, order_id = None, new_price = 0.0, quantity = 0.0, active = False, side = False)
+                                await update_take_profit_orders_info(redis, exchange_name, user_id, symbol_name, level, order_id = None, new_price = 0.0, quantity = 0.0, active = False, side = None)
                                 continue
                 first_time_check = False
                 await asyncio.sleep(4.36)  # 4초마다 체크
@@ -188,7 +188,7 @@ async def monitor_positions(exchange_name, user_id):
                         return
                     await check_and_close_positions(exchange, user_id)
                     if not running_symbols and not is_running:  # running_symbols가 비었는지 확인
-                        print("모든 포지션을 청산했습니다. 모니터링을 종료합니다.")
+                        print("모든 포지션을 청산했습니다. 모니터링을 종료합니다.") # type: ignore[unreachable]
                         break
                     await asyncio.sleep(15)  # 15초 대기
                 except Exception as e:
@@ -284,7 +284,7 @@ async def check_entry_order(exchange_name, user_id, custom_stop):
                 last_entry_time = datetime.fromisoformat(last_entry_time)
                 if (datetime.now() - last_entry_time).total_seconds() >= custom_stop * 60:
                     exchange = await get_exchange_instance(exchange_name, user_id)
-                    trades = await exchange.fetch_my_trades(symbol, limit=1)
+                    trades = await exchange.fetch_my_trades(symbol, limit=1) # type: ignore[union-attr]
                     if trades:
                         actual_last_entry_time = datetime.strptime(trades[0]['datetime'], "%Y-%m-%dT%H:%M:%S.%fZ")
                         if (datetime.now() - actual_last_entry_time).total_seconds() >= custom_stop * 60:
@@ -508,7 +508,7 @@ async def manually_close_positions(exchange_name, user_id):
         exchange = await get_exchange_instance(exchange_name, user_id)
         
         if exchange_name == 'okx' or exchange_name == 'okx_spot':
-            positions_data = await exchange.private_get_account_positions()
+            positions_data = await exchange.private_get_account_positions() # type: ignore[union-attr]
             for position in positions_data['data']:
                 symbol = position['instId']
                 if symbol in running_symbols:
@@ -516,14 +516,14 @@ async def manually_close_positions(exchange_name, user_id):
                     side = 'long' if quantity > 0 else 'short'
                     await strategy.close_position(exchange, symbol, side, abs(quantity), user_id)
         elif exchange_name == 'upbit':
-            position_data = await exchange.fetch_balance()
+            position_data = await exchange.fetch_balance() # type: ignore[union-attr]
             for symbol in running_symbols:
                 base_currency = symbol.split('-')[1]
                 quantity = float(position_data['total'].get(base_currency, 0))
                 if quantity > 0:
                     await strategy.close_position(exchange, symbol, 'long', quantity, user_id)
         else:
-            positions_data = await exchange.fetch_positions()
+            positions_data = await exchange.fetch_positions() # type: ignore[union-attr]
             for position in positions_data:
                 symbol = position['symbol']
                 if symbol in running_symbols:
@@ -573,7 +573,7 @@ async def manually_close_symbol(exchange_name, user_id, symbol):
         exchange = await get_exchange_instance(exchange_name, user_id)
         
         if exchange_name == 'okx' or exchange_name == 'okx_spot':
-            positions_data = await exchange.private_get_account_positions()
+            positions_data = await exchange.private_get_account_positions() # type: ignore[union-attr]
             for position in positions_data['data']:
                 if position['instId'] == symbol:
                     quantity = float(position['pos'])
@@ -581,13 +581,13 @@ async def manually_close_symbol(exchange_name, user_id, symbol):
                     await strategy.close_position(exchange, symbol, side, abs(quantity), user_id)
                     break
         elif exchange_name == 'upbit':
-            position_data = await exchange.fetch_balance()
+            position_data = await exchange.fetch_balance() # type: ignore[union-attr]
             base_currency = symbol.split('-')[1]
             quantity = float(position_data['total'].get(base_currency, 0))
             if quantity > 0:
                 await strategy.close_position(exchange, symbol, 'long', quantity, user_id)
         else:
-            positions_data = await exchange.fetch_positions()
+            positions_data = await exchange.fetch_positions() # type: ignore[union-attr]
             for position in positions_data:
                 if position['symbol'] == symbol:
                     quantity = float(position['amount'])

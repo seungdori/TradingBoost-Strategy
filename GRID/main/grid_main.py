@@ -47,7 +47,7 @@ from GRID.jobs.task_manager import create_tasks
 
 # ==================== Config (for debug only) ====================
 try:
-    from config import OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE  # type: ignore[attr-defined]
+    from config import OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE
 except ImportError:
     OKX_API_KEY = None
     OKX_SECRET_KEY = None
@@ -190,7 +190,7 @@ async def main(exchange_name, direction, enter_symbol_count, enter_symbol_amount
                                 print(f"Successfully created {len(recovery_tasks)} recovery tasks.")
 
                                 await telegram_message.send_telegram_message(
-                                    f"{user_id} :새로운 심볼 {new_symbols[:1]}로 재진입", exchange_name, user_id, debug=True
+                                    f"새로운 심볼 {new_symbols[:1]}로 재진입", exchange_name, user_id
                                 )
                                 await redis.hset(user_key, 'running_symbols', json.dumps(list(running_symbols)))
                                 recovery_tasks = await create_tasks(

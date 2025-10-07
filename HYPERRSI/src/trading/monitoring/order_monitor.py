@@ -11,7 +11,7 @@ import traceback
 from datetime import datetime
 from typing import Dict, List
 from shared.logging import get_logger, log_order
-from HYPERRSI.src.core.database import redis_client
+
 from HYPERRSI.src.api.dependencies import get_exchange_context
 from HYPERRSI.src.api.routes.order import get_order_detail, get_algo_order_info, close_position, ClosePositionRequest
 from shared.utils import contracts_to_qty
@@ -21,6 +21,21 @@ from .position_validator import check_position_exists, verify_and_handle_positio
 from .break_even_handler import move_sl_to_break_even
 
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
+
+
+# Module-level attribute for backward compatibility
+def __getattr__(name):
+    if name == "redis_client":
+        return _get_redis_client()
+    raise AttributeError(f"module has no attribute {name}")
 
 
 async def check_missing_orders(user_id: str, symbol: str, current_orders: List):

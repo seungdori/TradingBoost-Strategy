@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import logging
 import traceback
-from typing import Tuple
+from typing import Tuple, Dict, Union
 
 
 def initialize_orders(df: pd.DataFrame, n_levels: int = 20) -> pd.DataFrame:
@@ -20,7 +20,7 @@ def initialize_orders(df: pd.DataFrame, n_levels: int = 20) -> pd.DataFrame:
         주문 컬럼이 추가된 데이터프레임
     """
     # 주문 초기화
-    data = {f'order_{n}': False for n in range(1, n_levels + 1)}
+    data: Dict[str, Union[bool, float]] = {f'order_{n}': False for n in range(1, n_levels + 1)}
     data.update({f'order_{n}_quantity': 0.0 for n in range(1, n_levels + 1)})
     data.update({f'order_{n}_entry_price': 0.0 for n in range(1, n_levels + 1)})
     data.update({f'order_{n}_profit': 0.0 for n in range(1, n_levels + 1)})
@@ -50,7 +50,7 @@ def calculate_grid_levels(df: pd.DataFrame, band_mult: float = 0.5,
         그리드 레벨 컬럼이 추가된 데이터프레임
     """
     # 그리드 레벨 계산
-    grid_levels = {}
+    grid_levels: Dict[str, pd.Series] = {}
     main_plot = df['main_plot']
     atr = np.maximum(df['atr'], main_plot * min_diff)
 

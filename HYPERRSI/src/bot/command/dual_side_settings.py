@@ -4,7 +4,7 @@ from aiogram import types, Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from HYPERRSI.src.core.database import redis_client
+
 from shared.logging import get_logger
 import json
 import aiohttp
@@ -13,6 +13,14 @@ import asyncio
 
 router = Router()
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 
 # API 엔드포인트 설정
 try:

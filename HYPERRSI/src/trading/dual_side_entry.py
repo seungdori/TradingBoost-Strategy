@@ -13,15 +13,18 @@ from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_
 from HYPERRSI.src.api.routes.order import close_position
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.trading.error_message import map_exchange_error
-from shared.logging import get_logger, log_order, log_dual_side_debug
+from shared.logging import get_logger, log_order
+from HYPERRSI.src.core.logger import log_dual_side_debug
 from HYPERRSI.src.api.routes.order import ClosePositionRequest, cancel_algo_orders
-import json
 from HYPERRSI.src.core.error_handler import log_error
-import asyncio
 from HYPERRSI.src.services.redis_service import RedisService, redis_client
+from shared.utils.task_tracker import TaskTracker
 
 logger = get_logger(__name__)
 redis_service = RedisService()
+
+# Task tracker for dual-side entry background tasks
+task_tracker = TaskTracker(name="dual-side-entry")
 
 
 async def set_default_dual_side_entry_settings(user_id: str):
@@ -192,13 +195,16 @@ async def manage_dual_side_entry(
                 level='WARNING'
             )
             
-            asyncio.create_task(send_telegram_message(
-                f"⚠️ 현재 포지션 모드는 헷지 모드가 아닙니다.\n"
-                "⚠️ 현재 포지션 모드는 헷지 모드가 아닙니다.\n"
-                "이 기능은 헷지 모드에서만 사용 가능합니다.\n\n"
-                "거래소 설정에서 헷지 모드로 변경한 뒤 봇(프로그램)을 재시작해야 적용됩니다.", 
-                user_id
-            ))
+            task_tracker.create_task(
+                send_telegram_message(
+                    f"⚠️ 현재 포지션 모드는 헷지 모드가 아닙니다.\n"
+                    "⚠️ 현재 포지션 모드는 헷지 모드가 아닙니다.\n"
+                    "이 기능은 헷지 모드에서만 사용 가능합니다.\n\n"
+                    "거래소 설정에서 헷지 모드로 변경한 뒤 봇(프로그램)을 재시작해야 적용됩니다.",
+                    user_id
+                ),
+                name=f"telegram-msg-hedge-mode-{user_id}"
+            )
             return
     except Exception as e:
         log_dual_side_debug(

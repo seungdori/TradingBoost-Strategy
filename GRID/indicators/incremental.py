@@ -4,11 +4,12 @@ Incremental indicator calculations for performance optimization
 import logging
 import numpy as np
 import pandas as pd
+from typing import Tuple, Any, cast
 from shared.indicators import calculate_dm_tr, calculate_tr, compute_mama_fama
 from GRID.indicators.state import IndicatorState
 
 
-def calculate_adx_incremental(df: pd.DataFrame, state: IndicatorState, dilen: int = 28, adxlen: int = 28):
+def calculate_adx_incremental(df: pd.DataFrame, state: IndicatorState, dilen: int = 28, adxlen: int = 28) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     증분형 ADX 계산 함수입니다.
     이전 계산 상태를 사용하여 새 데이터에 대해서만 ADX를 계산합니다.
@@ -77,7 +78,7 @@ def calculate_adx_incremental(df: pd.DataFrame, state: IndicatorState, dilen: in
         return adx, plus_di, minus_di
 
 
-def atr_incremental(df: pd.DataFrame, state: IndicatorState, length: int = 14):
+def atr_incremental(df: pd.DataFrame, state: IndicatorState, length: int = 14) -> np.ndarray:
     """
     증분형 ATR 계산 함수입니다.
     이전 계산 상태를 사용하여 새 데이터에 대해서만 ATR을 계산합니다.
@@ -113,7 +114,7 @@ def atr_incremental(df: pd.DataFrame, state: IndicatorState, length: int = 14):
 
         # 이미 모든 데이터가 계산되었으면 현재 상태 반환
         if start_idx >= len(df):
-            return state.atr_values
+            return cast(np.ndarray, state.atr_values)
 
         # 이전 ATR 값 가져오기
         prev_atr = state.prev_atr
@@ -148,8 +149,8 @@ def atr_incremental(df: pd.DataFrame, state: IndicatorState, length: int = 14):
         return atr_values
 
 
-def compute_mama_fama_incremental(src, state: IndicatorState, length: int = 20,
-                                   fast_limit: float = 0.5, slow_limit: float = 0.05):
+def compute_mama_fama_incremental(src: Any, state: IndicatorState, length: int = 20,
+                                   fast_limit: float = 0.5, slow_limit: float = 0.05) -> Tuple[np.ndarray, np.ndarray]:
     """
     증분형 MAMA/FAMA 계산 함수입니다.
     이전 계산 상태를 사용하여 새 데이터에 대해서만 MAMA/FAMA를 계산합니다.
@@ -210,12 +211,12 @@ def compute_mama_fama_incremental(src, state: IndicatorState, length: int = 20,
         prev_fama = fama[start_idx-1] if start_idx > 0 and len(fama) > start_idx-1 else src_values[0]
 
         # MESA 상태 변수 초기화
-        prev_period = state.prev_period if state.prev_period != 0 else 0
-        prev_I2 = state.prev_I2 if state.prev_I2 != 0 else 0
-        prev_Q2 = state.prev_Q2 if state.prev_Q2 != 0 else 0
-        prev_Re = state.prev_Re if state.prev_Re != 0 else 0
-        prev_Im = state.prev_Im if state.prev_Im != 0 else 0
-        prev_phase = state.prev_phase if state.prev_phase != 0 else 0
+        prev_period = state.prev_period if state.prev_period != 0 else 0.0
+        prev_I2 = state.prev_I2 if state.prev_I2 != 0 else 0.0
+        prev_Q2 = state.prev_Q2 if state.prev_Q2 != 0 else 0.0
+        prev_Re = state.prev_Re if state.prev_Re != 0 else 0.0
+        prev_Im = state.prev_Im if state.prev_Im != 0 else 0.0
+        prev_phase = state.prev_phase if state.prev_phase != 0 else 0.0
 
         # 새 데이터에 대해 계산
         for i in range(start_idx, len(src_values)):
@@ -231,9 +232,9 @@ def compute_mama_fama_incremental(src, state: IndicatorState, length: int = 20,
 
             # 초기화
             smooth = price
-            detrender = 0
-            I1 = 0
-            Q1 = 0
+            detrender = 0.0
+            I1 = 0.0
+            Q1 = 0.0
 
             # MESA 계산
             if i >= 3:

@@ -21,24 +21,24 @@ __all__ = [
 
 # Redis 연결 풀 설정
 REDIS_PASSWORD = settings.REDIS_PASSWORD
+REDIS_HOST = settings.REDIS_HOST
+REDIS_PORT = settings.REDIS_PORT
+
+# Redis URL 동적 생성
+redis_url = f'redis://{REDIS_HOST}:{REDIS_PORT}'
+
+# 연결 풀 설정 (패스워드 유무에 관계없이 동일한 구조 사용)
+pool_config = {
+    'max_connections': 200,
+    'encoding': 'utf-8',
+    'decode_responses': True
+}
 
 if REDIS_PASSWORD:
-    pool = aioredis.ConnectionPool.from_url(
-        'redis://localhost',
-        max_connections=200,
-        encoding='utf-8',
-        decode_responses=True,
-        password=REDIS_PASSWORD
-    )
-    redis_client = aioredis.Redis(connection_pool=pool)
-else:
-    pool = aioredis.ConnectionPool.from_url(
-        'redis://localhost',
-        max_connections=200,
-        encoding='utf-8',
-        decode_responses=True
-    )
-    redis_client = aioredis.Redis(connection_pool=pool)
+    pool_config['password'] = REDIS_PASSWORD
+
+pool: aioredis.ConnectionPool = aioredis.ConnectionPool.from_url(redis_url, **pool_config)
+redis_client = aioredis.Redis(connection_pool=pool)
 
 
 async def get_redis_connection():

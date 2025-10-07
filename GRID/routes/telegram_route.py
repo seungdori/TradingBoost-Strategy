@@ -54,21 +54,21 @@ async def update_telegram_token(dto: TelegramTokenDto) -> ResponseDto[TelegramTo
     print('[UPDATE TELEGRAM TOKEN]', dto)
 
     try:
-        telegram_service.set_telegram_token(dto)
+        telegram_service.set_telegram_token(dto)  # type: ignore[arg-type]
         updated_token = telegram_service.get_telegram_token(dto.exchange_name)
         updated_token_dto: TelegramTokenDto = TelegramTokenDto(
             exchange_name=dto.exchange_name,
             token=updated_token
         )
 
-        return ResponseDto[TelegramTokenDto](
+        return ResponseDto[TelegramTokenDto | None](
             success=True,
             message=f"{dto.exchange_name} telegram token update success",
             data=updated_token_dto
         )
     except Exception as e:
         print('[TELEGRAM TOKEN UPDATE EXCEPTION]', e)
-        return ResponseDto[None](
+        return ResponseDto[TelegramTokenDto | None](
             success=False,
             message=f"{dto.exchange_name} telegram token update fail",
             meta={'error': str(e)},

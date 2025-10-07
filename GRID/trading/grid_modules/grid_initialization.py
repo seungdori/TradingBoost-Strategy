@@ -76,7 +76,7 @@ async def initialize_trading_session(
         # 심볼 초기화
         await ensure_symbol_initialized(exchange_name, user_id, symbol, grid_num)
         ensure_symbol_initialized_old_struc(user_id, symbol, grid_num)
-        await initialize_active_grid(redis, exchange_name, user_id, symbol)
+        await initialize_active_grid(redis, exchange_name, int(user_id), symbol)
 
         # running_symbols 업데이트
         if symbol not in running_symbols:
@@ -118,7 +118,7 @@ async def get_exchange_instance(
     symbol: str,
     initial_investment: list,
     current_price: float,
-    redis
+    redis: Any
 ) -> Tuple[Any, str, list]:
     """거래소 인스턴스 및 관련 데이터 가져오기
 
@@ -138,20 +138,11 @@ async def get_exchange_instance(
     order_quantities = initial_investment
 
     try:
-        if exchange_name == 'binance':
-            exchange_instance = await instance.get_binance_instance(user_id)
-        elif exchange_name == 'binance_spot':
-            exchange_instance = await instance.get_binance_spot_instance(user_id)
-        elif exchange_name == 'upbit':
-            exchange_instance = await instance.get_upbit_instance(user_id)
-        elif exchange_name == 'bitget':
-            exchange_instance = await instance.get_bitget_instance(user_id)
+        exchange_instance = await instance.get_exchange_instance(exchange_name, user_id)
+
+        if exchange_name in ['bitget', 'bitget_spot']:
             symbol_name = symbol.replace('USDT', '') + '/USDT:USDT'
-        elif exchange_name == 'bitget_spot':
-            exchange_instance = await instance.get_bitget_spot_instance(user_id)
-            symbol_name = symbol.replace('USDT', '') + '/USDT:USDT'
-        elif exchange_name == 'okx':
-            exchange_instance = await instance.get_okx_instance(user_id)
+        elif exchange_name in ['okx', 'okx_spot']:
             order_quantities = await retry_async(
                 calculate_order_quantity,
                 symbol,
@@ -163,10 +154,6 @@ async def get_exchange_instance(
                 await redis.hset(symbol_key, 'order_quantities', json.dumps(order_quantities))
             except Exception as e:
                 print(f"An error on making redis list: {e}")
-        elif exchange_name == 'okx_spot':
-            exchange_instance = await instance.get_okx_spot_instance(user_id)
-        else:
-            raise ValueError(f"Unsupported exchange: {exchange_name}")
 
         return exchange_instance, symbol_name, order_quantities
 
@@ -181,8 +168,8 @@ async def initialize_symbol_data(
     symbol: str,
     symbol_name: str,
     grid_num: int,
-    exchange_instance,
-    redis,
+    exchange_instance: Any,
+    redis: Any,
     grid_levels: pd.DataFrame,
     force_restart: bool = False
 ) -> Dict[str, Any]:

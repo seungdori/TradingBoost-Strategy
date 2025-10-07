@@ -93,7 +93,7 @@ def get_grid_status(user_id: int, exchange_name: str = 'okx') -> dict[str, Any]:
     try:
         # get_job_status는 async 함수이므로 동기적으로 실행
         status = asyncio.run(get_job_status(exchange_name, user_id))
-        return status
+        return status  # type: ignore[return-value]
     except Exception as e:
         logger.error(f"Failed to get grid status: {str(e)}")
         return {"status": "error", "error": str(e)}

@@ -8,7 +8,7 @@ Demonstrates:
 - Structured logging
 """
 
-from fastapi import APIRouter, Depends, Query, Path
+from fastapi import APIRouter, Depends, Query, Path, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 
@@ -54,7 +54,7 @@ async def get_blacklist(
     exchange_name: str = Path(..., description="Exchange name (okx, binance, etc.)"),
     user_id: int = Path(..., gt=0, description="User ID"),
     service: TradingAccessService = Depends(get_trading_access_service)
-):
+) -> ResponseDto[List[str]]:
     """
     Get user's blacklisted symbols.
 
@@ -114,7 +114,7 @@ async def get_whitelist(
     exchange_name: str = Path(...),
     user_id: int = Path(..., gt=0),
     service: TradingAccessService = Depends(get_trading_access_service)
-):
+) -> ResponseDto[List[str]]:
     """
     Get user's whitelisted symbols.
 
@@ -147,9 +147,9 @@ async def get_whitelist(
 async def add_to_blacklist(
     exchange_name: str = Path(...),
     user_id: int = Path(..., gt=0),
-    dto: AccessListDto = ...,
+    dto: AccessListDto = Body(...),
     service: TradingAccessService = Depends(get_trading_access_service)
-):
+) -> ResponseDto[int]:
     """
     Add symbols to blacklist.
 
@@ -208,9 +208,9 @@ async def add_to_blacklist(
 async def remove_from_blacklist(
     exchange_name: str = Path(...),
     user_id: int = Path(..., gt=0),
-    dto: AccessListDto = ...,
+    dto: AccessListDto = Body(...),
     service: TradingAccessService = Depends(get_trading_access_service)
-):
+) -> ResponseDto[int]:
     """
     Remove symbols from blacklist.
 
@@ -263,10 +263,10 @@ async def remove_from_blacklist(
 async def update_blacklist(
     exchange_name: str = Path(...),
     user_id: int = Path(..., gt=0),
-    dto: AccessListDto = ...,
+    dto: AccessListDto = Body(...),
     append: bool = Query(False, description="Append to existing list (default: replace)"),
     service: TradingAccessService = Depends(get_trading_access_service)
-):
+) -> ResponseDto[int]:
     """
     Update blacklist (replace or append).
 
@@ -332,7 +332,6 @@ async def update_blacklist(
 """
 Migration Checklist:
 
-1. ✅ Replace direct aiosqlite calls with SQLAlchemy async
 2. ✅ Use dependency injection for database session
 3. ✅ Add input validation (Pydantic + sanitizers)
 4. ✅ Implement structured exception handling

@@ -10,9 +10,17 @@ import hmac
 import base64
 import hashlib
 from datetime import datetime
-from HYPERRSI.src.core.database import redis_client
+
 import pytz
 from HYPERRSI.src.config import OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 
 # 고정 API 키 (check_invitee.py에서 가져오기)
 fixed_api_key = '29568592-e1de-4c0d-af89-999018c8c3bf'

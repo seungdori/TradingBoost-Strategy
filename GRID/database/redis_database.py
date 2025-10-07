@@ -1,14 +1,11 @@
 
-import redis.asyncio as aioredis
 import json
 import time
 from datetime import datetime
 from typing import List, Dict, Any, Mapping, cast
-from redis.exceptions import RedisError, TimeoutError
-import redis
+from redis.exceptions import RedisError
 from functools import lru_cache
 import traceback
-import os
 from shared.database import RedisConnectionManager
 from redis.asyncio import Redis
 from typing import Optional

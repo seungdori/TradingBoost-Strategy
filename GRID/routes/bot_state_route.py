@@ -30,15 +30,15 @@ router = APIRouter(prefix="/state", tags=["state"])
 async def get_bot_state(exchange_name: str, enter_strategy: str, user_id:int, request: Request) \
         -> ResponseDto[BotStateDto | None]:
     try:
-        bot_state: BotStateDto = await bot_state_service.get_bot_state(
+        bot_state: BotStateDto | None = await bot_state_service.get_bot_state(
             dto=BotStateKeyDto(
                 exchange_name=exchange_name,
                 enter_strategy=enter_strategy,
-                user_id = user_id
+                user_id = str(user_id)
             )
         )
         
-        return ResponseDto[BotStateDto](
+        return ResponseDto[BotStateDto | None](
             success=True,
             message="All bot state",
             data=bot_state
@@ -46,7 +46,7 @@ async def get_bot_state(exchange_name: str, enter_strategy: str, user_id:int, re
 
     except Exception as e:
         print('[GET BOT STATE EXCEPTION]', e)
-        return ResponseDto[BotStateDto](
+        return ResponseDto[BotStateDto | None](
             success=False,
             message="Get bot state fail.",
             meta={"error": str(e)},
@@ -58,7 +58,7 @@ async def get_bot_state(exchange_name: str, enter_strategy: str, user_id:int, re
 async def set_bot_state(bot_state: BotStateDto, request: Request) -> ResponseDto[BotStateDto | None]:
     try:
         new_state = await bot_state_service.set_bot_state(new_state=bot_state)
-        return ResponseDto[BotStateDto](
+        return ResponseDto[BotStateDto | None](
             success=True,
             message="All bot state",
             data=new_state
@@ -66,7 +66,7 @@ async def set_bot_state(bot_state: BotStateDto, request: Request) -> ResponseDto
 
     except Exception as e:
         print('[SET BOT STATE EXCEPTION]')
-        return ResponseDto[None](
+        return ResponseDto[BotStateDto | None](
             success=False,
             message="Set bot state fail.",
             meta={"error": str(e)},
@@ -79,16 +79,24 @@ async def clear_bot_state_error(dto: BotStateKeyDto) -> ResponseDto[BotStateDto 
     print('[CLEAR BOT STATE ERROR API]', dto)
     try:
         current_state = await bot_state_service.get_bot_state(dto)
+        if current_state is None:
+            return ResponseDto[BotStateDto | None](
+                success=False,
+                message="Bot state not found",
+                data=None
+            )
+
         new_state = BotStateDto(
             key=current_state.key,
             exchange_name=current_state.exchange_name,
             enter_strategy=current_state.enter_strategy,
+            user_id=current_state.user_id,
             is_running=current_state.is_running,
             error=None
         )
         updated = await bot_state_service.set_bot_state(new_state)
 
-        return ResponseDto[BotStateDto](
+        return ResponseDto[BotStateDto | None](
             success=True,
             message="All bot state",
             data=updated
@@ -96,7 +104,7 @@ async def clear_bot_state_error(dto: BotStateKeyDto) -> ResponseDto[BotStateDto 
 
     except Exception as e:
         print('[SET BOT STATE EXCEPTION]')
-        return ResponseDto[None](
+        return ResponseDto[BotStateDto | None](
             success=False,
             message="Set bot state fail.",
             meta={"error": str(e)},

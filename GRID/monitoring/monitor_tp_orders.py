@@ -40,7 +40,7 @@ async def monitor_tp_orders_websocekts(user_id, exchange_name, symbol_name, take
                     print("❗️DEBUG: 익절 주문 수량이 0입니다. 확인이 필요합니다")
                     print(f"❗️DEBUG: 익절 주문 정보: {info}")
                     print(f"take_profit_orders_info: {take_profit_orders_info}")
-                    asyncio.create_task(telegram_message.send_telegram_message(f"❗️DEBUG: {symbol}의 익절 주문 수량이 0입니다. 확인이 필요합니다", exchange_name, user_id, debug = True))
+                    asyncio.create_task(telegram_message.send_telegram_message(f"❗️DEBUG: {symbol}의 익절 주문 수량이 0입니다. 확인이 필요합니다", exchange_name, user_id))
                 user_keys[user_id]["symbols"][symbol_name]["take_profit_orders_info"][level] = {"order_id": None, "quantity": 0, "target_price": 0, "active": False, "side": None}
                 print(f"{symbol_name}의 {level}번째 그리드 익절 주문이 체결되었습니다.")
             elif order['status'] == 'canceled':
@@ -68,10 +68,10 @@ async def monitor_tp_orders_websocekts(user_id, exchange_name, symbol_name, take
                     for level, info in take_profit_orders_info.items():
                         if info["order_id"] is not None:
                             try:
-                                await exchange_instance.cancel_order(info["order_id"], symbol_name)
+                                await exchange_instance.cancel_order(info["order_id"], symbol_name)  # type: ignore[union-attr]
                             except Exception as e:
                                 print(f"익절 주문 취소 실패. {symbol_name} {level}레벨, {info['order_id']}")
-                                await telegram_message.send_telegram_message(f"익절 주문 취소 실패: {e}", exchange_name, user_id, debug = True)
+                                await telegram_message.send_telegram_message(f"익절 주문 취소 실패: {e}", exchange_name, user_id)
                                 
 
                         user_keys[user_id]["symbols"][symbol_name]["take_profit_orders_info"][level]["order_id"] = None
@@ -84,7 +84,7 @@ async def monitor_tp_orders_websocekts(user_id, exchange_name, symbol_name, take
                 for level, info in take_profit_orders_info.items():
                     if info["active"] and info["order_id"] is not None:
                         print(f"레벨 {level} 익절 주문 감시 시작")
-                        order = await exchange_instance.watch_orders(info["order_id"], symbol_name)
+                        order = await exchange_instance.watch_orders(info["order_id"], symbol_name)  # type: ignore[union-attr]
                         await handle_order_update(order)
                 first_time_check = False
                 await asyncio.sleep(7)  # 7초마다 체크
@@ -93,7 +93,7 @@ async def monitor_tp_orders_websocekts(user_id, exchange_name, symbol_name, take
         print(f"기타 예외 처리: {e}")
         await asyncio.sleep(5)
     finally:
-        await exchange_instance.close()
+        await exchange_instance.close()  # type: ignore[union-attr]
 
 
 
@@ -139,7 +139,7 @@ async def monitor_tp_orders_websockets(exchange_instance, symbol_name, user_id, 
                         except Exception as e: 
                             print(f"익절 주문 취소 실패.{symbol_name} {level}레벨, {take_profit_orders_info[level]['order_id']}")
                             print(f"익절 주문 취소 실패: {e}")
-                            await telegram_message.send_telegram_message(f"익절 주문 취소 실패: {e}", exchange_name, user_id, debug=True)
+                            await telegram_message.send_telegram_message(f"익절 주문 취소 실패: {e}", exchange_name, user_id)
                     
                     take_profit_orders_info[level]["order_id"] = None
                     take_profit_orders_info[level]["active"] = True
@@ -168,5 +168,5 @@ async def monitor_tp_orders_websockets(exchange_instance, symbol_name, user_id, 
                     break
     except Exception as e:
         print(f"기타 예외 처리: {e}")
-        await telegram_message.send_telegram_message(f"모니터링 중 예외 발생: {e}", exchange_name, user_id, debug=True)
+        await telegram_message.send_telegram_message(f"모니터링 중 예외 발생: {e}", exchange_name, user_id)
         await asyncio.sleep(5)

@@ -7,7 +7,7 @@ from shared.indicators import crossover, crossunder, rising, falling
 
 def compute_adx_state(plus, minus, sig, th):
     """
-    ADX 상태를 계산합니다.
+    ADX 상태를 계산합니다 (마지막 인덱스 기준).
 
     Parameters:
     -----------
@@ -25,23 +25,27 @@ def compute_adx_state(plus, minus, sig, th):
     int
         ADX state (-2, -1, 0, 1, 2)
     """
+    if len(sig) < 3:
+        return 0
+
+    idx = len(sig) - 1
     th_series = pd.Series([th] * len(sig), index=sig.index)
     adx_state = 0
 
     # plus가 minus를 상향 돌파
-    if crossover(plus, minus).any():
+    if crossover(plus, minus, idx):
         adx_state = 1
     # 상태가 1이고 sig가 상승
-    if adx_state == 1 and rising(sig, 2).any():
+    if adx_state == 1 and rising(sig, idx, 2):
         adx_state = 2
     # minus가 plus를 상향 돌파
-    if crossunder(minus, plus).any():
+    if crossunder(minus, plus, idx):
         adx_state = -1
     # 상태가 -1이고 sig가 상승
-    if adx_state == -1 and rising(sig, 2).any():
+    if adx_state == -1 and rising(sig, idx, 2):
         adx_state = -2
     # 상태가 0이 아니고 sig가 th 아래로 하락하거나 sig가 th보다 크면서 하락
-    if adx_state != 0 and (crossunder(sig, th_series).any() or (falling(sig, 3).any() and (sig > th).any())):
+    if adx_state != 0 and (crossunder(sig, th_series, idx) or (falling(sig, idx, 3) and sig.iloc[idx] > th)):
         adx_state = 0
 
     return adx_state

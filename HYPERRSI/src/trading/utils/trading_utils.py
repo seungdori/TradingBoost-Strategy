@@ -4,50 +4,22 @@ import asyncio
 import json
 import traceback
 from datetime import datetime
-from shared.logging import get_logger, setup_error_logger
-from HYPERRSI.src.core.database import redis_client
+from shared.logging import get_logger
+from shared.utils.async_helpers import ensure_async_loop
+from HYPERRSI.src.core.logger import setup_error_logger
 
 logger = get_logger(__name__)
 error_logger = setup_error_logger()
 
-def ensure_async_loop():
-    """
-    현재 스레드에 사용 가능한 이벤트 루프를 반환하거나 새로 생성합니다.
-    닫힌 루프나 다른 스레드의 루프는 사용하지 않습니다.
-    """
-    try:
-        # 현재 실행 중인 루프가 있는지 확인
-        loop = asyncio.get_running_loop()
-        logger.debug("실행 중인 이벤트 루프를 사용합니다.")
-        return loop
-    except RuntimeError:
-        # 현재 실행 중인 루프가 없는 경우
-        pass
-    
-    try:
-        # 기존 루프가 있는지 확인
-        loop = asyncio.get_event_loop()
-        
-        # 루프가 닫혀있는지 확인
-        if loop.is_closed():
-            logger.info("기존 이벤트 루프가 닫혀 있어 새로 생성합니다")
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        
-        return loop
-    except RuntimeError as ex:
-        # 루프가 아예 없는 경우
-        if "There is no current event loop in thread" in str(ex):
-            logger.info("이벤트 루프가 없어 새로 생성합니다")
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            return loop
-        
-        # 그 외 예상치 못한 오류
-        logger.error(f"이벤트 루프 생성 중 오류 발생: {str(ex)}")
-        raise
+# redis_client는 사용 시점에 동적으로 import
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
 
 async def init_user_position_data(user_id: str, symbol: str, side: str):
+    redis_client = _get_redis_client()  # Get redis_client dynamically
+
     dual_side_position_key = f"user:{user_id}:{symbol}:dual_side_position"
     position_state_key = f"user:{user_id}:position:{symbol}:position_state"
     tp_data_key = f"user:{user_id}:position:{symbol}:{side}:tp_data"
@@ -63,7 +35,7 @@ async def init_user_position_data(user_id: str, symbol: str, side: str):
     entry_fail_count_key = f"user:{user_id}:entry_fail_count"
     dual_side_count_key = f"user:{user_id}:{symbol}:dual_side_count"
     current_trade_key = f"user:{user_id}:current_trade:{symbol}:{side}"
-    
+
     await redis_client.delete(position_state_key)
     await redis_client.delete(dual_side_position_key)
     await redis_client.delete(tp_data_key)
@@ -82,8 +54,10 @@ async def init_user_monitoring_data(user_id: str, symbol: str):
     """
     monitor:user:{user_id}:{symbol}:* 패턴에 해당하는 모든 키를 삭제합니다.
     """
+    redis_client = _get_redis_client()  # Get redis_client dynamically
+
     pattern = f"monitor:user:{user_id}:{symbol}:*"
-    
+
     # pattern에 맞는 모든 키 조회
     keys = await redis_client.keys(pattern)
     
@@ -99,16 +73,19 @@ class TPPrice:
         self.prices = {}  # price: ratio
 
 async def store_tp_prices(user_id: str, symbol: str, side: str, tp_prices):
+    redis_client = _get_redis_client()  # Get redis_client dynamically
     tp_data_key = f"user:{user_id}:position:{symbol}:{side}:tp_data"
     await redis_client.set(tp_data_key, json.dumps(tp_prices))
 
 async def get_tp_prices(user_id: str, symbol: str, side: str):
+    redis_client = _get_redis_client()  # Get redis_client dynamically
     tp_data_key = f"user:{user_id}:position:{symbol}:{side}:tp_data"
     data = await redis_client.get(tp_data_key)
     return json.loads(data) if data else {}
 
 async def is_trading_running(user_id: str) -> bool:
     """trading_status 확인 후 'running'이면 True, 아니면 False."""
+    redis_client = _get_redis_client()  # Get redis_client dynamically
     status = await redis_client.get(f"user:{user_id}:trading:status")
     
     # 바이트 문자열을 디코딩
@@ -153,6 +130,7 @@ async def calculate_dca_levels(entry_price: float, last_filled_price:float ,sett
     return dca_levels
 
 async def update_dca_levels_redis(user_id: str, symbol: str, dca_levels: list, side: str):
+    redis_client = _get_redis_client()  # Get redis_client dynamically
     dca_key = f"user:{user_id}:position:{symbol}:{side}:dca_levels"
     await redis_client.delete(dca_key)
     if dca_levels:

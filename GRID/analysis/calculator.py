@@ -5,7 +5,7 @@ import logging
 import pandas as pd
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Optional, Dict, Any
 
 # Import from GRID modules
 from GRID.indicators import (
@@ -45,7 +45,7 @@ def is_data_valid(df: pd.DataFrame) -> bool:
     return True
 
 
-async def refetch_data(exchange_instance, exchange_name: str, symbol: str, user_id: int):
+async def refetch_data(exchange_instance: Any, exchange_name: str, symbol: str, user_id: int) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
     """
     데이터 재fetching - 전체 데이터를 강제로 다시 가져옴
 
@@ -171,11 +171,11 @@ async def calculate_ohlcv(exchange_name: str, symbol: str, ohlcv_data: pd.DataFr
 
                     # MAMA/FAMA 계산
                     futures.append(executor.submit(
-                        compute_mama_fama_incremental, working_df['close'].values, state))
+                        compute_mama_fama_incremental, working_df['close'].values, state))  # type: ignore[arg-type]
 
                     # ATR 계산
                     futures.append(executor.submit(
-                        atr_incremental, working_df, state, 14))
+                        atr_incremental, working_df, state, 14))  # type: ignore[arg-type]
 
                     # 결과 수집
                     results = [future.result() for future in futures]
@@ -190,7 +190,7 @@ async def calculate_ohlcv(exchange_name: str, symbol: str, ohlcv_data: pd.DataFr
                         working_df['minus_di'] = minus_di
                         result_index += 1
 
-                    mama, fama = results[result_index]
+                    mama, fama = results[result_index]  # type: ignore[misc]
                     working_df['mama'] = mama
                     working_df['fama'] = fama
                     working_df['main_plot'] = fama
@@ -247,7 +247,7 @@ async def calculate_ohlcv(exchange_name: str, symbol: str, ohlcv_data: pd.DataFr
         return None, None
 
 
-async def summarize_trading_results(exchange_name: str, direction: str):
+async def summarize_trading_results(exchange_name: str, direction: str) -> list:
     """
     거래 결과를 요약합니다. Redis에서 데이터를 가져와 처리합니다.
 
@@ -319,7 +319,8 @@ async def summarize_trading_results(exchange_name: str, direction: str):
                 })
 
             except Exception as e:
-                logging.error(f"심볼 처리 중 오류 발생: {key} - {str(e)}")
+                key_str = key.decode() if isinstance(key, bytes) else key
+                logging.error(f"심볼 처리 중 오류 발생: {key_str} - {str(e)}")
                 continue
 
         # 결과를 DataFrame으로 변환
@@ -338,7 +339,7 @@ async def summarize_trading_results(exchange_name: str, direction: str):
         logging.info(f"{exchange_name}의 {direction} 방향 거래 전략 요약이 완료되었습니다.")
 
         # 결과 반환
-        return summary_df.to_dict('records')
+        return summary_df.to_dict('records')  # type: ignore[no-any-return]
 
     except Exception as e:
         logging.error(f"거래 결과 요약 중 오류 발생: {str(e)}")

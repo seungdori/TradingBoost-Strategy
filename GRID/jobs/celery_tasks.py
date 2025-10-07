@@ -82,7 +82,7 @@ def cleanup_tasks():
             for user_id, user_data in running_users.items():
                 if user_data.get("is_running"):
                     asyncio.run(grid.cancel_tasks(user_id, exchange_name))
-                    asyncio.run(update_user_running_status(exchange_name, user_id, False))
+                    asyncio.run(update_user_running_status(exchange_name, int(user_id), False))
                     
         return {'status': 'success', 'message': 'Cleaned up all running tasks'}
     except Exception as e:

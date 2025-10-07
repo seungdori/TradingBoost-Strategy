@@ -3,7 +3,7 @@ from aiogram import types, Router
 from aiogram.filters import Command
 from aiogram.types import FSInputFile
 import pytz
-from HYPERRSI.src.core.database import redis_client
+
 import json
 import httpx
 from shared.logging import get_logger
@@ -11,6 +11,14 @@ from HYPERRSI.src.trading.stats import get_trade_history, get_user_trading_stati
 from shared.utils import get_contract_size
 import os
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 import matplotlib.pyplot as plt
 import pandas as pd
 from io import BytesIO

@@ -8,7 +8,7 @@ import json
 
 from HYPERRSI.src.trading.trading_service import TradingService, get_okx_client
 from shared.logging import get_logger
-from HYPERRSI.src.core.database import redis_client
+
 from HYPERRSI.src.core.celery_task import celery_app
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.utils.check_invitee import get_okx_uid_from_telegram
@@ -19,6 +19,14 @@ from HYPERRSI.src.core.error_handler import handle_critical_error, ErrorCategory
 
 # 로거 설정
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 
 router = APIRouter(prefix="/trading", tags=["trading"])
 
@@ -66,8 +74,12 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
 
         # Redis 연결 확인
         try:
-            if not await redis_client.ping():
+            ping_result = await asyncio.wait_for(redis_client.ping(), timeout=2.0)
+            if not ping_result:
                 raise HTTPException(status_code=500, detail="Redis 연결 실패")
+        except asyncio.TimeoutError:
+            logger.error("Redis ping timeout (2s)")
+            raise HTTPException(status_code=500, detail="Redis 연결 시간 초과")
         except Exception as redis_error:
             logger.error(f"Redis 연결 오류: {str(redis_error)}")
             await handle_critical_error(
@@ -84,13 +96,13 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
 
         # telegram_id인 경우 okx_uid로 변환 시도
         if is_telegram_id:
-            okx_uid_from_telegram = await get_okx_uid_from_telegram(redis_client, okx_uid)
+            okx_uid_from_telegram = await get_okx_uid_from_telegram(okx_uid)
             if okx_uid_from_telegram:
                 okx_uid = okx_uid_from_telegram
                 is_telegram_id = False
 
     
-        telegram_id = await get_telegram_id_from_uid(redis_client, okx_uid, TimescaleUserService)
+        telegram_id = await get_telegram_id_from_uid(okx_uid, TimescaleUserService)
 
         # API 키 확인 및 업데이트
         api_keys = await redis_client.hgetall(f"user:{okx_uid}:api:keys")
@@ -135,30 +147,41 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
         
         # 현재 실행 중인 task 확인 (telegram_id와 okx_uid 모두 확인)
         is_running = False
-        
-        # telegram_id로 상태 확인
+        telegram_status = None
+        okx_status = None
+
+        # Redis pipeline으로 배치 조회
         if telegram_id:
             telegram_status_key = f"user:{telegram_id}:trading:status"
-            telegram_status = await redis_client.get(telegram_status_key)
-            
+            okx_status_key = f"user:{okx_uid}:trading:status"
+
+            # Pipeline으로 두 키를 한 번에 조회
+            async with redis_client.pipeline() as pipe:
+                pipe.get(telegram_status_key)
+                pipe.get(okx_status_key)
+                results = await pipe.execute()
+                telegram_status, okx_status = results
+        else:
+            # telegram_id가 없으면 okx_uid만 조회
+            okx_status_key = f"user:{okx_uid}:trading:status"
+            okx_status = await redis_client.get(okx_status_key)
+
+        # telegram_id 상태 처리
+        if telegram_status:
             # 바이트 문자열을 디코딩
             if isinstance(telegram_status, bytes):
                 print(f"원본 telegram_status는 바이트 문자열입니다: {repr(telegram_status)}")
                 telegram_status = telegram_status.decode('utf-8')
-                
+
             # 문자열 정규화 (공백 제거 및 따옴표 제거)
-            if telegram_status:
-                telegram_status = telegram_status.strip().strip('"\'')
-                
+            telegram_status = telegram_status.strip().strip('"\'')
+
             if telegram_status == "running":
                 is_running = True
                 logger.info(f"텔레그램 ID {telegram_id}의 트레이딩이 실행 중입니다.")
 
-        # okx_uid로 상태 확인
-        okx_status_key = f"user:{okx_uid}:trading:status"
-        okx_status = False
+        # okx_uid 상태 처리
         print(f"okx_status_key: {okx_status_key}")
-        okx_status = await redis_client.get(okx_status_key)
         print(f"okx_status: {okx_status}")
         
         # 바이트 문자열을 디코딩
@@ -468,7 +491,7 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
                 request_body = await request.json()
                 if "okx_uid" in request_body:
                     okx_uid = request_body["okx_uid"]
-            except:
+            except (json.JSONDecodeError, ValueError, AttributeError):
                 pass
         
         # 3. 필수 파라미터 확인
@@ -483,14 +506,14 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
         # 텔레그램 ID인 경우 OKX UID로 변환 시도
         telegram_id = okx_uid if is_telegram_id else None
         if is_telegram_id:
-            okx_uid_from_telegram = await get_okx_uid_from_telegram(redis_client, okx_uid)
+            okx_uid_from_telegram = await get_okx_uid_from_telegram(okx_uid)
             if okx_uid_from_telegram:
                 okx_uid = okx_uid_from_telegram
                 is_telegram_id = False
         else:
             # OKX UID인 경우 텔레그램 ID 찾기 (선택 사항)
             try:
-                telegram_id = await get_telegram_id_from_uid(redis_client, okx_uid, TimescaleUserService)
+                telegram_id = await get_telegram_id_from_uid(okx_uid, TimescaleUserService)
             except Exception as e:
                 logger.debug(f"텔레그램 ID 조회 실패 (무시됨): {str(e)}")
         

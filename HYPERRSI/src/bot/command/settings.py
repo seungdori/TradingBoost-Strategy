@@ -26,10 +26,18 @@ from HYPERRSI.src.bot.utils import validator
 import traceback  # 상단에 추가
 from aiogram.exceptions import TelegramBadRequest
 
-from HYPERRSI.src.core.database import redis_client
+
 
 router = Router()
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 redis_service = RedisService()
 
 allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267"]

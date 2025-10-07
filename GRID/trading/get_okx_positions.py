@@ -16,7 +16,7 @@ REDIS_PASSWORD = settings.REDIS_PASSWORD
 
 
 if REDIS_PASSWORD:
-    pool = aioredis.ConnectionPool.from_url(
+    pool: aioredis.ConnectionPool = aioredis.ConnectionPool.from_url(
         'redis://localhost', 
         max_connections=30,
     encoding='utf-8', 
@@ -36,7 +36,7 @@ else:
 async def get_redis_connection():
     return redis_client
 
-async def get_and_cache_all_positions(uri, API_KEY, SECRET_KEY, PASSPHRASE, redis: Redis, cache_key: str):
+async def get_and_cache_all_positions(uri: str, API_KEY: str, SECRET_KEY: str, PASSPHRASE: str, redis: Redis, cache_key: str) -> list | None:
     async with websockets.connect(uri) as websocket:
         # Perform authentication
         timestamp = str(int(time.time()))
@@ -56,7 +56,8 @@ async def get_and_cache_all_positions(uri, API_KEY, SECRET_KEY, PASSPHRASE, redi
         print("Sent login data to WebSocket")
         
         login_response = await websocket.recv()
-        print(f"Login response: {login_response}")
+        login_response_str = login_response.decode() if isinstance(login_response, bytes) else login_response
+        print(f"Login response: {login_response_str}")
         
         # Subscribe to position channel
         subscribe_data = {
@@ -70,16 +71,18 @@ async def get_and_cache_all_positions(uri, API_KEY, SECRET_KEY, PASSPHRASE, redi
         print("Sent subscription request")
         
         subscription_response = await websocket.recv()
-        print(f"Subscription response: {subscription_response}")
+        subscription_response_str = subscription_response.decode() if isinstance(subscription_response, bytes) else subscription_response
+        print(f"Subscription response: {subscription_response_str}")
         
         try:
             while True:
                 position_data = await asyncio.wait_for(websocket.recv(), timeout=10.0)
-                print(f"Received data: {position_data}")
+                position_data_str = position_data.decode() if isinstance(position_data, bytes) else position_data
+                print(f"Received data: {position_data_str}")
                 
                 data = json.loads(position_data)
                 if 'data' in data:
-                    positions_data = data['data']
+                    positions_data: list = data['data']
                     # Cache all position data
                     await redis.set(cache_key, json.dumps(positions_data), ex=300)  # Cache for 5 minutes
                     #print(f"Cached all position data: {positions_data}")
@@ -114,7 +117,7 @@ async def handle_okx(exchange, symbol, user_id, redis, cache_key):
     quantity = await get_position_for_symbol(redis, cache_key, symbol)
     return quantity
 
-async def get_position_for_symbol(redis: Redis, cache_key: str, symbol: str):
+async def get_position_for_symbol(redis: Redis, cache_key: str, symbol: str) -> float:
     cached_data = await redis.get(cache_key)
     if cached_data:
         positions_data = json.loads(cached_data)

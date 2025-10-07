@@ -9,7 +9,7 @@ import json
 import traceback
 from typing import Tuple, Dict
 from shared.logging import get_logger, log_order
-from HYPERRSI.src.core.database import redis_client
+
 from HYPERRSI.src.api.dependencies import get_exchange_context
 from HYPERRSI.src.api.routes.order import close_position, ClosePositionRequest
 from .telegram_service import get_identifier, send_telegram_message
@@ -18,6 +18,21 @@ from .order_monitor import check_order_status, update_order_status
 from .break_even_handler import process_break_even_settings
 
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
+
+
+# Module-level attribute for backward compatibility
+def __getattr__(name):
+    if name == "redis_client":
+        return _get_redis_client()
+    raise AttributeError(f"module has no attribute {name}")
 
 
 async def check_position_exists(user_id: str, symbol: str, direction: str) -> tuple[bool, dict]:

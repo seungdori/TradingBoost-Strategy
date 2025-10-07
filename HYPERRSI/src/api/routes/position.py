@@ -5,7 +5,8 @@ import logging
 import traceback
 import time
 import ccxt.async_support as ccxt
-from HYPERRSI.src.core.database import redis_client  # Redis 클라이언트 가져오기
+  # Redis 클라이언트 가져오기
+  
 from pydantic import BaseModel, Field, field_validator
 from HYPERRSI.src.core.error_handler import log_error
 from shared.dtos.trading import OpenPositionRequest, ClosePositionRequest, PositionResponse
@@ -102,6 +103,14 @@ class LeverageResponse(BaseModel):
     status: str
 
 from HYPERRSI.src.trading.trading_service import TradingService
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 
 
 # ----------------------------
@@ -581,22 +590,22 @@ async def open_position_endpoint(
         
         try:
             is_dca = req.is_DCA
-        except:
+        except AttributeError:
             is_dca = False
-        
+
         try:
             is_hedge = req.is_hedge
-        except:
+        except AttributeError:
             is_hedge = False
-        
+
         try:
             hedge_tp_price = req.hedge_tp_price
-        except:
+        except AttributeError:
             hedge_tp_price = None
-            
+
         try:
             hedge_sl_price = req.hedge_sl_price
-        except:
+        except AttributeError:
             hedge_sl_price = None
         
         try:

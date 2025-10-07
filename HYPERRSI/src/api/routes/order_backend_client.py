@@ -7,6 +7,12 @@ from fastapi import HTTPException
 
 logger = get_logger(__name__)
 
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
 class OrderBackendClient:
     """ORDER_BACKEND를 통한 주문 처리 클라이언트 (라우트용)"""
     

@@ -9,7 +9,7 @@ HYPERRSI 모니터링 유틸리티 함수
 
 import time
 from shared.logging import get_logger
-from HYPERRSI.src.core.database import redis_client
+
 
 # shared 모듈에서 공통 유틸리티 import 및 re-export
 from shared.utils import (
@@ -34,6 +34,19 @@ from shared.config.constants import (
 
 logger = get_logger(__name__)
 
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+
+# Module-level attribute for backward compatibility
+def __getattr__(name):
+    if name == "redis_client":
+        return _get_redis_client()
+    raise AttributeError(f"module has no attribute {name}")
+
 # ============================================================================
 # HYPERRSI 전용 전역 변수
 # ============================================================================
@@ -54,7 +67,7 @@ async def get_user_settings(user_id: str) -> dict:
     shared.utils.get_user_settings를 사용하세요.
     """
     from shared.utils import get_user_settings as _get_user_settings
-    return await _get_user_settings(redis_client, user_id)
+    return await _get_user_settings(user_id)
 
 
 async def add_recent_symbol(user_id: str, symbol: str):
@@ -65,7 +78,7 @@ async def add_recent_symbol(user_id: str, symbol: str):
     shared.utils.add_recent_symbol을 사용하세요.
     """
     from shared.utils import add_recent_symbol as _add_recent_symbol
-    await _add_recent_symbol(redis_client, user_id, symbol)
+    await _add_recent_symbol(user_id, symbol)
 
 
 async def get_recent_symbols(user_id: str) -> list:
@@ -76,7 +89,7 @@ async def get_recent_symbols(user_id: str) -> list:
     shared.utils.get_recent_symbols을 사용하세요.
     """
     from shared.utils import get_recent_symbols as _get_recent_symbols
-    return await _get_recent_symbols(redis_client, user_id)
+    return await _get_recent_symbols(user_id)
 
 
 # ============================================================================

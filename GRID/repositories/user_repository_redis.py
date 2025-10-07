@@ -14,29 +14,6 @@ from GRID.database import redis_database
 
 logger = get_logger(__name__)
 
-#async def create_user(dto: UserCreateDto) -> UserDto:
-#    exist_user = await find_user_by_username(dto.username)
-#    if exist_user:
-#        return exist_user
-#
-#    sql = '''
-#    INSERT INTO users (
-#        username, password
-#    )
-#    VALUES (?, ?)
-#    '''
-#    params = (dto.username, dto.password)
-#
-#    try:
-#        async with aiosqlite.connect(db_path) as db:
-#            await db.execute(sql, params)
-#            await db.commit()
-#    except Exception as e:
-#        print(f"Database error: {e}")
-#        raise e
-#
-#    return await find_user_by_username(dto.username)
-
 
 async def check_user_exist(exchange_name: str) -> UserExistDto:
     """
@@ -75,7 +52,7 @@ async def check_user_exist(exchange_name: str) -> UserExistDto:
             }
         )
 
-        return UserExistDto(user_exist=user_exist, user_ids=user_ids)
+        return UserExistDto(user_exist=user_exist, user_ids=user_ids) # type: ignore[arg-type]
 
     except Exception as e:
         logger.error(
@@ -91,30 +68,24 @@ async def check_user_exist(exchange_name: str) -> UserExistDto:
 
 async def find_user_by_id(user_id: str) -> Optional[UserDto]:
     """
-    Find user by ID from SQLite database (DEPRECATED).
+    Find user by ID (DEPRECATED).
 
     DEPRECATED: This function is for backward compatibility only.
-    New code should use Redis-based user retrieval.
+    New code should use get_user_by_id() or Redis-based user retrieval.
 
     Args:
         user_id: User ID
 
     Returns:
-        UserDto if found, None otherwise
+        None (always)
 
     Note:
-        This function uses the old SQLite database.
-        Consider migrating to Redis-based user management.
+        This function is deprecated. Use get_user_by_id() instead.
     """
     logger.warning(
-        "Using deprecated SQLite user lookup",
-        extra={"user_id": user_id, "function": "find_user_by_id"}
+        "Using deprecated function find_user_by_id",
+        extra={"user_id": user_id}
     )
-
-    # TODO: Migrate to Redis or PostgreSQL
-    # This is a placeholder for backward compatibility
-    # Current implementation commented out to avoid aiosqlite dependency
-
     return None
 
 

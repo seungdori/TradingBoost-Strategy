@@ -1,10 +1,18 @@
 # src/core/shutdown.py
-from HYPERRSI.src.core.database import redis_client
+
 from HYPERRSI.src.core.config import settings
 
 from shared.logging import get_logger
 import asyncio
 import logging
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 
 logger = logging.getLogger(__name__)
 

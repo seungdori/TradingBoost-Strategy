@@ -10,12 +10,14 @@ import logging
 import random
 import time
 import traceback
+from datetime import datetime
 from typing import Dict, Any, List, Tuple
 
 import pandas as pd
 
 from GRID.services.balance_service import get_position_size
-from GRID.services.order_service import okay_to_place_order, fetch_order_with_retry
+from GRID.services.order_service import okay_to_place_order, fetch_order_with_retry, create_short_orders
+from GRID.database.redis_database import update_take_profit_orders_info
 from GRID.strategies import strategy
 from shared.utils.exchange_precision import adjust_price_precision
 from GRID.utils.price import get_corrected_rounded_price, get_order_price_unit_upbit, round_to_upbit_tick_size

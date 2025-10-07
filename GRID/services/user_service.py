@@ -9,8 +9,8 @@ from typing import Optional, Dict, Any
 from shared.logging import get_logger
 from shared.errors import DatabaseException, ValidationException
 
-from GRID.dtos.user import UserDto, UserExistDto, UserCreateDto
-from GRID.repositories import user_repository
+from shared.dtos.user import UserDto, UserExistDto, UserCreateDto
+from GRID.repositories import user_repository_redis as user_repository
 from GRID.database import redis_database
 
 logger = get_logger(__name__)
@@ -54,7 +54,7 @@ async def check_user_exist(exchange_name: str) -> UserExistDto:
             extra={
                 "exchange": exchange_name,
                 "user_exist": result.user_exist,
-                "user_count": len(result.user_ids)
+                "user_count": len(result.user_ids or [])
             }
         )
 

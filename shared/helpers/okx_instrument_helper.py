@@ -7,12 +7,12 @@ import json
 import aiohttp
 import math
 import traceback
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, Any, List, cast
 
 from shared.utils.redis_utils import set_redis_data, get_redis_data
 
 
-async def get_perpetual_instruments(redis_client) -> Optional[list]:
+async def get_perpetual_instruments(redis_client: Any) -> Optional[List[Any]]:
     """
     OKX 영구 선물 계약 정보를 가져옵니다 (Redis 캐시 사용)
 
@@ -26,7 +26,7 @@ async def get_perpetual_instruments(redis_client) -> Optional[list]:
         # Redis에서 데이터 확인
         cached_data = await get_redis_data(redis_client, 'perpetual_instruments')
         if cached_data:
-            return cached_data
+            return cast(List[Any], cached_data)
 
         # 캐시된 데이터가 없으면 API 호출
         base_url = "https://www.okx.com"
@@ -40,7 +40,7 @@ async def get_perpetual_instruments(redis_client) -> Optional[list]:
         # 데이터를 Redis에 저장 (40시간 = 144000초)
         if data and 'data' in data:
             await set_redis_data(redis_client, 'perpetual_instruments', data['data'], expiry=144000)
-            return data['data']
+            return cast(List[Any], data['data'])
         else:
             print("Invalid response from OKX API")
             return None
@@ -71,7 +71,7 @@ def get_lot_sizes(instruments: list) -> Dict[str, Tuple[float, float, str]]:
     return lot_sizes
 
 
-async def get_symbol_info(redis_client, symbol: str) -> Optional[dict]:
+async def get_symbol_info(redis_client: Any, symbol: str) -> Optional[Dict[Any, Any]]:
     """
     주문 심볼 정보를 Redis에서 조회합니다
 
@@ -92,7 +92,7 @@ async def get_symbol_info(redis_client, symbol: str) -> Optional[dict]:
     if not symbol_info:
         return None
 
-    return symbol_info
+    return cast(Dict[Any, Any], symbol_info)
 
 
 async def round_to_qty(symbol: str, qty: float, lot_sizes: Dict[str, Tuple[float, float, str]]) -> int:
@@ -130,7 +130,7 @@ async def round_to_qty(symbol: str, qty: float, lot_sizes: Dict[str, Tuple[float
     return rounded_contracts
 
 
-async def contracts_to_qty(redis_client, symbol: str, contracts: int) -> Optional[float]:
+async def contracts_to_qty(redis_client: Any, symbol: str, contracts: int) -> Optional[float]:
     """
     계약 수를 실제 수량으로 변환합니다
 
@@ -144,6 +144,8 @@ async def contracts_to_qty(redis_client, symbol: str, contracts: int) -> Optiona
     """
     try:
         perpetual_instruments = await get_perpetual_instruments(redis_client)
+        if perpetual_instruments is None:
+            return None
         lot_sizes = get_lot_sizes(perpetual_instruments)
         if not symbol.endswith('-USDT-SWAP'):
             raise ValueError(f"{symbol} is not a USDT-SWAP instrument.")

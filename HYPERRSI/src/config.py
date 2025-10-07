@@ -1,19 +1,24 @@
 # src/config.py
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 from functools import lru_cache
+from pathlib import Path
+
+# 프로젝트 루트 경로 찾기
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+ENV_FILE = PROJECT_ROOT / ".env"
 
 class Settings(BaseSettings):
     # OKX API 설정
     OKX_API_KEY: str
     OKX_SECRET_KEY: str
     OKX_PASSPHRASE: str
-    
+
     # Telegram 설정
     TELEGRAM_BOT_TOKEN: str
     OWNER_ID: int
-    
+
     # 데이터베이스 설정
     DATABASE_URL: str
     DB_USER: str
@@ -21,22 +26,23 @@ class Settings(BaseSettings):
     DB_HOST: str
     DB_PORT: int
     DB_NAME: str
-    
+
     # Redis 설정
     REDIS_URL: Optional[str] = None
     REDIS_HOST: str = "localhost"
     REDIS_PORT: str = "6379"
     REDIS_DB: str = "0"
     REDIS_PASSWORD: Optional[str] = None
-    
+
     # Order Backend 설정
     ORDER_BACKEND: Optional[str] = None
-    
-    class Config:
-        env_file = ".env"
-        env_file_encoding = 'utf-8'
-        case_sensitive = True
-        extra = "allow"
+
+    model_config = SettingsConfigDict(
+        env_file=str(ENV_FILE),
+        env_file_encoding='utf-8',
+        case_sensitive=True,
+        extra='allow'
+    )
 @lru_cache()
 def get_settings() -> Settings:
     """캐시된 설정 가져오기"""

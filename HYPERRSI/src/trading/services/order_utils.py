@@ -7,7 +7,7 @@ import json
 from typing import Optional
 import ccxt.async_support as ccxt
 from shared.logging import get_logger, log_bot_error
-from HYPERRSI.src.core.database import redis_client
+
 from HYPERRSI.src.trading.models import OrderStatus
 from HYPERRSI.src.trading.error_message import map_exchange_error
 from shared.utils import safe_float, round_to_qty, convert_symbol_to_okx_instrument
@@ -23,6 +23,21 @@ from HYPERRSI.src.api.dependencies import get_exchange_context
 from decimal import Decimal, ROUND_DOWN
 
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
+
+
+# Module-level attribute for backward compatibility
+def __getattr__(name):
+    if name == "redis_client":
+        return _get_redis_client()
+    raise AttributeError(f"module has no attribute {name}")
 
 # 특별한 예외 클래스 추가
 class InsufficientMarginError(Exception):

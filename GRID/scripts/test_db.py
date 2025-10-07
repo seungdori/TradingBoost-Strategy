@@ -1,7 +1,7 @@
+# type: ignore
 """
 GRID Database Integration Test
 
-Tests basic CRUD operations with PostgreSQL/SQLite.
 """
 
 import asyncio

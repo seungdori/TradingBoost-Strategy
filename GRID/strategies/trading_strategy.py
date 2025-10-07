@@ -232,7 +232,7 @@ class TradingStrategy:
         self.long_avg_price = current_bar['close']
         self.last_long_entry_price = current_bar['close']
         self.set_long_tp_sl(current_bar)
-        self.total_position = self.calculate_position_size(self.params['real_qty'])
+        self.total_position = self.calculate_position_size(self.params['real_qty'], current_bar)
 
     def enter_short(self, symbol, current_bar):
         logging.info("enter_short 코드실행")
@@ -241,7 +241,7 @@ class TradingStrategy:
         self.short_avg_price = current_bar['close']
         self.last_short_entry_price = current_bar['close']
         self.set_short_tp_sl(current_bar)
-        self.total_position = -self.calculate_position_size(self.params['real_qty'])
+        self.total_position = -self.calculate_position_size(self.params['real_qty'], current_bar)
 
     def set_long_tp_sl(self, current_bar):
         self.long_tp1 = self.calculate_tp('long', self.params['ProfitPerc1'], current_bar)
@@ -332,7 +332,7 @@ class TradingStrategy:
                 (not self.params['rsi_cond'] or current_bar['rsi'] > self.params['rsi_overbought']))
 
     def add_to_position(self, position_type, current_bar):
-        qty = self.calculate_position_size(self.params['real_qty'] * (self.params['qty_multiplier'] ** abs(self.position_state)))
+        qty = self.calculate_position_size(self.params['real_qty'] * (self.params['qty_multiplier'] ** abs(self.position_state)), current_bar)
         
         if position_type == 'long':
             self.position_state += 1
@@ -346,9 +346,9 @@ class TradingStrategy:
         #self.logger.info(f"{position_type.capitalize()} 추가 진입: 가격 {current_bar['close']:.2f}, 수량 {qty:.4f}, RSI {current_bar['rsi']:.2f}")
         self.calculate_pyramiding_prices(current_bar)
 
-    def calculate_position_size(self, qty_value):
+    def calculate_position_size(self, qty_value, current_bar):
         if self.params['default_qty_option'] == '금액 기준':
-            return qty_value / self.current_bar['close']
+            return qty_value / current_bar['close']
         else:  # 계약 수
             return qty_value
 
@@ -396,7 +396,7 @@ class TradingStrategy:
             return current_bar['open'] - self.params['safty_value'] if entry_type == 'long' else current_bar['open'] + self.params['safty_value']
 
     def execute_safety_entry(self, entry_type, entry_price, current_bar):
-        qty = self.calculate_position_size(self.params['safty_qty'])
+        qty = self.calculate_position_size(self.params['safty_qty'], current_bar)
         if entry_type == 'long':
             self.long_avg_price = (self.long_avg_price * self.position_state + entry_price * qty) / (self.position_state + qty)
             self.position_state += qty
@@ -622,7 +622,7 @@ if __name__ == "__main__":
         'use_extreme_exit_short': False,  # 강한 상승 추세 시 숏 포지션 종료
     }
     logger.info(f"실제 Grid 데이터 경로: {path_helper.grid_dir.resolve()}")
-    logger.info(f"거래소 데이터 경로: {path_helper.grid_dir / params['exchange_name']}")
+    logger.info(f"거래소 데이터 경로: {path_helper.grid_dir / str(params['exchange_name'])}")
     
     # Celery 워커 시작
     celery_process, celery_log_file = start_celery_worker()

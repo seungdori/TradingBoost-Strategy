@@ -11,7 +11,6 @@ from HYPERRSI.src.trading.trading_service import TradingService
 from HYPERRSI.src.trading.models import Position
 from HYPERRSI.src.api.trading.Calculate_signal import TrendStateCalculator
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
-from HYPERRSI.src.core.database import redis_client
 from HYPERRSI.src.trading.dual_side_entry import manage_dual_side_entry
 from HYPERRSI.src.trading.stats import update_trading_stats, record_trade_entry
 from HYPERRSI.src.trading.error_message import map_exchange_error
@@ -21,23 +20,30 @@ from HYPERRSI.src.api.routes.position import open_position_endpoint
 from HYPERRSI.src.trading.models import get_timeframe
 from HYPERRSI.src.api.routes.position import OpenPositionRequest
 from HYPERRSI.src.trading.utils.message_builder import create_position_message
-from shared.logging import get_logger, setup_error_logger
+from shared.logging import get_logger
+from HYPERRSI.src.core.logger import setup_error_logger
 from HYPERRSI.src.trading.utils.trading_utils import calculate_dca_levels, update_dca_levels_redis, init_user_position_data, check_dca_condition
 logger = get_logger(__name__)
 error_logger = setup_error_logger()
 
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
 
 
 async def check_margin_block(user_id: str, symbol: str) -> bool:
     """사용자의 특정 심볼에 대한 자금 부족 차단 상태를 확인합니다.
-    
+
     Args:
         user_id (int): 사용자 ID
         symbol (str): 심볼
-        
+
     Returns:
         bool: 차단된 경우 True, 아닌 경우 False
     """
+    redis_client = _get_redis_client()
     block_key = f"margin_block:{user_id}:{symbol}"
     block_status = await redis_client.get(block_key)
     return block_status is not None
@@ -117,6 +123,7 @@ async def handle_no_position(
     """
     포지션이 없을 때 롱/숏 진입 시도 -> 주문 발행
     """
+    redis_client = _get_redis_client()
     try:
         print(f"[{user_id}] ✅포지션이 없는 경우")
         position_manager = PositionStateManager(trading_service)
@@ -507,6 +514,7 @@ async def handle_existing_position(
     - 브레이크이븐
     - 청산 조건
     """
+    redis_client = _get_redis_client()
 
     korean_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     position_manager = PositionStateManager(trading_service)

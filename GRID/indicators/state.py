@@ -5,6 +5,7 @@ import json
 import logging
 import numpy as np
 import redis
+from typing import Dict, Any, Optional
 from shared.config import settings
 
 
@@ -33,12 +34,12 @@ class IndicatorState:
         self.mama_last_idx = -1
         self.mama_values = None
         self.fama_values = None
-        self.prev_phase = 0
-        self.prev_I2 = 0
-        self.prev_Q2 = 0
-        self.prev_Re = 0
-        self.prev_Im = 0
-        self.prev_period = 0
+        self.prev_phase = 0.0
+        self.prev_I2 = 0.0
+        self.prev_Q2 = 0.0
+        self.prev_Re = 0.0
+        self.prev_Im = 0.0
+        self.prev_period = 0.0
 
         # ATR 관련 상태
         self.atr_last_idx = -1
@@ -78,7 +79,7 @@ class IndicatorState:
         }
 
     @classmethod
-    def from_dict(cls, data):
+    def from_dict(cls, data: Optional[Dict[str, Any]]) -> 'IndicatorState':
         """딕셔너리에서 상태를 복원합니다"""
         if not data:
             return cls()
@@ -94,12 +95,12 @@ class IndicatorState:
                 setattr(state, attr, np.array(value))
 
         # 스칼라 값 복원
-        state.prev_phase = data.get('prev_phase', 0)
-        state.prev_I2 = data.get('prev_I2', 0)
-        state.prev_Q2 = data.get('prev_Q2', 0)
-        state.prev_Re = data.get('prev_Re', 0)
-        state.prev_Im = data.get('prev_Im', 0)
-        state.prev_period = data.get('prev_period', 0)
+        state.prev_phase = data.get('prev_phase', 0.0)
+        state.prev_I2 = data.get('prev_I2', 0.0)
+        state.prev_Q2 = data.get('prev_Q2', 0.0)
+        state.prev_Re = data.get('prev_Re', 0.0)
+        state.prev_Im = data.get('prev_Im', 0.0)
+        state.prev_period = data.get('prev_period', 0.0)
         state.mama_last_idx = data.get('mama_last_idx', -1)
         state.atr_last_idx = data.get('atr_last_idx', -1)
         state.prev_atr = data.get('prev_atr')
@@ -140,7 +141,7 @@ async def get_indicator_state(exchange_name: str, symbol: str, direction: str = 
     return IndicatorState()
 
 
-async def save_indicator_state(state: IndicatorState, exchange_name: str, symbol: str, direction: str = 'long'):
+async def save_indicator_state(state: IndicatorState, exchange_name: str, symbol: str, direction: str = 'long') -> None:
     """
     지표 상태를 Redis에 저장합니다
 

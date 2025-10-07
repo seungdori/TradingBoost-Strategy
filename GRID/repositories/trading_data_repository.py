@@ -1,31 +1,69 @@
-import os
+"""Trading data access helpers using PostgreSQL infrastructure."""
 
-import aiosqlite
+from __future__ import annotations
 
+from typing import Optional
+
+from shared.database.session import get_db
 from shared.dtos.trading import TradingDataDto
-from shared.utils import path_helper
+from shared.logging import get_logger
+
+from GRID.repositories.trading_repository_pg import TradingDataRepositoryPG
+
+logger = get_logger(__name__)
 
 
-async def fetch_db_prices(exchange_name: str, symbol: str) -> TradingDataDto | None:
-    db_path = str(path_helper.logs_dir / 'trading_data' / f'{exchange_name}_entry_data.db')
-    # db_path = f"logs/trading_data/{exchange_name}_entry_data.db" // Todo: remove
-    if not os.path.exists(db_path):
-        return None
-    async with aiosqlite.connect(db_path) as conn:  # 비동기적으로 DB 연결 관리
-        async with conn.cursor() as cursor:  # 비동기적으로 커서 관리
-            await cursor.execute("SELECT tp1_price, tp2_price, tp3_price, sl_price FROM entry WHERE symbol = ?",
-                                 (symbol,))
-            row = await cursor.fetchone()  # 결과를 비동기적으로 가져옴
+async def fetch_db_prices(exchange_name: str, symbol: str) -> Optional[TradingDataDto]:
+    """Fetch trading price data for a symbol from PostgreSQL."""
+    try:
+        async with get_db() as session:
+            repo = TradingDataRepositoryPG(session)
+            entry = await repo.get_entry(exchange_name, symbol)
 
-    if row:
-        trading_data: TradingDataDto = TradingDataDto(
-            symbol=symbol,
-            long_tp1_price=row[0],
-            long_tp2_price=row[1],
-            long_tp3_price=row[2],
-            long_sl_price=row[3]
+            if entry is None:
+                logger.debug(
+                    "No entry found for symbol",
+                    extra={"exchange": exchange_name, "symbol": symbol}
+                )
+                return None
+
+            tp1 = entry.tp1_price
+            tp2 = entry.tp2_price
+            tp3 = entry.tp3_price
+            sl = entry.sl_price
+
+            if not all(value and value > 0 for value in [tp1, tp2, tp3, sl]):
+                logger.warning(
+                    "Entry missing TP/SL values",
+                    extra={
+                        "exchange": exchange_name,
+                        "symbol": symbol,
+                        "tp1": tp1,
+                        "tp2": tp2,
+                        "tp3": tp3,
+                        "sl": sl,
+                    }
+                )
+                return None
+
+            return TradingDataDto(
+                symbol=entry.symbol,
+                long_tp1_price=float(tp1),
+                long_tp2_price=float(tp2),
+                long_tp3_price=float(tp3),
+                long_sl_price=float(sl),
+                short_tp1_price=None,
+                short_tp2_price=None,
+                short_tp3_price=None,
+                short_sl_price=None,
+            )
+
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.error(
+            "Failed to fetch trading data",
+            exc_info=True,
+            extra={"exchange": exchange_name, "symbol": symbol}
         )
-        return trading_data
+        raise exc
 
-    else:
-        return None
+    return None

@@ -34,7 +34,7 @@ async def create_chart_image(exchange_name: str, selected_coin_name: str, enter_
     if not os.path.exists(full_path):
         # 차트가 없는 경우, 차트 새로 생성
         try:
-            await grid.read_csv_and_plot(exchange_name=exchange_name, coin_name=selected_coin_name, direction=enter_strategy)
+            await grid.read_csv_and_plot(exchange_name=exchange_name, coin_name=selected_coin_name, direction=enter_strategy)  # type: ignore[attr-defined]
             print(f"{selected_coin_name}에 대한 차트를 생성했습니다. {full_path}에 저장되었습니다.")
         except Exception as e:
             print(f"Error creating chart: {e}")

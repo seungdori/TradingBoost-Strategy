@@ -5,15 +5,16 @@ configure_pythonpath()
 import uvicorn
 import argparse
 import multiprocessing
+import sys
+import platform
+import os
+import signal
 
 from starlette.middleware.cors import CORSMiddleware
 
-from grid_process import  setup_redis
-import platform
-import os
-from worker_manager import setup_workers, stop_workers
-import signal
-from app import app  # FastAPI 앱 임포트
+from GRID.strategies.grid_process import setup_redis
+from GRID.jobs.worker_manager import setup_workers, stop_workers
+from GRID.api.app import app  # FastAPI 앱 임포트
 
 
 def configure_cors():
@@ -25,7 +26,7 @@ def configure_cors():
             "https://localhost:3000",
             "http://0.0.0.0:3000",
             "https://0.0.0.0:3000",
-            "https://tradingboostdemo.com"
+            "https://tradingboostdemo.com",
             # 프로덕션 도메인도 추가
             "http://158.247.206.127:3000",
             "https://158.247.206.127:3000",
@@ -70,7 +71,7 @@ def run_server(host, port):
     configure_cors()
 
     try:
-        uvicorn.run("app:app", host=host, port=port, reload=False)
+        uvicorn.run("GRID.api.app:app", host=host, port=port, reload=False)
     finally:
         print("Shutting down worker processes...")
         stop_workers()

@@ -30,60 +30,39 @@ from HYPERRSI.src.core.config import settings  # <-- 공통 설정 import
 # 구조화된 로깅 사용
 logger = get_logger(__name__)
 
-class Settings(BaseSettings):
-    # Redis 설정
-    REDIS_URL: str = settings.REDIS_URL
-    REDIS_PASSWORD: str | None = settings.REDIS_PASSWORD
-    REDIS_HOST: str = settings.REDIS_HOST
-    REDIS_PORT: int = settings.REDIS_PORT
-    REDIS_POOL_SIZE: int = 100
-    REDIS_BINARY_POOL_SIZE: int = 50
-    CACHE_TTL: int = 3600
-    LOCAL_CACHE_TTL: int = 300
+# Database URL configuration - Use PostgreSQL from shared config
+# DATABASE_URL is constructed from environment variables via shared.config
+from shared.config import get_settings
 
-    # OKX API 설정
-    okx_api_key: str
-    okx_secret_key: str
-    okx_passphrase: str
-
-    # Telegram 설정
-    telegram_bot_token: str
-
-    # 데이터베이스 설정
-    database_url: str
-    db_user: str
-    db_password: str
-    db_host: str
-    db_port: str
-    db_name: str
-
-    # 기타 설정
-    owner_id: str
-
-    model_config = {
-        "env_file": ".env",
-        "case_sensitive": False,
-        "extra": "allow"
-    }
-
-settings = Settings()
-
-DATABASE_URL = "sqlite+aiosqlite:///./local_db.sqlite"
+_settings = get_settings()
+DATABASE_URL = _settings.db_url  # PostgreSQL from shared configuration
 
 class DatabaseEngine:
     _instance = None
     _engine = None
     _lock = Lock()
-    
+
     def __new__(cls):
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)
-                cls._engine = create_async_engine(
-                    DATABASE_URL,
-                    echo=False,
-                    future=True
-                )
+                # PostgreSQL connection pool settings
+                engine_kwargs = {
+                    "echo": False,
+                    "future": True,
+                }
+
+                # Add pool settings for PostgreSQL
+                if "postgresql" in DATABASE_URL:
+                    engine_kwargs.update({
+                        "pool_size": _settings.DB_POOL_SIZE,
+                        "max_overflow": _settings.DB_MAX_OVERFLOW,
+                        "pool_recycle": _settings.DB_POOL_RECYCLE,
+                        "pool_pre_ping": _settings.DB_POOL_PRE_PING,
+                        "pool_timeout": _settings.DB_POOL_TIMEOUT,
+                    })
+
+                cls._engine = create_async_engine(DATABASE_URL, **engine_kwargs)
             return cls._instance
     
     @property
@@ -234,18 +213,59 @@ class RedisClient:
 # 기존 클라이언트 인스턴스 생성
 redis_instance = RedisClient()
 
-# 비동기 함수로 클라이언트 가져오기
+# 전역 Redis 클라이언트 캐시 (싱글톤 패턴)
+_global_redis_client = None
+_global_redis_binary_client = None
+
 async def get_redis_client():
-    """Redis 클라이언트 반환 (decode_responses=True)"""
-    return await redis_instance.get_client()
+    """Redis 클라이언트 반환 (decode_responses=True) - 싱글톤"""
+    global _global_redis_client
+    if _global_redis_client is None:
+        _global_redis_client = await redis_instance.get_client()
+    return _global_redis_client
 
 async def get_redis_binary_client():
-    """Redis 바이너리 클라이언트 반환 (decode_responses=False)"""
-    return await redis_instance.get_binary_client()
+    """Redis 바이너리 클라이언트 반환 (decode_responses=False) - 싱글톤"""
+    global _global_redis_binary_client
+    if _global_redis_binary_client is None:
+        _global_redis_binary_client = await redis_instance.get_binary_client()
+    return _global_redis_binary_client
 
-# 하위 호환성을 위한 동기 wrapper (사용 시 주의 필요)
-redis_client = redis_instance.get_client
-redis_client_binary = redis_instance.get_binary_client
+async def init_global_redis_clients():
+    """
+    전역 Redis 클라이언트를 초기화합니다.
+    애플리케이션 시작 시 lifespan에서 호출해야 합니다.
+    """
+    global _global_redis_client, _global_redis_binary_client
+    _global_redis_client = await redis_instance.get_client()
+    _global_redis_binary_client = await redis_instance.get_binary_client()
+
+    logger.info("Global Redis clients initialized successfully")
+
+    # Return clients for assignment
+    return _global_redis_client, _global_redis_binary_client
+
+# Module-level attribute access for dynamic redis_client
+def __getattr__(name):
+    """
+    Module-level __getattr__ for dynamic redis_client access.
+    Allows legacy code to use 'redis_client' after initialization.
+    """
+    if name == 'redis_client':
+        if _global_redis_client is None:
+            raise RuntimeError(
+                "Redis client not initialized. "
+                "Call init_global_redis_clients() in application startup."
+            )
+        return _global_redis_client
+    elif name == 'redis_client_binary':
+        if _global_redis_binary_client is None:
+            raise RuntimeError(
+                "Redis binary client not initialized. "
+                "Call init_global_redis_clients() in application startup."
+            )
+        return _global_redis_binary_client
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 # 핑 메소드를 공용으로 사용하기 위해 연결 상태 확인 함수 추가
 async def check_redis_connection():
@@ -257,10 +277,10 @@ async def reconnect_redis():
     """Redis 강제 재연결"""
     return await redis_instance.reconnect(force=True)
 
-# 동기 세션을 위한 의존성 함수 추가
-def get_db():
-    """FastAPI 의존성 주입을 위한 데이터베이스 세션 함수"""
-    return redis_client
+# FastAPI 의존성 주입을 위한 비동기 세션 함수
+async def get_db():
+    """FastAPI 의존성 주입을 위한 Redis 클라이언트 반환 함수"""
+    return await get_redis_client()
 
 class CeleryApp:
     _instance = None

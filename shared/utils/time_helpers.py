@@ -274,7 +274,7 @@ def get_timeframe_boundaries(
 
 from functools import lru_cache
 from typing import Any
-import pandas as pd  # type: ignore[import-untyped]
+import pandas as pd
 
 
 @lru_cache(maxsize=50)
@@ -427,3 +427,74 @@ def fill_missing_timestamps(df: pd.DataFrame, file_name: str) -> pd.DataFrame:
     df = df_full.merge(df, on='timestamp', how='left')
 
     return df
+
+
+# ============================================================================
+# 타임프레임 계산 함수 (HYPERRSI에서 통합)
+# ============================================================================
+
+def calculate_update_interval(timeframe: int, min_interval: int = 5) -> int:
+    """
+    타임프레임별 업데이트 주기를 계산합니다 (타임프레임의 1/8).
+
+    Args:
+        timeframe: 타임프레임 (분 단위)
+        min_interval: 최소 업데이트 간격 (초 단위, 기본값: 5)
+
+    Returns:
+        int: 업데이트 주기 (초 단위)
+
+    Examples:
+        >>> calculate_update_interval(15)
+        112  # (15 * 60) // 8 = 112초
+        >>> calculate_update_interval(1)
+        7  # (1 * 60) // 8 = 7초, 최소값 5초 적용
+    """
+    interval_seconds = (timeframe * 60) // 8
+    return max(interval_seconds, min_interval)
+
+
+def align_timestamp(ts_ms: int, timeframe: int) -> int:
+    """
+    타임스탬프를 캔들 마감시간에 맞춰 정렬합니다.
+
+    Args:
+        ts_ms: 타임스탬프 (밀리초)
+        timeframe: 타임프레임 (분 단위)
+
+    Returns:
+        int: 정렬된 타임스탬프 (밀리초)
+
+    Examples:
+        >>> # 2021-01-01 00:17:30 -> 2021-01-01 00:15:00 (15분 캔들)
+        >>> align_timestamp(1609459050000, 15)
+        1609459200000
+    """
+    minutes = timeframe
+    ms_per_minute = 60 * 1000
+    return (ts_ms // (minutes * ms_per_minute)) * (minutes * ms_per_minute)
+
+
+def is_bar_end(current_time: float, timeframe: int, tolerance: int = 10) -> bool:
+    """
+    현재 시간이 해당 타임프레임의 바 종료 시점인지 확인합니다.
+
+    Args:
+        current_time: 현재 시간 (초 단위 타임스탬프)
+        timeframe: 타임프레임 (분 단위)
+        tolerance: 허용 오차 (초 단위, 기본값: 10)
+
+    Returns:
+        bool: 바 종료 시점 여부
+
+    Examples:
+        >>> # 15분 타임프레임, 현재 시간이 00:15:05인 경우
+        >>> is_bar_end(1609459205, 15)
+        True  # 10초 이내 허용 오차
+    """
+    minutes = timeframe
+    seconds_per_timeframe = minutes * 60
+    current_seconds = int(current_time)
+
+    # 현재 시간이 타임프레임의 배수인지 확인
+    return current_seconds % seconds_per_timeframe < tolerance

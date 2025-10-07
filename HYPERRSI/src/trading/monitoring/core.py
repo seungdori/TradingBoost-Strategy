@@ -15,7 +15,7 @@ import time
 import traceback
 from datetime import datetime
 from shared.logging import get_logger, log_order
-from HYPERRSI.src.core.database import redis_client, check_redis_connection, reconnect_redis
+from HYPERRSI.src.core.database import check_redis_connection, reconnect_redis
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 from HYPERRSI.src.api.dependencies import get_exchange_context
 from HYPERRSI.src.api.routes.order import close_position, ClosePositionRequest
@@ -31,6 +31,21 @@ from .utils import (
 )
 
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
+
+
+# Module-level attribute for backward compatibility
+def __getattr__(name):
+    if name == "redis_client":
+        return _get_redis_client()
+    raise AttributeError(f"module has no attribute {name}")
 
 
 async def monitor_orders_loop():

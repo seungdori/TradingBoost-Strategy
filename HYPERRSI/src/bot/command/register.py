@@ -7,7 +7,7 @@ import time
 from shared.constants.default_settings import DEFAULT_TRADING_SETTINGS, DEFAULT_PARAMS_SETTINGS , DEFAULT_DUAL_SIDE_ENTRY_SETTINGS  # 추가
 import pytz
 from datetime import datetime
-from HYPERRSI.src.core.database import redis_client
+
 from HYPERRSI.src.bot.states.states import RegisterStates
 from shared.logging import get_logger
 from HYPERRSI.src.utils.check_invitee import get_uid_from_api_keys
@@ -50,6 +50,14 @@ def check_right_invitee(okx_api, okx_secret, okx_parra, user_id= None):
 
 router = Router()
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 
 def get_redis_keys(user_id):
     return {

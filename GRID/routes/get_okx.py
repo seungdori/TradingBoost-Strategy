@@ -22,7 +22,7 @@ class EmailRequest(BaseModel):
     email: str
 
 @app.post("/get_okx_api", response_model=OkxApiResponse)
-async def get_okx_api(request: EmailRequest):
+async def get_okx_api(request: EmailRequest) -> OkxApiResponse:
     try:
         # users 테이블에서 이메일로 사용자 검색
         response = requests.get(

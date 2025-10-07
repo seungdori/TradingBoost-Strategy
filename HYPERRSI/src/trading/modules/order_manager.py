@@ -11,7 +11,6 @@ from datetime import datetime
 from typing import Optional
 import ccxt.async_support as ccxt
 
-from HYPERRSI.src.core.database import redis_client
 from HYPERRSI.src.trading.cancel_trigger_okx import TriggerCancelClient
 from HYPERRSI.src.trading.models import OrderStatus
 from HYPERRSI.src.trading.services.order_utils import try_send_order, get_order_info as get_order_info_from_module
@@ -19,6 +18,12 @@ from shared.utils import safe_float
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
 
 
 class OrderManager:
@@ -116,6 +121,7 @@ class OrderManager:
 
     async def cancel_all_open_orders(self, exchange, symbol, user_id, side: str = None):
         """모든 미체결 주문 취소"""
+        redis_client = _get_redis_client()
         try:
             # 먼저 미체결 주문들을 가져옵니다
             print(f"취소할 주문 조회: {symbol}, side: {side}")
@@ -208,6 +214,7 @@ class OrderManager:
         - key: user:{user_id}:open_orders
         - value: JSON (OrderStatus)
         """
+        redis_client = _get_redis_client()
         redis_key = f"user:{user_id}:open_orders"
         existing = await redis_client.get(f"open_orders:{user_id}:{order_state.order_id}")
         if existing:
@@ -234,6 +241,7 @@ class OrderManager:
         - 각 주문의 최신 상태(체결량, 가격, 상태)를 API로 확인
         - Redis 업데이트: open 주문과 closed 주문을 별도의 키로 관리
         """
+        redis_client = _get_redis_client()
         open_key = f"user:{user_id}:open_orders"
         closed_key = f"user:{user_id}:closed_orders"  # 종료된 주문을 저장할 새로운 Redis 키
 

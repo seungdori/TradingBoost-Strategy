@@ -13,7 +13,6 @@ import json
 from datetime import datetime
 from typing import Any
 from shared.config import settings
-from shared.validation import sanitize_log_data
 
 
 class JSONFormatter(logging.Formatter):
@@ -77,7 +76,8 @@ class JSONFormatter(logging.Formatter):
                 "traceback": self.formatException(record.exc_info),
             }
 
-        # Sanitize sensitive data
+        # Sanitize sensitive data (lazy import to avoid circular dependency)
+        from shared.validation import sanitize_log_data
         log_data = sanitize_log_data(log_data)
 
         return json.dumps(log_data, ensure_ascii=False)

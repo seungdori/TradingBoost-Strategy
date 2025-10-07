@@ -8,13 +8,28 @@ TP(익절)와 SL(손절) 가격 계산 및 업데이트 로직
 import traceback
 from typing import Optional, List, Tuple
 
-from HYPERRSI.src.core.database import redis_client, TradingCache
+from HYPERRSI.src.core.database import TradingCache
 from HYPERRSI.src.api.routes.order import update_stop_loss_order
 from HYPERRSI.src.trading.models import UpdateStopLossRequest
 from shared.utils import safe_float, round_to_tick_size, get_tick_size_from_redis
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
+
+
+# Module-level attribute for backward compatibility
+def __getattr__(name):
+    if name == "redis_client":
+        return _get_redis_client()
+    raise AttributeError(f"module has no attribute {name}")
 
 
 class TPSLCalculator:

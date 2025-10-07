@@ -6,6 +6,12 @@ import time
 from datetime import datetime
 
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
 router = APIRouter(prefix="/status", tags=["status"])
 
 # 서버 시작 시간 저장

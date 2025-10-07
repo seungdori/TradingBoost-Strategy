@@ -96,7 +96,7 @@ def get_worker_status():
 
 def enqueue_grid_trading_job(exchange_name, enter_strategy, enter_symbol_count, enter_symbol_amount_list,
                              grid_num, leverage, stop_loss, user_id, custom_stop, telegram_id, force_restart=False):
-    redis_conn = Redis.from_url(worker_manager.redis_url)
+    redis_conn = Redis.from_url(worker_manager.redis_url) # type: ignore[union-attr]
     queue = Queue('grid_trading', connection=redis_conn)
     job = queue.enqueue('grid_process.run_grid_trading',
                         exchange_name, enter_strategy, enter_symbol_count, enter_symbol_amount_list,

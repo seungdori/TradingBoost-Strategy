@@ -1,7 +1,6 @@
 """
 GRID Trading Data Operations - PostgreSQL Version
 
-This module now uses PostgreSQL instead of SQLite.
 All functions are re-exported from trading_data_service_pg for backward compatibility.
 """
 

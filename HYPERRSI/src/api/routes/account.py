@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional
 import logging
-from HYPERRSI.src.core.database import redis_client
+
 from datetime import datetime, timedelta, date
 from HYPERRSI.src.api.dependencies import get_exchange_client
 from contextlib import asynccontextmanager
@@ -148,6 +148,14 @@ router = APIRouter(prefix="/account", tags=["Account Management"])
 
 # 환경 변수나 별도의 설정 파일에서 가져오는 방식을 권장합니다.
 from HYPERRSI.src.config import OKX_API_KEY as API_KEY, OKX_SECRET_KEY as API_SECRET, OKX_PASSPHRASE as API_PASSPHRASE
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 
 BASE_URL = "https://www.okx.com"
 

@@ -29,7 +29,7 @@ class CentralizedPriceManager:
         retry_count = 0
         while retry_count < self.max_retries:
             try:
-                pool = aioredis.ConnectionPool.from_url(
+                pool = aioredis.ConnectionPool.from_url( # type: ignore[var-annotated]
                     'redis://localhost',
                     max_connections=600,
                     encoding='utf-8',
@@ -70,12 +70,12 @@ class CentralizedPriceManager:
                     server_time = ticker.get('timestamp', None)
                     utc_time = datetime.fromtimestamp(server_time / 1000, timezone.utc)
                     kst_time = utc_time + timedelta(hours=9)
-                    await self.redis.set(f"price:{symbol}", f"{last_price}:{kst_time.timestamp()}")
-                    await self.redis.publish(
+                    await self.redis.set(f"price:{symbol}", f"{last_price}:{kst_time.timestamp()}") # type: ignore[union-attr]
+                    await self.redis.publish( # type: ignore[union-attr]
                         "price_update",
                         json.dumps({"symbol": symbol, "price": last_price, "timestamp": kst_time.timestamp()})
                     )
-                    last_update_time = current_time
+                    last_update_time = current_time # type: ignore[assignment]
                     consecutive_errors = 0  # 성공적인 업데이트 후 오류 카운트 리셋
             except Exception as e:
                 consecutive_errors += 1

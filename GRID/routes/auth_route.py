@@ -37,7 +37,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/signup", response_model=ResponseDto[dict])
-async def signup(dto: SignupDto) -> ResponseDto[dict]:
+async def signup(dto: SignupDto) -> ResponseDto[dict | None]:
     """
     Register a new user with API credentials.
 
@@ -91,7 +91,7 @@ async def signup(dto: SignupDto) -> ResponseDto[dict]:
 
     try:
         user = await user_database.insert_user(
-            dto.user_id,
+            int(dto.user_id),
             dto.exchange_name,
             dto.api_key,
             dto.secret_key,
@@ -107,7 +107,7 @@ async def signup(dto: SignupDto) -> ResponseDto[dict]:
                 }
             )
 
-            return ResponseDto[dict](
+            return ResponseDto[dict | None](
                 success=True,
                 message=f"User [{dto.user_id}] registered successfully",
                 data=user
@@ -121,7 +121,7 @@ async def signup(dto: SignupDto) -> ResponseDto[dict]:
                 }
             )
 
-            return ResponseDto[None](
+            return ResponseDto[dict | None](
                 success=False,
                 message="Failed to register user",
                 data=None

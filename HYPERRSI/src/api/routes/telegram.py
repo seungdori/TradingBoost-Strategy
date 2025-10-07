@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, Path, WebSocket, WebSocketD
 from typing import Optional, List
 from pydantic import BaseModel, Field
 from shared.logging import get_logger
-from HYPERRSI.src.core.database import redis_client
+
 from shared.helpers.user_id_converter import get_telegram_id_from_uid
 from HYPERRSI.src.services.timescale_service import TimescaleUserService
 import datetime
@@ -12,6 +12,14 @@ import os
 import json
 
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 
 # ✅ FastAPI 라우터 설정
 router = APIRouter(prefix="/telegram", tags=["Telegram Message"])
@@ -109,7 +117,7 @@ async def send_message(
     )
 ):
     try:
-        user_id = await get_telegram_id_from_uid(redis_client, user_id, TimescaleUserService)
+        user_id = await get_telegram_id_from_uid(user_id, TimescaleUserService)
         if not message.strip():
             raise HTTPException(
                 status_code=400,
@@ -215,7 +223,7 @@ async def get_telegram_logs(
         print(f"OKX UID로 조회: {user_id_str}")
     else:
         # Telegram ID로 조회 (18자리 미만인 경우)
-        telegram_id = await get_telegram_id_from_uid(redis_client, user_id_str, TimescaleUserService)
+        telegram_id = await get_telegram_id_from_uid(user_id_str, TimescaleUserService)
         log_set_key = LOG_SET_KEY.format(user_id=telegram_id)
         print(f"telegram id: {telegram_id}")
         user_id = telegram_id
@@ -294,7 +302,7 @@ async def get_telegram_logs(
 async def websocket_log_endpoint(websocket: WebSocket, user_id: str):
     """WebSocket을 통해 실시간 텔레그램 로그를 스트리밍합니다."""
     await websocket.accept()
-    user_id = await get_telegram_id_from_uid(redis_client, user_id, TimescaleUserService)
+    user_id = await get_telegram_id_from_uid(user_id, TimescaleUserService)
     log_channel = LOG_CHANNEL_KEY.format(user_id=user_id)
     pubsub = redis_client.pubsub()
     

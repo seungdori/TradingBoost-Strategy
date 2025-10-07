@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     OKX_SECRET_KEY: str = ""
     OKX_PASSPHRASE: str = ""
 
+    # 관리자 API 설정 (초대자 확인용)
+    ADMIN_OKX_API_KEY: str = ""
+    ADMIN_OKX_SECRET_KEY: str = ""
+    ADMIN_OKX_PASSPHRASE: str = ""
+
     # Redis 설정
     REDIS_HOST: str = os.environ.get("REDIS_HOST", "localhost")
     REDIS_PORT: int = int(os.environ.get("REDIS_PORT", "6379"))

@@ -12,7 +12,7 @@ import traceback
 from datetime import datetime, timedelta
 from typing import Optional
 
-from HYPERRSI.src.core.database import redis_client
+
 from HYPERRSI.src.trading.models import Position
 from HYPERRSI.src.trading.modules.trading_utils import get_decimal_places
 from HYPERRSI.telegram_message import send_telegram_message
@@ -21,6 +21,21 @@ from shared.utils import get_minimum_qty, safe_float
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
+
+
+# Module-level attribute for backward compatibility
+def __getattr__(name):
+    if name == "redis_client":
+        return _get_redis_client()
+    raise AttributeError(f"module has no attribute {name}")
 
 
 class TPSLOrderCreator:

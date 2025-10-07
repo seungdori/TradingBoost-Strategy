@@ -1,9 +1,17 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel  
 from typing import List, Optional, Any
-from HYPERRSI.src.core.database import redis_client
+
 from HYPERRSI.src.core.logger import get_order_logs_by_user_id, get_order_logs_by_date_range, get_user_order_logs_from_file
 from datetime import datetime
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 
 trading_log_router = APIRouter()
 

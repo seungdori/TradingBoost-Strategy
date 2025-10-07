@@ -26,7 +26,7 @@ async def get_bitget_spot_account_balance():
     # Todo: refactor after
     global bitget_spot_account_balance_cache, bitget_spot_account_balance_cache_expiry
 
-    bitget_spot_client = exchange_store.get_bitget_spot_instance()
+    bitget_spot_client = exchange_store.get_bitget_instance()
 
     try:
         if ((not cache_expired(bitget_spot_account_balance_cache_expiry))
@@ -70,7 +70,7 @@ async def get_bitget_spot_tickers():
     # Todo: refactor after
     global bitget_spot_mark_price_cache, bitget_spot_mark_price_cache_expiry
 
-    client = exchange_store.get_bitget_spot_instance()
+    client = exchange_store.get_bitget_instance()
 
     try:
         if ((not cache_expired(bitget_spot_mark_price_cache_expiry))
@@ -90,7 +90,7 @@ async def get_bitget_spot_tickers():
 
 async def fetch_bitget_spot_positions():
     print('[FETCH BITGET POSITIONS]')
-    exchange = exchange_store.get_bitget_spot_instance()
+    exchange = exchange_store.get_bitget_instance()
     positions: list[Any] = []
 
     try:

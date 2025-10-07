@@ -4,12 +4,12 @@
 텔레그램 ID와 OKX UID 간 변환 기능 제공
 """
 import logging
-from typing import Optional
+from typing import Optional, Any, Dict, List, cast
 
 logger = logging.getLogger(__name__)
 
 
-async def get_uid_from_telegramid(redis_client, telegram_id: str) -> Optional[str]:
+async def get_uid_from_telegramid(redis_client: Any, telegram_id: str) -> Optional[str]:
     """
     텔레그램 ID를 OKX UID로 변환합니다.
 
@@ -27,7 +27,7 @@ async def get_uid_from_telegramid(redis_client, telegram_id: str) -> Optional[st
             # bytes 타입인 경우에만 decode 수행
             if isinstance(okx_uid, bytes):
                 return okx_uid.decode('utf-8')
-            return okx_uid
+            return str(okx_uid)
 
         # Redis에 없는 경우 None 반환
         return None
@@ -36,7 +36,7 @@ async def get_uid_from_telegramid(redis_client, telegram_id: str) -> Optional[st
         return None
 
 
-async def get_telegram_id_from_uid(redis_client, okx_uid: str, timescale_service=None) -> Optional[str]:
+async def get_telegram_id_from_uid(redis_client: Any, okx_uid: str, timescale_service: Any = None) -> Optional[str]:
     """
     OKX UID를 텔레그램 ID로 변환합니다.
     1. 주요 방식: user:*:okx_uid 키 스캔 및 값 비교 (기존 로직)
@@ -64,7 +64,7 @@ async def get_telegram_id_from_uid(redis_client, okx_uid: str, timescale_service
         keys = await redis_client.keys(pattern)
         logger.debug(f"Scan found {len(keys)} keys matching pattern '{pattern}'")
 
-        valid_telegram_ids = []
+        valid_telegram_ids: List[Dict[str, Any]] = []
 
         for key in keys:
             key_str = key.decode() if isinstance(key, bytes) else str(key)
@@ -107,8 +107,8 @@ async def get_telegram_id_from_uid(redis_client, okx_uid: str, timescale_service
                     logger.warning(f"Key '{key_str}' matched UID but has unexpected format.")
 
         if valid_telegram_ids:
-            valid_telegram_ids.sort(key=lambda x: x["last_activity"], reverse=True)
-            found_telegram_id = valid_telegram_ids[0]["telegram_id"]
+            valid_telegram_ids.sort(key=lambda x: cast(int, x["last_activity"]), reverse=True)
+            found_telegram_id = str(valid_telegram_ids[0]["telegram_id"])
             return found_telegram_id
 
     except Exception as e:
@@ -171,7 +171,7 @@ async def get_telegram_id_from_uid(redis_client, okx_uid: str, timescale_service
     return None
 
 
-async def get_identifier(redis_client, identifier: str) -> str:
+async def get_identifier(redis_client: Any, identifier: str) -> str:
     """
     입력된 식별자가 텔레그램 ID인지 OKX UID인지 판단하여 OKX UID를 반환합니다.
     텔레그램 ID가 입력되면 OKX UID로 변환하고, OKX UID가 입력되면 그대로 반환합니다.

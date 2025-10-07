@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from typing import Any
 from shared.dtos.exchange import WalletDto
 
 from services.binance_service import get_binance_futures_account_balance, get_binance_wallet, get_binance_tickers, \
@@ -18,9 +19,11 @@ from services.okx_spot_service import get_okx_spot_account_balance, get_okx_spot
 
 AVG_PRICE_CACHE_TIME_SECONDS = 15
 
+global_avg_price_cache: dict = {}
+avg_price_cache_expiry = datetime.now()
 
 # If user update api key or secret, revalidate cache
-def revalidate_cache(exchange_name: str):
+def revalidate_cache(exchange_name: str) -> None:
     if exchange_name == 'binance':
         revalidate_binance_cache()
 
@@ -38,7 +41,7 @@ def revalidate_cache(exchange_name: str):
         raise ValueError(f'Unknown exchange name: {exchange_name}')
 
 
-async def fetch_position(exchange_name: str):
+async def fetch_position(exchange_name: str) -> Any:
     if exchange_name == 'binance':
         return await fetch_binance_positions()
 
@@ -126,7 +129,7 @@ async def get_wallet(exchange_name: str) -> WalletDto:
         raise ValueError(f"Unknown exchange name: {exchange_name}")
 
 
-async def fetch_ccxt_tickers(exchange_name: str):
+async def fetch_ccxt_tickers(exchange_name: str) -> Any:
     if exchange_name == 'binance':
         return await get_binance_tickers()
 
@@ -152,7 +155,7 @@ async def fetch_ccxt_tickers(exchange_name: str):
         raise ValueError(f'Unknown exchange name: {exchange_name}')
 
 
-async def fetch_ccxt_balances(exchange_name: str):
+async def fetch_ccxt_balances(exchange_name: str) -> Any:
     if exchange_name == 'binance':
         return await get_binance_futures_account_balance()
 
@@ -178,7 +181,7 @@ async def fetch_ccxt_balances(exchange_name: str):
     else:
         raise ValueError(f'Unknown exchange name: {exchange_name}')
 
-async def fetch_ccxt_avg_price(exchange_name: str):
+async def fetch_ccxt_avg_price(exchange_name: str) -> Any:
     global global_avg_price_cache, avg_price_cache_expiry
 
     # Todo: refactor
@@ -202,7 +205,7 @@ async def fetch_ccxt_avg_price(exchange_name: str):
         raise e
 
 
-async def fetch_spot_info(exchange_name: str):
+async def fetch_spot_info(exchange_name: str) -> list:
     spot_info = []
 
     try:
@@ -234,9 +237,10 @@ async def fetch_spot_info(exchange_name: str):
 
     except Exception as e:
         print(f"스팟 정보 가져오기 중 오류 발생: {e}")
+        return []
 
 
-async def calculate_unrealized_profit(exchange_name: str):
+async def calculate_unrealized_profit(exchange_name: str) -> float:
     try:
         spot_info = await fetch_spot_info(exchange_name)
         unrealized_profit = 0
@@ -257,4 +261,4 @@ async def calculate_unrealized_profit(exchange_name: str):
 
     except Exception as e:
         print("upbit", f"미실현 이익 계산 중 오류 발생: {e}")
-        return None
+        return 0.0

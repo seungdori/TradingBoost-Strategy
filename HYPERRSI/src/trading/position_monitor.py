@@ -8,9 +8,23 @@ from celery import shared_task
 # src/trading/models에 정의된 Position, PositionState를 그대로 사용
 from HYPERRSI.src.trading.models import Position, PositionState
 from HYPERRSI.src.trading.trading_service import TradingService
-from HYPERRSI.src.core.database import redis_client  # 비동기 Redis 클라이언트
+  # 비동기 Redis 클라이언트
 
 logger = logging.getLogger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
+
+# Module-level attribute for backward compatibility
+def __getattr__(name):
+    if name == "redis_client":
+        return _get_redis_client()
+    raise AttributeError(f"module has no attribute {name}")
 
 async def subscribe_order_updates_event(
     user_id: str,

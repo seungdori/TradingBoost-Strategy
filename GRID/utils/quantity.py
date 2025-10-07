@@ -18,6 +18,8 @@ async def calculate_order_quantity(symbol, initial_capital_list, current_price, 
     """
     try:
         perpetual_instruments = await get_perpetual_instruments()
+        if perpetual_instruments is None:
+            return []
         lot_sizes = get_lot_sizes(perpetual_instruments)
 
         order_quantities = []

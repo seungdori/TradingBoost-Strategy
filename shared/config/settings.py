@@ -66,7 +66,6 @@ class Settings(BaseSettings):
     TIMESCALE_USER: str = Field(default="", description="TimescaleDB username")
     TIMESCALE_PASSWORD: str = Field(default="", description="TimescaleDB password")
 
-    # Primary database URL (PostgreSQL for production, SQLite for dev)
     DATABASE_URL: str = Field(default="", description="Complete database URL")
 
     @property
@@ -77,7 +76,6 @@ class Settings(BaseSettings):
         Priority:
         1. Explicit DATABASE_URL if set
         2. Construct from DB_* components
-        3. Fallback to SQLite for development
         """
         if self.DATABASE_URL:
             return self.DATABASE_URL
@@ -90,13 +88,10 @@ class Settings(BaseSettings):
                 # No password (for local PostgreSQL with trust authentication)
                 return f"postgresql+asyncpg://{self.DB_USER}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
 
-        # Development fallback
-        if self.ENVIRONMENT == "development":
-            return "sqlite+aiosqlite:///./dev.db"
-
+        # PostgreSQL is required - no fallback
         raise ValueError(
-            "Database configuration incomplete - set DATABASE_URL or all DB_* variables. "
-            "Production requires explicit database configuration."
+            "PostgreSQL configuration required. Set DATABASE_URL or all DB_* variables (DB_USER, DB_HOST, DB_NAME). "
+            "SQLite is no longer supported."
         )
 
     @property

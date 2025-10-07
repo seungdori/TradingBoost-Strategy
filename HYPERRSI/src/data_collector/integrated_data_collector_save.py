@@ -95,15 +95,11 @@ shutdown_event = threading.Event()
 
 def convert_symbol_format(symbol: str, to_okx_ws: bool = True) -> str:
     """심볼 형식을 웹소켓 양식으로 변환하는 헬퍼 함수"""
+    from shared.utils.symbol_helpers import okx_to_ccxt_symbol, ccxt_to_okx_symbol
     if to_okx_ws:
-        # BTC-USDT-SWAP -> BTC/USDT:USDT
-        base, quote, _ = symbol.split("-")
-        return f"{base}/{quote}:{quote}"
+        return okx_to_ccxt_symbol(symbol)
     else:
-        # BTC/USDT:USDT -> BTC-USDT-SWAP
-        base = symbol.split("/")[0]
-        quote = symbol.split("/")[1].split(":")[0]
-        return f"{base}-{quote}-SWAP"
+        return ccxt_to_okx_symbol(symbol)
 
 class OKXMultiTimeframeWebSocket:
     def __init__(self):

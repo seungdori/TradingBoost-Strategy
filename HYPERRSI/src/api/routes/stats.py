@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 import json
-from HYPERRSI.src.core.database import redis_client
+
 from shared.logging import get_logger
 from HYPERRSI.src.trading.stats import (
     get_user_trading_statistics,
@@ -14,6 +14,14 @@ from HYPERRSI.src.api.routes.account import get_balance
 from HYPERRSI.src.core.database import Cache  # 캐시 모듈 추가
 import time
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 
 # FastAPI 라우터 설정
 router = APIRouter(prefix="/stats", tags=["Trading Statistics"])

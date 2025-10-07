@@ -11,7 +11,6 @@ import asyncio
 import redis
 from datetime import datetime
 import ssl
-import ccxt.pro as ccxt
 import logging
 import time
 from HYPERRSI.src.core.config import settings
@@ -32,26 +31,22 @@ def save_candle(key, candle_json):
         p.execute()
 def convert_symbol_format(symbol: str, to_okx_ws: bool = True) -> str:
     """심볼 형식을 웹소켓 양식으로 변환하는 헬퍼 함수
-    
+
     Args:
         symbol: 변환할 심볼 문자열
-        to_okx: True면 OKX 형식으로, False면 표준 형식으로 변환
-    
+        to_okx_ws: True면 CCXT 형식으로, False면 OKX 형식으로 변환
+
     Examples:
-        >>> convert_symbol_format("BTC-USDT-SWAP", to_okx=True)
+        >>> convert_symbol_format("BTC-USDT-SWAP", to_okx_ws=True)
         "BTC/USDT:USDT"
-        >>> convert_symbol_format("BTC/USDT:USDT", to_okx=False)
+        >>> convert_symbol_format("BTC/USDT:USDT", to_okx_ws=False)
         "BTC-USDT-SWAP"
     """
+    from shared.utils.symbol_helpers import okx_to_ccxt_symbol, ccxt_to_okx_symbol
     if to_okx_ws:
-        # BTC-USDT-SWAP -> BTC/USDT:USDT
-        base, quote, _ = symbol.split("-")
-        return f"{base}/{quote}:{quote}"
+        return okx_to_ccxt_symbol(symbol)
     else:
-        # BTC/USDT:USDT -> BTC-USDT-SWAP
-        base = symbol.split("/")[0]
-        quote = symbol.split("/")[1].split(":")[0]
-        return f"{base}-{quote}-SWAP"
+        return ccxt_to_okx_symbol(symbol)
 
 class OKXWebSocket:
     def __init__(self):
@@ -108,13 +103,9 @@ class OKXWebSocket:
 
         candle_data = data["data"][0]
         channel = data["arg"]["channel"]  # ex) 'candle5m'
-        symbol  = data["arg"]["instId"]   # ex) 'BTC-USDT-SWAP'
-        # 현재 시간과 마지막 저장 시간 확인
-        current_time = time.time()
-        save_key = f"{symbol}:{channel}"
-        last_save_time = self.last_save.get(save_key, 0)
+        symbol = data["arg"]["instId"]   # ex) 'BTC-USDT-SWAP'
         current_time_kr = datetime.now(pytz.timezone("Asia/Seoul")).strftime("%Y-%m-%d %H:%M:%S")
-        
+
         timestamp_ms = int(candle_data[0])
         candle = {
             "timestamp": timestamp_ms // 1000,
@@ -128,10 +119,10 @@ class OKXWebSocket:
 
         # channel => "1m","3m","5m", etc. 로 추출
         # 'candle1m' => '1m'
-        tf_str = channel.replace("candle", "")  
+        tf_str = channel.replace("candle", "")
 
         # Redis 키를 만들 때도 tf_str을 포함시킴
-        latest_key = f"latest:{symbol}:{tf_str}" 
+        latest_key = f"latest:{symbol}:{tf_str}"
         self.redis_client.set(latest_key, json.dumps(candle))
         print(f"Updated {symbol} {tf_str} candle at {datetime.fromtimestamp(timestamp_ms/1000)}")
             
@@ -236,7 +227,6 @@ class OKXMultiTimeframeWebSocket(OKXWebSocket):
         while self.connected:
             try:
                 await asyncio.sleep(300)  # 5분(300초) 대기
-                now = datetime.now()
                 logging.info("=== Subscription Status Report ===")
                 for symbol in SYMBOLS:
                     for channel in self.timeframes.keys():
@@ -284,7 +274,7 @@ class OKXMultiTimeframeWebSocket(OKXWebSocket):
 
                 # Redis 파이프라인으로 한 심볼의 모든 타임프레임 데이터를 한번에 저장
                 with self.redis_client.pipeline() as pipe:
-                    for channel_name, tf_str in self.timeframes.items():
+                    for _, tf_str in self.timeframes.items():
                         latest_key = f"latest:{symbol}:{tf_str}"
                         pipe.set(latest_key, json.dumps(candle))
                     pipe.execute()

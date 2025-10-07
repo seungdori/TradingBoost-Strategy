@@ -29,6 +29,7 @@ class OKXWebsocket:
         self.running_symbols: Set[str] = set()
         self.redis: Optional[redis.Redis] = None
         self.logged_in = asyncio.Event()
+        self.positions: Dict[str, Dict] = {}
         
     async def connect(self):
         self.websocket = await websockets.connect(self.ws_url)
@@ -37,10 +38,12 @@ class OKXWebsocket:
         await self.wait_for_login()
 
     async def login(self):
+        if not self.websocket:
+            raise RuntimeError("WebSocket not connected")
         timestamp = str(int(time.time()))
         message = timestamp + 'GET' + '/users/self/verify'
         signature = base64.b64encode(hmac.new(self.secret_key.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).digest()).decode('utf-8')
-        
+
         login_data = {
             "op": "login",
             "args": [{
@@ -53,6 +56,8 @@ class OKXWebsocket:
         await self.websocket.send(json.dumps(login_data))
 
     async def wait_for_login(self):
+        if not self.websocket:
+            raise RuntimeError("WebSocket not connected")
         while True:
             response = await self.websocket.recv()
             data = json.loads(response)
@@ -66,8 +71,10 @@ class OKXWebsocket:
 
 
 
-    async def subscribe_orders(self, symbols: List[str]):
+    async def subscribe_orders(self, symbols: List[str]) -> None:
         await self.logged_in.wait()
+        if not self.websocket:
+            raise RuntimeError("WebSocket not connected")
         subscribe_data = {
             "op": "subscribe",
             "args": [
@@ -81,8 +88,10 @@ class OKXWebsocket:
         await self.websocket.send(json.dumps(subscribe_data))
         logging.info(f"Subscribed to orders for symbols: {symbols}")
 
-    async def unsubscribe_orders(self, symbols: List[str]):
+    async def unsubscribe_orders(self, symbols: List[str]) -> None:
         await self.logged_in.wait()
+        if not self.websocket:
+            raise RuntimeError("WebSocket not connected")
         unsubscribe_data = {
             "op": "unsubscribe",
             "args": [
@@ -144,9 +153,11 @@ class OKXWebsocket:
 
 
     async def update_running_symbols(self):
+        if not self.redis:
+            raise RuntimeError("Redis not connected")
         user_key = f'{self.exchange_name}:user:{self.user_id}'
         is_running = await self.redis.hget(user_key, 'is_running')
-        
+
         running_symbols_json = await self.redis.hget(user_key, 'running_symbols')
         print(running_symbols_json)
         if not is_running or is_running.decode('utf-8') != '1':
@@ -174,7 +185,9 @@ class OKXWebsocket:
             await self.update_running_symbols()
             await asyncio.sleep(23)  # Wait for 60 seconds before next update
 
-    async def handle_message(self):
+    async def handle_message(self) -> None:
+        if not self.websocket:
+            raise RuntimeError("WebSocket not connected")
         while True:
             try:
                 message = await self.websocket.recv()
@@ -236,6 +249,36 @@ class OKXWebsocket:
                 else:
                     print(f"Failed to fetch initial positions. Status code: {response.status}")
 
+    async def run_with_retry(self, max_retries: int = 5, retry_delay: int = 30) -> None:
+        retries = 0
+        while retries < max_retries:
+            try:
+                await self.connect()
+                logging.info("Connected to OKX WebSocket")
+
+                await self.update_running_symbols()
+                logging.info("Initial running symbols updated")
+
+                symbol_update_task = asyncio.create_task(self.periodic_symbol_update())
+
+                await self.handle_message()
+            except Exception as e:
+                logging.error(f"Error in OKX WebSocket: {e}")
+                retries += 1
+                if retries < max_retries:
+                    logging.info(f"Retrying in {retry_delay} seconds... (Attempt {retries}/{max_retries})")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logging.error("Max retries reached. Stopping OKX WebSocket.")
+                    break
+            finally:
+                if 'symbol_update_task' in locals():
+                    symbol_update_task.cancel()
+                    try:
+                        await symbol_update_task
+                    except asyncio.CancelledError:
+                        pass
+
 
 
 
@@ -247,9 +290,12 @@ class ExchangeInstanceManager:
     async def initialize(self):
         self.redis = await redis_manager.get_connection_async()
 
-    async def get_exchange_instance(self, exchange_name: str, user_id: int):
+    async def get_exchange_instance(self, exchange_name: str, user_id: int) -> Optional['OKXWebsocket']:
         if not self.redis:
             await self.initialize()
+
+        if not self.redis:
+            raise RuntimeError("Failed to initialize Redis connection")
 
         user_key = f'{exchange_name}:user:{user_id}'
         user_data = await self.redis.hgetall(user_key)
@@ -269,37 +315,7 @@ class ExchangeInstanceManager:
 
 #================================================================================================
 
-    async def run_with_retry(self, max_retries: int = 5, retry_delay: int = 30):
-        retries = 0
-        while retries < max_retries:
-            try:
-                await self.connect()
-                logging.info("Connected to OKX WebSocket")
-                
-                await self.update_running_symbols()
-                logging.info("Initial running symbols updated")
-                
-                symbol_update_task = asyncio.create_task(self.periodic_symbol_update())
-                
-                await self.handle_message()
-            except Exception as e:
-                logging.error(f"Error in OKX WebSocket: {e}")
-                retries += 1
-                if retries < max_retries:
-                    logging.info(f"Retrying in {retry_delay} seconds... (Attempt {retries}/{max_retries})")
-                    await asyncio.sleep(retry_delay)
-                else:
-                    logging.error("Max retries reached. Stopping OKX WebSocket.")
-                    break
-            finally:
-                if 'symbol_update_task' in locals():
-                    symbol_update_task.cancel()
-                    try:
-                        await symbol_update_task
-                    except asyncio.CancelledError:
-                        pass
-
-async def run_okx_websocket(user_id: int):
+async def run_okx_websocket(user_id: int) -> None:
     exchange_name = 'okx'
     instance_manager = ExchangeInstanceManager()
     okx_ws = await instance_manager.get_exchange_instance(exchange_name, user_id)
@@ -312,7 +328,7 @@ async def run_okx_websocket(user_id: int):
 #================================================================================================
 
 
-async def main(user_id: int, exchange_name: str):
+async def main(user_id: int, exchange_name: str) -> None:
     try:
         instance_manager = ExchangeInstanceManager()
         okx_ws = await instance_manager.get_exchange_instance(exchange_name, user_id)

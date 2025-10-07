@@ -5,7 +5,7 @@ aiohappyeyeballs==2.4.4
 aiohttp==3.10.11
 aioschedule==0.5.2
 aiosignal==1.3.2
-aiosqlite==0.20.0
+# aiosqlite==0.20.0  # Removed: Now using PostgreSQL (asyncpg)
 amqp==5.3.1
 annotated-types==0.7.0
 anyio==4.8.0
@@ -90,7 +90,7 @@ aiohappyeyeballs==2.4.4
 aiohttp==3.10.11
 aioschedule==0.5.2
 aiosignal==1.3.2
-aiosqlite==0.20.0
+# aiosqlite==0.20.0  # Removed: Now using PostgreSQL (asyncpg)
 amqp==5.3.1
 annotated-types==0.7.0
 anyio==4.8.0

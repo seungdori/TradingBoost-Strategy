@@ -20,7 +20,7 @@ from shared.database.redis import init_redis as init_new_redis, close_redis
 from shared.logging import setup_json_logger
 
 # Legacy imports (for backward compatibility)
-from HYPERRSI.src.core.database import init_db
+from HYPERRSI.src.core.database import init_db, init_global_redis_clients
 from HYPERRSI.src.services.redis_service import init_redis
 from HYPERRSI.src.core.error_handler import log_error
 
@@ -30,6 +30,9 @@ import signal
 import logging
 from typing import Set
 
+# Task tracking utility
+from shared.utils.task_tracker import TaskTracker
+
 # Setup structured logging
 logger_new = setup_json_logger("hyperrsi")
 
@@ -38,6 +41,9 @@ logger = get_logger(__name__)
 
 _is_shutting_down = False
 tasks: Set[asyncio.Task] = set()
+
+# Global task tracker for background tasks
+task_tracker = TaskTracker(name="hyperrsi-main")
 
 
 def handle_exception(loop, context):
@@ -71,12 +77,15 @@ async def shutdown(signal_name: str):
         ## Trading session cleanup
         #await deactivate_all_trading()
 
-        # Cancel all pending tasks
+        # Cancel all tracked tasks using TaskTracker
+        await task_tracker.cancel_all(timeout=10.0)
+
+        # Cancel any remaining legacy tasks
         current_task = asyncio.current_task()
         pending_tasks = [t for t in tasks if t is not current_task and not t.done()]
 
         if pending_tasks:
-            logger.info(f"Cancelling {len(pending_tasks)} outstanding tasks")
+            logger.info(f"Cancelling {len(pending_tasks)} legacy tasks")
             for task in pending_tasks:
                 task.cancel()
             # Wait for tasks to complete cancellation
@@ -98,14 +107,14 @@ async def shutdown(signal_name: str):
 def handle_signals():
     """시그널 핸들러 설정"""
     loop = asyncio.get_event_loop()
-    
+
     # 예외 핸들러 설정
     loop.set_exception_handler(handle_exception)
-    
+
     # Ctrl+C (SIGINT)에만 반응하도록 설정
     loop.add_signal_handler(
         signal.SIGINT,
-        lambda: asyncio.create_task(shutdown("SIGINT"))
+        lambda: task_tracker.create_task(shutdown("SIGINT"), name="shutdown-handler")
     )
 
 @asynccontextmanager
@@ -130,6 +139,9 @@ async def lifespan(app: FastAPI):
         # Legacy database initialization
         await init_db()
         await init_redis()
+
+        # Initialize global Redis clients for legacy code compatibility
+        await init_global_redis_clients()
 
         logger_new.info("HYPERRSI application startup complete")
         logger.info("Starting application...")
@@ -167,8 +179,15 @@ app.add_middleware(RequestIDMiddleware)
 # CORS 설정 추가
 app.add_middleware(
     CORSMiddleware,
-    #allow_origins=["https://beta.tradingboost.io"],  # 모든 origin 허용
-    allow_origins=["*"],  # 모든 origin 허용
+    allow_origins=[
+        "https://beta.tradingboost.io",
+        "https://tradingboost.io",
+        "https://tradingboostdemo.com",
+        "http://localhost:3000",
+        "https://localhost:3000",
+        "http://158.247.206.127:3000",
+        "https://158.247.206.127:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],  # 모든 HTTP 메소드 허용
     allow_headers=["*"],  # 모든 HTTP 헤더 허용

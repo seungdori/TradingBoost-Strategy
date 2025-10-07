@@ -10,11 +10,17 @@ import traceback
 from GRID.trading import redis_connection_manager
 from GRID.database import redis_database
 from GRID.database.redis_database import RedisConnectionManager
-import aiosqlite
+from GRID.repositories.symbol_repository import (
+    add_symbols,
+    clear_blacklist,
+    clear_whitelist,
+    get_ban_list_from_db,
+    get_white_list_from_db,
+)
 import redis.asyncio as aioredis
 import concurrent.futures
 from shared.dtos.trading import WinrateDto
-from typing import List, Optional
+from typing import List, Optional, Any
 from functools import partial
 from shared.utils import retry_async
 from GRID.strategies import strategy
@@ -27,7 +33,7 @@ from GRID.routes.trading_route import ConnectionManager
 
 manager = ConnectionManager()
 
-from shared.config import settings    
+from shared.config import settings
 
 REDIS_PASSWORD = settings.REDIS_PASSWORD
 
@@ -41,13 +47,14 @@ class QuitException(Exception):
 class AddAnotherException(Exception):
     pass
 
-async def add_user_log(user_id: int, log_message: str):
+async def add_user_log(user_id: int, log_message: str) -> None:
     message = f"User {user_id}: {log_message}"
     await manager.add_user_message(user_id, message)
     #print("[LOG ADDED]", message)
 
 
 
+pool: aioredis.ConnectionPool
 if REDIS_PASSWORD:
     pool = aioredis.ConnectionPool.from_url(
         'redis://localhost', 
@@ -197,7 +204,7 @@ def sort_ai_trading_data(exchange_name, direction):
 
     return df_summary[['name', 'win_rate']]
 
-async def build_sort_ai_trading_data(exchange_name, enter_strategy) -> List[WinrateDto]:
+async def build_sort_ai_trading_data(exchange_name: str, enter_strategy: str) -> List[WinrateDto]:
     direction = str(enter_strategy).lower()
     if exchange_name is None:
         raise ValueError("exchange 변수가 None입니다. 올바른 값을 제공해야 합니다.")
@@ -231,48 +238,8 @@ async def build_sort_ai_trading_data(exchange_name, enter_strategy) -> List[Winr
     return win_rate_data
 
 
-#================================================================================================
-# 화이트리스트 / 블랙리스트
-#================================================================================================
 
-async def get_ban_list_from_db(user_id, exchange_name):
-    db_path = f'{exchange_name}_users.db'
-    async with aiosqlite.connect(db_path) as db:
-        async with db.execute('SELECT symbol FROM blacklist WHERE user_id = ?', (user_id,)) as cursor:
-            ban_list = [row[0] for row in await cursor.fetchall()]
-    return ban_list
-
-async def get_white_list_from_db(user_id, exchange_name):
-    db_path = f'{exchange_name}_users.db'
-    async with aiosqlite.connect(db_path) as db:
-        async with db.execute('SELECT symbol FROM whitelist WHERE user_id = ?', (user_id,)) as cursor:
-            white_list = [row[0] for row in await cursor.fetchall()]
-    return white_list
-
-async def clear_blacklist(user_id, exchange_name):
-    db_path = f'{exchange_name}_users.db'
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute('DELETE FROM blacklist WHERE user_id = ?', (user_id,))
-        await db.commit()
-
-async def clear_whitelist(user_id, exchange_name):
-    db_path = f'{exchange_name}_users.db'
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute('DELETE FROM whitelist WHERE user_id = ?', (user_id,))
-        await db.commit()
-
-async def add_symbols(user_id, exchange_name, symbols, setting_type):
-    db_path = f'{exchange_name}_users.db'
-    table = setting_type
-    async with aiosqlite.connect(db_path) as db:
-        for symbol in symbols:
-            await db.execute(f'INSERT INTO {table} (user_id, symbol) VALUES (?, ?)', (user_id, symbol))
-        await db.commit()
-
-
-
-
-async def get_running_symbols(exchange_id: str, user_id: str):
+async def get_running_symbols(exchange_id: str, user_id: str) -> list:
     redis = await get_redis_connection()
     redis_key = f"running_symbols:{exchange_id}:{user_id}"
     running_symbols_json = await redis.get(redis_key)
@@ -280,7 +247,8 @@ async def get_running_symbols(exchange_id: str, user_id: str):
     
     if running_symbols_json:
         await redis.delete(redis_key)
-        return json.loads(running_symbols_json)
+        result: list = json.loads(running_symbols_json)
+        return result
     return []
     
     
@@ -294,7 +262,7 @@ def safe_json_loads(data, default):
             return default
     return data if isinstance(data, (list, set)) else default
 
-async def task_completed(task, new_symbol, exchange_name: str, user_id: str):
+async def task_completed(task: Any, new_symbol: str, exchange_name: str, user_id: str) -> None:
     print(f'매개변수 확인. task: {task}, new_symbol: {new_symbol}, exchange_name: {exchange_name}, user_id: {user_id}')
     redis = await get_redis_connection()
     try:
@@ -341,19 +309,19 @@ async def task_completed(task, new_symbol, exchange_name: str, user_id: str):
             for symbol in filtered_symbols[:limit]:
                 print(f"filtered_symbols[:limit] : {filtered_symbols[:limit]}")
                 print(f"symbol {symbol}")
-                symbol_queues = {symbol: asyncio.Queue(maxsize=1)}
-                await asyncio.create_task(grid.create_new_task(new_symbol=symbol, symbol_queues=symbol_queues, 
-                                                          initial_investment=initial_capital_list, direction=direction, 
+                symbol_queues: dict[str, asyncio.Queue[Any]] = {symbol: asyncio.Queue(maxsize=1)}
+                await asyncio.create_task(grid.create_new_task(new_symbol=symbol, symbol_queues=symbol_queues,
+                                                          initial_investment=initial_capital_list, direction=direction,
                                                           timeframe='15m', grid_num=grid_num, exchange_name=exchange_name,
-                                                          leverage=leverage, user_id=user_id, stop_loss=stop_loss))
+                                                          leverage=leverage, user_id=user_id, stop_loss=stop_loss, numbers_to_entry=limit))
             message = f"🚀 새로운 심볼{new_entry_symbols}에 대한 매매를 시작합니다."
             await telegram_message.send_telegram_message(message, exchange_name, user_id)
-            await add_user_log(user_id, message)
+            await add_user_log(int(user_id), message)
         else:
             print("테스크가 종료 되었습니다.")
             message = f"🚀 매매가 종료되었습니다.\n모든 트레이딩이 종료되었습니다."
             await telegram_message.send_telegram_message(message, exchange_name, user_id)
-            await add_user_log(user_id, message)
+            await add_user_log(int(user_id), message)
             return
     except Exception as e:
         print(f"An error occurred on task_completed: {e}")
@@ -367,12 +335,10 @@ async def get_top_symbols(user_id, exchange_name, direction='long-short', limit=
     try:
         ban_list = await get_ban_list_from_db(user_id, exchange_name)
         print("ban_list : ", ban_list)
-    except FileNotFoundError:  
+    except FileNotFoundError:
         ban_list = []
         print('ban_list.json 파일이 존재하지 않습니다. 빈 리스트로 초기화합니다.')
 
-    if ban_list is None:
-        ban_list = []
     ban_list.extend(['XEC', 'USTC', 'USDC', 'TRY', 'CEL', 'GAL', 'OMG', 'SPELL', 'KSM'])
 
     try:
@@ -380,9 +346,6 @@ async def get_top_symbols(user_id, exchange_name, direction='long-short', limit=
     except FileNotFoundError:
         white_list = []
         print('white_list.json 파일이 존재하지 않습니다. 빈 리스트로 초기화합니다.')
-
-    if white_list is None:
-        white_list = []
 
 
 
@@ -409,8 +372,6 @@ async def get_top_symbols(user_id, exchange_name, direction='long-short', limit=
     try:
         if force_restart :
             former_running_symbols = await get_running_symbols(exchange_name, user_id)
-            if former_running_symbols is None:
-                former_running_symbols = []
             print(f"former_running_symbols : {former_running_symbols}")
         else:
             former_running_symbols = []
@@ -553,7 +514,7 @@ async def create_tasks(new_symbols, symbol_queues, initial_investment, direction
 #================================================================================================
 # 트레이딩 루프 TRADING LOOP
 #================================================================================================
-async def create_tasks(new_symbols, symbol_queues, initial_investment, direction, timeframe, grid_num, exchange_name, leverage, user_id, stop_loss, exchange_instance , custom_stop=False):
+async def create_tasks(new_symbols, symbol_queues, initial_investment, direction, timeframe, grid_num, exchange_name, leverage, user_id, stop_loss, exchange_instance , custom_stop=False):  # type: ignore[no-redef]
     redis = await get_redis_connection()
     created_tasks = []
     try:
@@ -668,7 +629,7 @@ async def run_task(symbol, queue, initial_investment, direction, grid_levels, gr
                 await asyncio.sleep(random.uniform(1, 1.7))
                 
                 ws_task = asyncio.create_task(ws_client(exchange_name, symbol, queue, user_id))
-                order_task = asyncio.create_task(place_grid_orders(symbol, initial_investment, direction, grid_levels, queue, grid_num, exchange_name, user_id))
+                order_task = asyncio.create_task(place_grid_orders(symbol, initial_investment, direction, grid_levels, queue, grid_num, exchange_name, user_id))  # type: ignore[call-arg]
                 tasks = json.loads(await redis.hget(user_key, 'tasks') or '[]')
                 tasks.extend([str(ws_task.get_name()), str(order_task.get_name())])
                 await redis.hset(user_key, 'tasks', json.dumps(tasks))
@@ -686,7 +647,7 @@ async def run_task(symbol, queue, initial_investment, direction, grid_levels, gr
                         print(f"Task for {symbol} completed. Finding new task...")
                         return symbol
                     elif isinstance(result, AddAnotherException):
-                        await task_completed(task=order_task, new_symbol=symbol, symbol_queue=queue, exchange_name=exchange_name, user_id=user_id)
+                        await task_completed(task=order_task, new_symbol=symbol, exchange_name=exchange_name, user_id=user_id)
                         print(f"Task for {symbol} failed. Finding new task...")
                         return None
                 
@@ -709,7 +670,7 @@ async def run_task(symbol, queue, initial_investment, direction, grid_levels, gr
 
 async def trading_loop(exchange_name, user_id, initial_investment, direction, timeframe, grid_num, leverage, stop_loss, custom_stop):
     trading_semaphore = asyncio.Semaphore(5)  # Limit concurrent operations
-    symbol_queues = {}
+    symbol_queues: dict[str, asyncio.Queue[Any]] = {}
     tasks = []
     completed_symbols = set()
     running_symbols = set()

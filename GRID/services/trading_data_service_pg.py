@@ -214,7 +214,6 @@ async def ensure_database_exists(db_name: str) -> str:
     """
     Backward compatibility function - No-op for PostgreSQL.
 
-    In SQLite, this created database files. In PostgreSQL, tables
     are already created via init_grid_db().
 
     Args:

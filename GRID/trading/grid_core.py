@@ -179,23 +179,14 @@ async def place_grid_orders(symbol, initial_investment, direction, grid_levels, 
                 print(f"An error occurred10000: {e}")
                 print(traceback.format_exc())
             try:
-                if exchange_name == 'binance':
-                    exchange_instance = await instance.get_binance_instance(user_id)
-                elif exchange_name == 'binance_spot':
-                    exchange_instance = await instance.get_binance_spot_instance(user_id)
-                elif exchange_name == 'upbit':
-                    exchange_instance = await instance.get_upbit_instance(user_id)
+                exchange_instance = await instance.get_exchange_instance(exchange_name, user_id)
+
+                if exchange_name == 'upbit':
                     direction = 'long'
-                elif exchange_name == 'bitget':
-                    exchange_instance = await instance.get_bitget_instance(user_id)
+                elif exchange_name in ['bitget', 'bitget_spot']:
                     symbol_name = symbol.replace('USDT', '') + '/USDT:USDT'
-                elif exchange_name == 'bitget_spot':
-                    exchange_instance = await instance.get_bitget_spot_instance(user_id)
-                    symbol_name = symbol.replace('USDT', '') + '/USDT:USDT'
-                elif exchange_name == 'okx':
-                    #print(f"exchange_name check! : {exchange_name}")
+                elif exchange_name in ['okx', 'okx_spot']:
                     try:
-                        exchange_instance = await instance.get_okx_instance(user_id)
                         order_quantities = await retry_async(calculate_order_quantity, symbol, initial_investment, current_price, redis)
                         try:
                             await redis.hset(symbol_key, 'order_quantities', json.dumps(order_quantities))
@@ -203,14 +194,8 @@ async def place_grid_orders(symbol, initial_investment, direction, grid_levels, 
                             error = str(e)
                             print(f"An error on making redis list: {error}")
                     except Exception as e:
-                        print(f"An error occurred17!: {e}")
+                        print(f"An error occurred in okx order calculation: {e}")
                         raise Exception("remove")
-                elif exchange_name == 'okx_spot':
-                    try:
-                        exchange_instance = await instance.get_okx_spot_instance(user_id)
-                    except Exception as e:
-                        print(f"An error occurred16: {e}")
-                        raise e
                 try:
                     price_precision = await retry_async(get_price_precision, symbol, exchange_instance, redis)
                     min_notional = await retry_async(get_min_notional, symbol_name, exchange_instance, redis)

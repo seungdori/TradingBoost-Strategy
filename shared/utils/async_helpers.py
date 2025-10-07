@@ -170,7 +170,7 @@ def get_or_create_event_loop() -> asyncio.AbstractEventLoop:
 # Debounce 데코레이터
 # ============================================================================
 
-def async_debounce(wait: float):
+def async_debounce(wait: float) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
     """
     비동기 함수의 debounce 데코레이터
 
@@ -206,7 +206,7 @@ def async_debounce(wait: float):
     return decorator
 
 
-async def custom_sleep(timeframe: str):
+async def custom_sleep(timeframe: str) -> None:
     """
     다음 시간프레임까지 대기합니다.
 

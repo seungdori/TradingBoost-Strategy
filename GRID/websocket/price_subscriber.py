@@ -45,7 +45,7 @@ class PriceSubscriber:
     async def listen_for_updates(self):
         while self.is_running:
             try:
-                message = await self.pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                message = await self.pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0) # type: ignore[union-attr]
                 if message:
                     try:
                         data = json.loads(message['data'])  # JSON 디코딩
@@ -66,7 +66,7 @@ class PriceSubscriber:
                     logging.debug("No new messages")
             except aioredis.RedisError as e:
                 logging.error(f"Redis error in listen_for_updates: {e}. Attempting to reconnect...")
-                if not await self.reconnect():
+                if not await self.reconnect(): # type: ignore[attr-defined]
                     break
             except Exception as e:
                 logging.error(f"Unexpected error in listen_for_updates: {e}")
@@ -119,7 +119,7 @@ class PriceSubscriber:
                     async with aioredis.Redis(connection_pool=self.redis_pool) as redis:
                         price_data = await redis.get(f"price:{symbol}")
                         if price_data:
-                            price, timestamp = price_data.split(':')
+                            price, timestamp = price_data.split(':') # type: ignore[arg-type]
                             price = float(price)
                             timestamp = float(timestamp)
                             redis_age = (current_time - datetime.fromtimestamp(timestamp, timezone.utc)).total_seconds()

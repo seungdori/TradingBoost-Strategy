@@ -723,7 +723,6 @@ Application State
   - Async sessions
   - Migration support (Alembic ready)
 - **PostgreSQL**: Production database (via asyncpg)
-- **SQLite**: Development database (via aiosqlite)
 - **Redis 5.2.1**: Caching and message broker
   - Pub/Sub for real-time events
   - Session storage
@@ -1266,7 +1265,7 @@ from typing import AsyncGenerator
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    engine = create_async_engine("postgresql+asyncpg://user:pass@host/db")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

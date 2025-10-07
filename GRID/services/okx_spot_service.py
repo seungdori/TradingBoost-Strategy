@@ -25,7 +25,7 @@ def revalidate_okx_spot_cache():
 async def get_okx_spot_account_balance():
     global okx_spot_account_balance_cache, okx_spot_account_balance_cache_expiry
     try:
-        okx_spot_client = exchange_store.get_okx_spot_instance()
+        okx_spot_client = exchange_store.get_okx_instance()
     except Exception as e:
         print('[EXCEPTION get_okx_spot_account_balance]', e)
         raise ValueError(f"OKX 계좌를 불러오지 못했습니다. {e}")
@@ -73,7 +73,7 @@ async def get_okx_spot_tickers():
     # Todo: refactor after
     global okx_spot_mark_price_cache, okx_spot_mark_price_cache_expiry
 
-    client = exchange_store.get_okx_spot_instance()
+    client = exchange_store.get_okx_instance()
 
     try:
         if ((not cache_expired(okx_spot_mark_price_cache_expiry))
@@ -94,7 +94,7 @@ async def get_okx_spot_tickers():
 async def fetch_okx_spot_positions():
 
     print('[FETCH OKX POSITIONS]')
-    exchange = exchange_store.get_okx_spot_instance()
+    exchange = exchange_store.get_okx_instance()
     positions: list[dict] = []
 
     try:

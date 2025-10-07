@@ -13,7 +13,8 @@ redis==5.0.1
 
 # Database
 sqlalchemy==2.0.23
-aiosqlite==0.19.0
+asyncpg==0.29.0  # PostgreSQL async driver
+
 
 # Trading & Exchange
 ccxt==4.2.7

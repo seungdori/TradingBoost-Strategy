@@ -96,26 +96,7 @@ shutdown_event = threading.Event()
 last_candle_timestamps = {}
 last_check_times = {}
 
-def calculate_update_interval(timeframe):
-    """타임프레임별 업데이트 주기 계산 (타임프레임의 1/4)"""
-    # 타임프레임은 분 단위, 반환값은 초 단위
-    interval_seconds = (timeframe * 60) // 8
-    return max(interval_seconds, 5)  # 최소 15초
-
-def align_timestamp(ts_ms: int, timeframe: int) -> int:
-    """타임스탬프를 캔들 마감시간에 맞춰 정렬"""
-    minutes = timeframe
-    ms_per_minute = 60 * 1000
-    return (ts_ms // (minutes * ms_per_minute)) * (minutes * ms_per_minute)
-
-def is_bar_end(current_time, timeframe):
-    """현재 시간이 해당 타임프레임의 바 종료 시점인지 확인"""
-    minutes = timeframe
-    seconds_per_timeframe = minutes * 60
-    current_seconds = int(current_time)
-    
-    # 현재 시간이 타임프레임의 배수인지 확인
-    return current_seconds % seconds_per_timeframe < 10  # 10초 이내 허용 오차
+from shared.utils.time_helpers import calculate_update_interval, align_timestamp, is_bar_end
 
 def fetch_latest_candles(symbol, timeframe, limit=POLLING_CANDLES, include_current=False):
     """최신 캔들 데이터 가져오기"""

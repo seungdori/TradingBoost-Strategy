@@ -9,7 +9,12 @@ from GRID.dtos.symbol import AccessListDto
 from GRID.routes.connection_manager import ConnectionManager
 from shared.dtos.trading import WinrateDto
 from GRID.services import trading_data_service, trading_service
-import aiosqlite
+from GRID.repositories.symbol_repository import (
+    add_symbols,
+    get_ban_list_from_db,
+    get_white_list_from_db,
+    remove_symbols,
+)
 router = APIRouter(prefix="/trading", tags=["trading"])
 import logging
 
@@ -46,7 +51,7 @@ async def get_winrate(exchange_name: str, enter_strategy: str) -> ResponseDto[Li
 
 
 @router.post('/{exchange_name}/target_pnl')
-async def set_target_pnl(exchange_name : str, user_id : int, target_pnl : float, target_type : str):
+async def set_target_pnl(exchange_name : str, user_id : int, target_pnl : float, target_type : str) -> None:
     print('[SET TARGET PNL]', exchange_name, user_id, target_pnl, target_type)
     
 
@@ -62,14 +67,14 @@ async def create_chart_image(exchange_name: str, dto: CoinDto, enter_strategy: s
             selected_coin_name=dto.symbol,
             enter_strategy=enter_strategy
         )
-        return ResponseDto[str](
+        return ResponseDto[str | None](
             success=True,
             message="Success to fetch trading logs.",
             data=file_url
         )
 
     except Exception as e:
-        return ResponseDto[str](
+        return ResponseDto[str | None](
             success=False,
             message=str(e),
             data=None
@@ -79,21 +84,10 @@ async def create_chart_image(exchange_name: str, dto: CoinDto, enter_strategy: s
 
 
 
-async def get_black_list(exchange_name: str, user_id: int):
-    db_path = f'{exchange_name}_users.db'
-    logging.debug(f"Connecting to database: {db_path}")
-    async with aiosqlite.connect(db_path) as db:
-        cursor = await db.execute('SELECT symbol FROM blacklist WHERE user_id = ?', (user_id,))
-        symbols = await cursor.fetchall()
-        await cursor.close()
-        logging.debug(f"Fetched symbols: {symbols}")
-    return [symbol[0] for symbol in symbols] if symbols else []
-
-
 @router.get("/blacklist/{exchange_name}/{user_id}", response_model=ResponseDto)
 async def get_black_list_endpoint(exchange_name: str, user_id: int) -> ResponseDto:
     try:
-        symbols = await get_black_list(exchange_name, user_id)
+        symbols = await get_ban_list_from_db(user_id, exchange_name)
         logging.debug(f"Returning symbols: {symbols}")
         return ResponseDto(
             success=True,
@@ -109,20 +103,10 @@ async def get_black_list_endpoint(exchange_name: str, user_id: int) -> ResponseD
             data=None
         )
 
-async def get_white_list(exchange_name: str, user_id: int):
-    db_path = f'{exchange_name}_users.db'
-    logging.debug(f"Connecting to database: {db_path}")
-    async with aiosqlite.connect(db_path) as db:
-        cursor = await db.execute('SELECT symbol FROM whitelist WHERE user_id = ?', (user_id,))
-        symbols = await cursor.fetchall()
-        await cursor.close()
-        logging.debug(f"Fetched symbols: {symbols}")
-    return [symbol[0] for symbol in symbols] if symbols else []
-
 @router.get("/whitelist/{exchange_name}/{user_id}", response_model=ResponseDto)
 async def get_white_list_endpoint(exchange_name: str, user_id: int) -> ResponseDto:
     try:
-        symbols = await get_white_list(exchange_name, user_id)
+        symbols = await get_white_list_from_db(user_id, exchange_name)
         logging.debug(f"Returning symbols: {symbols}")
         return ResponseDto(
             success=True,
@@ -138,12 +122,6 @@ async def get_white_list_endpoint(exchange_name: str, user_id: int) -> ResponseD
             data=None
         )
 
-async def add_symbol_to_db(exchange_name: str, user_id: int, symbol: str, list_type: str):
-    db_path = f'{exchange_name}_users.db'
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute(f'INSERT INTO {list_type} (user_id, symbol) VALUES (?, ?)', (user_id, symbol))
-        await db.commit()
-
 @router.put('/symbols/access', response_model=ResponseDto)
 async def add_symbol_access_list(
     exchange_name: str = Query(..., description="Name of the exchange", example="okx"),
@@ -153,12 +131,14 @@ async def add_symbol_access_list(
 ) -> ResponseDto:
     try:
         # Split the comma-separated string into a list and strip whitespace
-        symbol_list = [symbol.strip() for symbol in symbols.split(',')]
-        
-        for symbol in symbol_list:
-            await add_symbol_to_db(exchange_name, user_id, symbol, type)
-        
-        updated = await trading_service.get_list_from_db(exchange_name, user_id, type)
+        symbol_list = [symbol.strip() for symbol in symbols.split(',') if symbol.strip()]
+        list_type = type.lower()
+        if list_type not in {"blacklist", "whitelist"}:
+            raise ValueError(f"Invalid list type: {type}")
+
+        await add_symbols(user_id, exchange_name, symbol_list, list_type)
+
+        updated = await trading_service.get_list_from_db(exchange_name, user_id, list_type)
         return ResponseDto(
             success=True,
             message="Success to add symbols to list",
@@ -173,21 +153,35 @@ async def add_symbol_access_list(
         )
 
 
-async def delete_symbol_from_db(exchange_name: str, user_id: int, symbol: str, list_type: str):
-    db_path = f'{exchange_name}_users.db'
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute(f'DELETE FROM {list_type} WHERE user_id = ? AND symbol = ?', (user_id, symbol))
-        await db.commit()
-
-
 @router.delete('/symbols/access', response_model=ResponseDto)
 async def delete_symbol_access_item(dto: AccessListDto = Body(...)) -> ResponseDto:
     print("[SYMBOL ACCESS LIST]", dto)
     try:
-        for symbol in dto.symbols:
-            await delete_symbol_from_db(dto.exchange_name, dto.user_id, symbol, dto.type)
-        
-        updated = await trading_service.get_list_from_db(dto.exchange_name, dto.user_id, dto.type)
+        list_type = dto.type.lower()
+        if list_type not in {"blacklist", "whitelist"}:
+            raise ValueError(f"Invalid list type: {dto.type}")
+
+        removed = await remove_symbols(
+            dto.user_id,
+            dto.exchange_name,
+            dto.symbols,
+            list_type,
+        )
+        logging.debug(
+            "Removed symbols from access list",
+            extra={
+                "exchange": dto.exchange_name,
+                "user_id": dto.user_id,
+                "type": dto.type,
+                "count": removed
+            }
+        )
+
+        updated = await trading_service.get_list_from_db(
+            dto.exchange_name,
+            dto.user_id,
+            list_type
+        )
 
         return ResponseDto(
             success=True,

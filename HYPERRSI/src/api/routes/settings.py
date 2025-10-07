@@ -1,13 +1,21 @@
 from fastapi import APIRouter, Body, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional, List
-from HYPERRSI.src.core.database import redis_client
+
 from shared.constants.default_settings import DEFAULT_PARAMS_SETTINGS, SETTINGS_CONSTRAINTS, DEFAULT_DUAL_SIDE_ENTRY_SETTINGS
 from HYPERRSI.src.services.redis_service import RedisService, ApiKeyService
 from HYPERRSI.src.services.timescale_service import TimescaleUserService
 import json
 import logging
 import os
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 
 router = APIRouter(prefix="/settings", tags=["User Settings"])
 redis_service = RedisService()

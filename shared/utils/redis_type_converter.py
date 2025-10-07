@@ -4,7 +4,7 @@ Redis 타입 변환 유틸리티
 Redis 저장 시 Python 타입을 문자열로 변환하고,
 조회 시 원래 타입으로 복원하는 기능 제공
 """
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import json
 from decimal import Decimal
 
@@ -45,7 +45,7 @@ def prepare_for_redis(data: Dict[str, Any]) -> Dict[str, str]:
     return result
 
 
-def parse_from_redis(data: Dict[str, str], schema: Dict[str, type] = None) -> Dict[str, Any]:
+def parse_from_redis(data: Dict[str, str], schema: Optional[Dict[str, type]] = None) -> Dict[str, Any]:
     """
     Redis에서 가져온 데이터를 원래 타입으로 변환
 
@@ -65,7 +65,7 @@ def parse_from_redis(data: Dict[str, str], schema: Dict[str, type] = None) -> Di
     if not data:
         return {}
 
-    result = {}
+    result: Dict[str, Any] = {}
     for key, value in data.items():
         if not value:  # 빈 문자열은 None으로
             result[key] = None

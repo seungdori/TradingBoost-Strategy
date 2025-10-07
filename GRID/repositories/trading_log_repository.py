@@ -32,7 +32,7 @@ def get_trading_messages(exchange_name: str) -> List[str]:
         extra={"exchange": exchange_name}
     )
 
-    message_queue = strategy.get_trading_message_queue()
+    message_queue = strategy.get_trading_message_queue() # type: ignore[attr-defined]
     messages: List[str] = []
 
     # TODO: Implement exchange-specific logs
@@ -67,7 +67,7 @@ def put_trading_message(message: str) -> None:
         extra={"message": message}
     )
 
-    message_queue = strategy.get_trading_message_queue()
+    message_queue = strategy.get_trading_message_queue() # type: ignore[attr-defined]
     message_queue.put(message)
 
     logger.debug("Trading message added to queue")

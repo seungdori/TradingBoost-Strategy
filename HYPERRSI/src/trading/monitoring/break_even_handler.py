@@ -9,7 +9,7 @@ import json
 import traceback
 from datetime import datetime
 from shared.logging import get_logger, log_order
-from HYPERRSI.src.core.database import redis_client
+
 from HYPERRSI.src.api.routes.order import update_stop_loss_order, close_position, ClosePositionRequest
 from HYPERRSI.src.trading.dual_side_entry import get_user_dual_side_settings
 from HYPERRSI.src.core.error_handler import log_error
@@ -18,6 +18,21 @@ from .utils import is_true_value, get_user_settings
 from .trailing_stop_handler import activate_trailing_stop
 
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
+
+
+# Module-level attribute for backward compatibility
+def __getattr__(name):
+    if name == "redis_client":
+        return _get_redis_client()
+    raise AttributeError(f"module has no attribute {name}")
 
 
 async def move_sl_to_break_even(user_id: str, symbol: str, side: str, break_even_price: float, contracts_amount: float, tp_index: int = 0, is_hedge: bool = False):

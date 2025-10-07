@@ -72,7 +72,7 @@ async def ws_client(exchange_name, symbol, symbol_queue, user_id, max_retries=6)
             parts = symbol.split('-')
             symbol = f"{parts[0]}/{parts[1]}"
 
-        last_check_time = 0
+        last_check_time = 0.0
         check_interval = 7  # 7초마다 is_running 상태 확인
         print(f"Connecting to {exchange} websocket for {symbol}.")
         reconnected = False

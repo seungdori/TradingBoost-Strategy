@@ -433,9 +433,10 @@ async def get_tick_size_from_redis(symbol: str, redis_client: Any = None) -> flo
         return None
 
 
-async def get_minimum_qty(symbol: str, redis_client: Any = None) -> float:
+async def get_minimum_qty_from_contract_spec(symbol: str, redis_client: Any = None) -> float:
     """
     Redis에 저장된 contract_specifications에서 해당 심볼의 최소 주문 수량을 반환합니다.
+    (OKX 특화 함수)
 
     Args:
         symbol: 거래 심볼
@@ -490,6 +491,90 @@ async def get_minimum_qty(symbol: str, redis_client: Any = None) -> float:
     except Exception as e:
         logger.error(f"Error fetching minimum quantity for {symbol}: {str(e)}")
         return 0.1
+
+
+# Backward compatibility alias
+async def get_minimum_qty(symbol: str, redis_client: Any = None) -> float:
+    """Deprecated: Use get_minimum_qty_from_contract_spec instead"""
+    return await get_minimum_qty_from_contract_spec(symbol, redis_client)
+
+
+async def get_min_notional(
+    symbol: str,
+    exchange_instance: Any,
+    redis_client: Any = None,
+    default_value: float = 10.0
+) -> float:
+    """
+    거래소별 최소 주문 금액을 조회합니다. (Redis 캐싱)
+
+    Args:
+        symbol: 심볼
+        exchange_instance: CCXT 거래소 인스턴스
+        redis_client: Redis 클라이언트 (None이면 자동 생성)
+        default_value: 기본값
+
+    Returns:
+        float: 최소 주문 금액
+
+    Examples:
+        >>> # OKX
+        >>> min_notional = await get_min_notional('BTC-USDT-SWAP', okx_exchange)
+        >>> # Upbit
+        >>> min_notional = await get_min_notional('KRW-BTC', upbit_exchange)
+    """
+    from shared.database.redis import get_redis
+    from shared.utils.redis_utils import get_redis_data, set_redis_data
+
+    new_redis_flag = False
+    if redis_client is None:
+        redis_client = await get_redis()
+        new_redis_flag = True
+
+    try:
+        # Redis 키 생성
+        redis_key = f"min_notional:{exchange_instance.id}:{symbol}"
+
+        # Redis에서 데이터 확인
+        cached_min_notional = await get_redis_data(redis_client, redis_key)
+        if cached_min_notional is not None:
+            return float(cached_min_notional)
+
+        # 캐시된 데이터가 없으면 거래소 API 호출
+        try:
+            markets = await exchange_instance.load_markets()
+            market = None
+
+            if exchange_instance.name.lower() == 'upbit':
+                # Upbit: 'KRW-BTC' -> 'BTC/KRW'
+                symbol_parts = symbol.split('-')
+                converted_symbol = f"{symbol_parts[1]}/{symbol_parts[0]}"
+                market = markets.get(converted_symbol, None)
+            else:
+                # OKX, Binance, Bitget 등
+                market = markets.get(symbol.replace("/", ""))
+
+            if market is not None:
+                if str(exchange_instance).lower() == 'upbit':
+                    min_notional = float(market['precision']['amount'])
+                elif exchange_instance.id == 'bitget':
+                    min_notional = float(market['limits']['amount']['min'] * market['limits']['price']['min'])
+                elif exchange_instance.id == 'okx':
+                    min_notional = float(market['limits']['amount']['min'])
+                else:  # 바이낸스 등 다른 거래소
+                    min_notional = float(market['limits']['cost']['min'])
+            else:
+                min_notional = default_value
+        except Exception as e:
+            logger.error(f"Error in get_min_notional for {symbol}: {str(e)}")
+            min_notional = default_value
+
+        # 결과를 Redis에 저장 (1일)
+        await set_redis_data(redis_client, redis_key, min_notional, expiry=86400)
+        return min_notional
+    finally:
+        if new_redis_flag and hasattr(redis_client, 'aclose'):
+            await redis_client.aclose()
 
 
 async def round_to_tick_size(

@@ -1,13 +1,27 @@
 from fastapi import APIRouter, Body, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import Optional
-from HYPERRSI.src.core.database import redis_client, get_db
+from HYPERRSI.src.core.database import get_db
 from shared.constants.default_settings import DEFAULT_TRADING_SETTINGS
 from sqlalchemy.orm import Session
 
 from HYPERRSI.src.utils.uid_manager import get_or_create_okx_uid, get_okx_uid_by_telegram_id, update_user_okx_uid
 from HYPERRSI.src.utils.check_invitee import get_uid_from_api_keys, store_okx_uid, get_okx_uid_from_telegram
 import time
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
+
+# Module-level attribute for backward compatibility
+def __getattr__(name):
+    if name == "redis_client":
+        return _get_redis_client()
+    raise AttributeError(f"module has no attribute {name}")
 
 router = APIRouter(prefix="/user", tags=["User Management"])
 
@@ -105,7 +119,7 @@ async def register_user(
             is_invitee, uid = get_uid_from_api_keys(request.api_key, request.api_secret, request.passphrase)
             if uid:
                 # OKX UID를 Redis에 저장
-                await store_okx_uid(redis_client, request.user_id, uid)
+                await store_okx_uid(request.user_id, uid)
                 okx_uid = uid
                 print(f"사용자 {request.user_id}의 OKX UID {uid} 저장 완료")
         except Exception as e:
@@ -194,7 +208,7 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
         status = await redis_client.get(f"user:{user_id}:trading:status")
         
         # OKX UID 조회
-        okx_uid = await get_okx_uid_from_telegram(redis_client, user_id)
+        okx_uid = await get_okx_uid_from_telegram(user_id)
         
         # status 처리 - bytes일 수도 있고 str일 수도 있음
         status_str = status.decode() if isinstance(status, bytes) else status
@@ -247,7 +261,7 @@ async def get_okx_uid(user_id: str, db: Session = Depends(get_db)):
             )
             
         # OKX UID 조회
-        okx_uid = await get_okx_uid_from_telegram(redis_client, user_id)
+        okx_uid = await get_okx_uid_from_telegram(user_id)
         
         # is_invitee 초기화
         is_invitee = False
@@ -264,7 +278,7 @@ async def get_okx_uid(user_id: str, db: Session = Depends(get_db)):
                 
                 if uid:
                     # OKX UID를 Redis에 저장
-                    await store_okx_uid(redis_client, user_id, uid)
+                    await store_okx_uid(user_id, uid)
                     okx_uid = uid
                 else:
                     raise HTTPException(
@@ -316,7 +330,7 @@ async def set_okx_uid(user_id: str, okx_uid: str):
             )
             
         # OKX UID를 Redis에 저장
-        await store_okx_uid(redis_client, user_id, okx_uid)
+        await store_okx_uid(user_id, okx_uid)
         
         # 초대 여부 확인 (실제 구현에서는 이 부분에 로직 추가 필요)
         is_invitee = True

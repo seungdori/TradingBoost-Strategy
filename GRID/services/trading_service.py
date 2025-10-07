@@ -8,7 +8,7 @@ New code should use TradingAccessService from trading_service_new.py
 """
 
 import json
-from typing import List
+from typing import List, cast
 from pathlib import Path
 
 from shared.logging import get_logger
@@ -16,7 +16,10 @@ from shared.errors import DatabaseException, ConfigurationException, ValidationE
 
 from GRID.dtos.symbol import AccessListDto
 from shared.utils import path_helper
-import aiosqlite
+from GRID.repositories.symbol_repository import (
+    get_ban_list_from_db,
+    get_white_list_from_db,
+)
 
 logger = get_logger(__name__)
 
@@ -44,7 +47,7 @@ def get_list_from_file(file_name: str) -> List[str]:
     file_path = file_name
     try:
         with open(file_path, 'r') as file:
-            symbols = json.load(file)
+            symbols = cast(List[str], json.load(file))
             logger.debug(
                 "File-based list loaded",
                 extra={"file_name": file_name, "count": len(symbols)}
@@ -61,17 +64,17 @@ def get_list_from_file(file_name: str) -> List[str]:
         raise ConfigurationException(f"Failed to read file: {file_name}")
 
 
-def get_ban_list_from_file(file_name: str):
+def get_ban_list_from_file(file_name: str) -> List[str]:
     return get_list_from_file(file_name)
 
 
-def get_white_list_from_file(file_name: str):
+def get_white_list_from_file(file_name: str) -> List[str]:
     return get_list_from_file(file_name)
 
 
 async def get_black_list(exchange_name: str, user_id: int) -> List[str]:
     """
-    DEPRECATED: Get blacklist from SQLite database.
+    DEPRECATED: Get blacklist from database.
 
     Use TradingAccessService instead for new code.
 
@@ -83,7 +86,7 @@ async def get_black_list(exchange_name: str, user_id: int) -> List[str]:
         List of blacklisted symbols
     """
     logger.warning(
-        "Using deprecated SQLite blacklist",
+        "Using deprecated blacklist function",
         extra={
             "exchange": exchange_name,
             "user_id": user_id,
@@ -95,7 +98,7 @@ async def get_black_list(exchange_name: str, user_id: int) -> List[str]:
 
 async def get_white_list(exchange_name: str, user_id: int) -> List[str]:
     """
-    DEPRECATED: Get whitelist from SQLite database.
+    DEPRECATED: Get whitelist from database.
 
     Use TradingAccessService instead for new code.
 
@@ -107,7 +110,7 @@ async def get_white_list(exchange_name: str, user_id: int) -> List[str]:
         List of whitelisted symbols
     """
     logger.warning(
-        "Using deprecated SQLite whitelist",
+        "Using deprecated whitelist function",
         extra={
             "exchange": exchange_name,
             "user_id": user_id,
@@ -123,7 +126,7 @@ async def get_list_from_db(
     list_type: str
 ) -> List[str]:
     """
-    DEPRECATED: Get access list from SQLite database.
+    DEPRECATED: Get access list from database.
 
     Use TradingAccessService instead for new code.
 
@@ -139,7 +142,7 @@ async def get_list_from_db(
         DatabaseException: Database operation failed
     """
     logger.warning(
-        "Using deprecated SQLite database access",
+        "Using deprecated database access function",
         extra={
             "exchange": exchange_name,
             "user_id": user_id,
@@ -149,19 +152,18 @@ async def get_list_from_db(
     )
 
     try:
-        db_path = f'{exchange_name}_users.db'
-        async with aiosqlite.connect(db_path) as db:
-            cursor = await db.execute(
-                f'SELECT symbol FROM {list_type} WHERE user_id = ?',
-                (user_id,)
+        if list_type == 'blacklist':
+            result = await get_ban_list_from_db(user_id, exchange_name)
+        elif list_type == 'whitelist':
+            result = await get_white_list_from_db(user_id, exchange_name)
+        else:
+            raise ValidationException(
+                f"Invalid access list type: {list_type}",
+                details={"valid_types": ["blacklist", "whitelist"]}
             )
-            symbols = await cursor.fetchall()
-            await cursor.close()
-
-        result = [symbol[0] for symbol in symbols] if symbols else []
 
         logger.debug(
-            "SQLite list retrieved",
+            "Access list retrieved",
             extra={
                 "exchange": exchange_name,
                 "user_id": user_id,
@@ -172,9 +174,11 @@ async def get_list_from_db(
 
         return result
 
+    except ValidationException:
+        raise
     except Exception as e:
         logger.error(
-            "Failed to get list from SQLite",
+            "Failed to get list from database",
             exc_info=True,
             extra={
                 "exchange": exchange_name,
@@ -212,32 +216,20 @@ async def get_list_from_db(
 #         print(f"No such file: {file_name}")
 
 
-def get_access_list(exchange_name, user_id, type) -> AccessListDto:
+async def get_access_list(exchange_name: str, user_id: int, type: str) -> AccessListDto:
     if type == 'blacklist':
-        return AccessListDto(type=type, symbols=get_black_list(exchange_name, user_id))
+        symbols = await get_black_list(exchange_name, user_id)
+        return AccessListDto(exchange_name=exchange_name, user_id=user_id, type=type, symbols=symbols)
     if type == 'whitelist':
-        return AccessListDto(type=type, symbols=get_white_list(exchange_name, user_id))
+        symbols = await get_white_list(exchange_name, user_id)
+        return AccessListDto(exchange_name=exchange_name, user_id=user_id, type=type, symbols=symbols)
     else:
         raise ValueError(f"Invalid access type: {type}")
-
-async def get_black_list(exchange_name, user_id):
-    db_path = f'{exchange_name}_users.db'
-    async with aiosqlite.connect(db_path) as db:
-        cursor = await db.execute('SELECT symbol FROM blacklist WHERE user_id = ?', (user_id,))
-        symbols = await cursor.fetchall()
-        await cursor.close()
-
-async def get_white_list(exchange_name, user_id):
-    db_path = f'{exchange_name}_users.db'
-    async with aiosqlite.connect(db_path) as db:
-        cursor = await db.execute('SELECT symbol FROM whitelist WHERE user_id = ?', (user_id,))
-        symbols = await cursor.fetchall()
-        await cursor.close()
 
 
 #
 
-def update_file(file_name: str, new_items: List[str], append: bool = False):
+def update_file(file_name: str, new_items: List[str], append: bool = False) -> None:
     file_path = file_name
     items = get_list_from_file(file_name) if append else []
     # Combine existing items with new_items, ensuring no duplicates
@@ -249,21 +241,21 @@ def update_file(file_name: str, new_items: List[str], append: bool = False):
         raise e
 
 
-def remove_items_from_file(file_name: str, items_to_remove: List[str]):
+def remove_items_from_file(file_name: str, items_to_remove: List[str]) -> None:
     items = get_list_from_file(file_name)
     updated_items = [item for item in items if item not in items_to_remove]
     update_file(file_name, updated_items, append=False)
 
 
-def update_access_list(dto: AccessListDto, append: bool = False):
+def update_access_list(dto: AccessListDto, append: bool = False) -> None:
     file_name = 'ban_list.json' if dto.type == 'blacklist' else 'white_list.json'
     update_file(file_name=file_name, new_items=dto.symbols, append=append)
 
 
-def add_access_list(dto: AccessListDto):
+def add_access_list(dto: AccessListDto) -> None:
     update_access_list(dto=dto, append=True)
 
 
-def delete_access_list(dto: AccessListDto):
+def delete_access_list(dto: AccessListDto) -> None:
     file_name = 'ban_list.json' if dto.type == 'blacklist' else 'white_list.json'
     remove_items_from_file(file_name, dto.symbols)

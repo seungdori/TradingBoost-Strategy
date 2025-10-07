@@ -1,98 +1,199 @@
 """
 Symbol Repository Module
 
-Handles database operations for symbol blacklist and whitelist.
-Extracted from grid_original.py for better maintainability.
+Async helpers for managing blacklist and whitelist entries using PostgreSQL.
+
 """
 
-import os
-import aiosqlite
-from typing import List
+from typing import Iterable, List, Sequence, Union
+
+from shared.database.session import get_db, get_transactional_session
+from shared.logging import get_logger
+
+from GRID.repositories.symbol_list_repository_pg import SymbolListRepositoryPG
+
+logger = get_logger(__name__)
 
 
-# ==================== Blacklist & Whitelist Operations ====================
-
-async def get_ban_list_from_db(user_id, exchange_name) -> List[str]:
-    """
-    Get banned symbols list from database.
-
-    Args:
-        user_id: User ID
-        exchange_name: Exchange name
-
-    Returns:
-        List of banned symbol names
-    """
-    db_path = f'{exchange_name}_users.db'
-    # 데이터베이스 파일 존재 여부 확인
-    if not os.path.exists(db_path):
-        print(f"Database file not found: {db_path}")
-        return []
-    async with aiosqlite.connect(db_path) as db:
-        async with db.execute('SELECT symbol FROM blacklist WHERE user_id = ?', (user_id,)) as cursor:
-            ban_list = [row[0] for row in await cursor.fetchall()]
-    return ban_list
+def _normalize_user_id(user_id: Union[int, str]) -> int:
+    """Cast user identifier to int while preserving legacy support."""
+    try:
+        return int(user_id)
+    except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+        raise ValueError(f"Invalid user_id: {user_id}") from exc
 
 
-async def get_white_list_from_db(user_id, exchange_name) -> List[str]:
-    """
-    Get whitelisted symbols from database.
-
-    Args:
-        user_id: User ID
-        exchange_name: Exchange name
-
-    Returns:
-        List of whitelisted symbol names
-    """
-    db_path = f'{exchange_name}_users.db'
-    async with aiosqlite.connect(db_path) as db:
-        async with db.execute('SELECT symbol FROM whitelist WHERE user_id = ?', (user_id,)) as cursor:
-            white_list = [row[0] for row in await cursor.fetchall()]
-    return white_list
+def _normalize_symbols(symbols: Iterable[str]) -> List[str]:
+    """Strip whitespace and drop empty symbol entries."""
+    return [symbol.strip() for symbol in symbols if symbol and symbol.strip()]
 
 
-async def clear_blacklist(user_id, exchange_name):
-    """
-    Clear all blacklisted symbols for a user.
+async def get_ban_list_from_db(
+    user_id: Union[int, str],
+    exchange_name: str
+) -> List[str]:
+    """Return blacklist symbols for the given user/exchange."""
+    normalized_user_id = _normalize_user_id(user_id)
 
-    Args:
-        user_id: User ID
-        exchange_name: Exchange name
-    """
-    db_path = f'{exchange_name}_users.db'
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute('DELETE FROM blacklist WHERE user_id = ?', (user_id,))
-        await db.commit()
+    async with get_db() as session:
+        repo = SymbolListRepositoryPG(session)
+        symbols = await repo.get_blacklist(normalized_user_id, exchange_name)
 
-
-async def clear_whitelist(user_id, exchange_name):
-    """
-    Clear all whitelisted symbols for a user.
-
-    Args:
-        user_id: User ID
-        exchange_name: Exchange name
-    """
-    db_path = f'{exchange_name}_users.db'
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute('DELETE FROM whitelist WHERE user_id = ?', (user_id,))
-        await db.commit()
+    logger.debug(
+        "Fetched blacklist",
+        extra={
+            "user_id": normalized_user_id,
+            "exchange": exchange_name,
+            "count": len(symbols)
+        }
+    )
+    return list(symbols)
 
 
-async def add_symbols(user_id, exchange_name, symbols: List[str], setting_type: str):
-    """
-    Add symbols to blacklist or whitelist.
+async def get_white_list_from_db(
+    user_id: Union[int, str],
+    exchange_name: str
+) -> List[str]:
+    """Return whitelist symbols for the given user/exchange."""
+    normalized_user_id = _normalize_user_id(user_id)
 
-    Args:
-        user_id: User ID
-        exchange_name: Exchange name
-        symbols: List of symbols to add
-        setting_type: 'blacklist' or 'whitelist'
-    """
-    db_path = f'{exchange_name}_users.db'
-    table = setting_type
-    async with aiosqlite.connect(db_path) as db:
-        for symbol in symbols:
-            await db.execute(f'INSERT INTO {table} (user_id, symbol) VALUES (?, ?)', (user_id, symbol))
-        await db.commit()
+    async with get_db() as session:
+        repo = SymbolListRepositoryPG(session)
+        symbols = await repo.get_whitelist(normalized_user_id, exchange_name)
+
+    logger.debug(
+        "Fetched whitelist",
+        extra={
+            "user_id": normalized_user_id,
+            "exchange": exchange_name,
+            "count": len(symbols)
+        }
+    )
+    return list(symbols)
+
+
+async def clear_blacklist(user_id: Union[int, str], exchange_name: str) -> int:
+    """Remove all blacklist entries for the given user/exchange."""
+    normalized_user_id = _normalize_user_id(user_id)
+
+    async with get_transactional_session() as session:
+        repo = SymbolListRepositoryPG(session)
+        removed = await repo.clear_blacklist(normalized_user_id, exchange_name)
+
+    logger.info(
+        "Cleared blacklist",
+        extra={
+            "user_id": normalized_user_id,
+            "exchange": exchange_name,
+            "removed": removed
+        }
+    )
+    return removed
+
+
+async def clear_whitelist(user_id: Union[int, str], exchange_name: str) -> int:
+    """Remove all whitelist entries for the given user/exchange."""
+    normalized_user_id = _normalize_user_id(user_id)
+
+    async with get_transactional_session() as session:
+        repo = SymbolListRepositoryPG(session)
+        removed = await repo.clear_whitelist(normalized_user_id, exchange_name)
+
+    logger.info(
+        "Cleared whitelist",
+        extra={
+            "user_id": normalized_user_id,
+            "exchange": exchange_name,
+            "removed": removed
+        }
+    )
+    return removed
+
+
+async def add_symbols(
+    user_id: Union[int, str],
+    exchange_name: str,
+    symbols: Sequence[str],
+    setting_type: str
+) -> int:
+    """Add symbols to blacklist or whitelist and return the number inserted."""
+    normalized_user_id = _normalize_user_id(user_id)
+    normalized_symbols = _normalize_symbols(symbols)
+    if not normalized_symbols:
+        logger.debug(
+            "No symbols provided for insertion",
+            extra={
+                "user_id": normalized_user_id,
+                "exchange": exchange_name,
+                "type": setting_type
+            }
+        )
+        return 0
+
+    async with get_transactional_session() as session:
+        repo = SymbolListRepositoryPG(session)
+
+        inserted = 0
+        if setting_type == "blacklist":
+            for symbol in normalized_symbols:
+                await repo.add_to_blacklist(normalized_user_id, exchange_name, symbol)
+                inserted += 1
+        elif setting_type == "whitelist":
+            for symbol in normalized_symbols:
+                await repo.add_to_whitelist(normalized_user_id, exchange_name, symbol)
+                inserted += 1
+        else:  # pragma: no cover - protected by callers
+            raise ValueError(f"Invalid setting_type: {setting_type}")
+
+    logger.info(
+        "Inserted symbols into access list",
+        extra={
+            "user_id": normalized_user_id,
+            "exchange": exchange_name,
+            "type": setting_type,
+            "count": inserted
+        }
+    )
+    return inserted
+
+
+async def remove_symbols(
+    user_id: Union[int, str],
+    exchange_name: str,
+    symbols: Sequence[str],
+    setting_type: str
+) -> int:
+    """Remove the provided symbols from blacklist or whitelist."""
+    normalized_user_id = _normalize_user_id(user_id)
+    normalized_symbols = _normalize_symbols(symbols)
+    if not normalized_symbols:
+        return 0
+
+    async with get_transactional_session() as session:
+        repo = SymbolListRepositoryPG(session)
+
+        if setting_type == "blacklist":
+            removed = await repo.remove_from_blacklist_bulk(
+                normalized_user_id,
+                exchange_name,
+                normalized_symbols,
+            )
+        elif setting_type == "whitelist":
+            removed = await repo.remove_from_whitelist_bulk(
+                normalized_user_id,
+                exchange_name,
+                normalized_symbols,
+            )
+        else:  # pragma: no cover - protected by callers
+            raise ValueError(f"Invalid setting_type: {setting_type}")
+
+    logger.info(
+        "Removed symbols from access list",
+        extra={
+            "user_id": normalized_user_id,
+            "exchange": exchange_name,
+            "type": setting_type,
+            "count": removed
+        }
+    )
+    return removed

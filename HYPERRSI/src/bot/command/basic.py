@@ -4,7 +4,7 @@ from aiogram import types, Router, F
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import any_state
-from HYPERRSI.src.core.database import redis_client
+
 from HYPERRSI.src.services.timescale_service import TimescaleUserService
 import logging
 
@@ -12,6 +12,14 @@ from HYPERRSI.src.bot.states.states import RegisterStates
 
 router = Router()
 logger = logging.getLogger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 
 def get_redis_keys(user_id):
     return {

@@ -53,8 +53,7 @@ class DatabaseConfig:
             # Debug logging
             logger.info(f"Database URL: {db_url[:50]}..." if db_url else "Database URL: EMPTY")
             if not db_url:
-                logger.error("DATABASE_URL is empty! Falling back to SQLite")
-                db_url = "sqlite+aiosqlite:///./default.db"
+                raise ValueError("PostgreSQL configuration required. DATABASE_URL is empty!")
 
             # Build connect_args and isolation_level based on database type
             connect_args = {}

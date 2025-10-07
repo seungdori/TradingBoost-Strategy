@@ -7,10 +7,18 @@ import os
 from urllib.parse import quote_plus
 from HYPERRSI.src.core.celery_task import celery_app
 from HYPERRSI.src.core.config import settings
-from HYPERRSI.src.core.database import redis_client
+
 import json
 from datetime import datetime
 import asyncio
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 
 logger = logging.getLogger(__name__)
 

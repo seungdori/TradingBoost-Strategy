@@ -47,7 +47,7 @@ def sort_ai_trading_data(exchange_name, direction):
     return df_summary[['name', 'win_rate']]
 
 
-async def build_sort_ai_trading_data(exchange_name, enter_strategy) -> List[WinrateDto]:
+async def build_sort_ai_trading_data(exchange_name: str, enter_strategy: str) -> List[WinrateDto]:
     """
     Build sorted AI trading data as WinrateDto list.
 
@@ -299,7 +299,7 @@ async def process_exchange_data(exchange_name, direction, ban_list, white_list, 
     return symbols, sorted_column
 
 
-async def get_running_symbols(exchange_id: str, user_id: str):
+async def get_running_symbols(exchange_id: str, user_id: str) -> list:
     """
     Get currently running symbols for a user.
 
@@ -316,7 +316,8 @@ async def get_running_symbols(exchange_id: str, user_id: str):
 
     if running_symbols_json:
         await redis.delete(redis_key)
-        return json.loads(running_symbols_json)
+        result: list = json.loads(running_symbols_json)
+        return result
     return []
 
 
@@ -364,8 +365,6 @@ async def get_top_symbols(user_id, exchange_name, direction='long-short', limit=
         ban_list = []
         print('ban_list.json 파일이 존재하지 않습니다. 빈 리스트로 초기화합니다.')
 
-    if ban_list is None:
-        ban_list = []
     ban_list.extend(['XEC', 'USTC', 'USDC', 'TRY', 'CEL', 'GAL', 'OMG', 'SPELL', 'KSM', 'GPT', 'BLOCK', 'FRONT', 'TURBO', 'ZERO', 'MSN', 'FET'])
 
     try:
@@ -374,8 +373,6 @@ async def get_top_symbols(user_id, exchange_name, direction='long-short', limit=
         white_list = []
         print('white_list.json 파일이 존재하지 않습니다. 빈 리스트로 초기화합니다.')
 
-    if white_list is None:
-        white_list = []
     if exchange_name == 'upbit':
         market_data = await get_upbit_market_data()
     else:
@@ -402,8 +399,6 @@ async def get_top_symbols(user_id, exchange_name, direction='long-short', limit=
     try:
         if force_restart:
             former_running_symbols = await get_running_symbols(exchange_name, user_id)
-            if former_running_symbols is None:
-                former_running_symbols = []
             print(f"former_running_symbols : {former_running_symbols}")
         else:
             former_running_symbols = []

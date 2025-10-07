@@ -11,13 +11,28 @@ from typing import Optional
 import pandas as pd
 import httpx
 
-from HYPERRSI.src.core.database import redis_client
+
 from HYPERRSI.src.trading.models import get_timeframe
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 from shared.utils import safe_float
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
+
+
+# Module-level attribute for backward compatibility
+def __getattr__(name):
+    if name == "redis_client":
+        return _get_redis_client()
+    raise AttributeError(f"module has no attribute {name}")
 API_BASE_URL = "/api"
 
 

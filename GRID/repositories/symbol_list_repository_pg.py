@@ -4,7 +4,7 @@ Symbol List Repository for PostgreSQL
 Handles blacklist and whitelist operations.
 """
 
-from typing import List
+from typing import Iterable, List
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from GRID.models.user import Blacklist, Whitelist
@@ -107,6 +107,65 @@ class SymbolListRepositoryPG:
             return True
         return False
 
+    async def remove_from_blacklist_bulk(
+        self, user_id: int, exchange_name: str, symbols: Iterable[str]
+    ) -> int:
+        """
+        Remove multiple symbols from blacklist in a single operation.
+
+        Args:
+            user_id: User identifier
+            exchange_name: Exchange name
+            symbols: Iterable of symbols to remove
+
+        Returns:
+            Number of symbols removed
+        """
+        symbol_list = [symbol for symbol in symbols]
+        if not symbol_list:
+            return 0
+
+        stmt = delete(Blacklist).where(
+            Blacklist.user_id == user_id,
+            Blacklist.exchange_name == exchange_name,
+            Blacklist.symbol.in_(symbol_list)
+        )
+        result = await self.session.execute(stmt)
+        removed = result.rowcount or 0
+
+        if removed:
+            logger.info(
+                "Removed symbols from blacklist",
+                extra={
+                    "user_id": user_id,
+                    "exchange": exchange_name,
+                    "count": removed
+                }
+            )
+
+        return removed
+
+    async def clear_blacklist(self, user_id: int, exchange_name: str) -> int:
+        """Remove all blacklist entries for the given user/exchange."""
+        stmt = delete(Blacklist).where(
+            Blacklist.user_id == user_id,
+            Blacklist.exchange_name == exchange_name,
+        )
+        result = await self.session.execute(stmt)
+        cleared = result.rowcount or 0
+
+        if cleared:
+            logger.info(
+                "Cleared blacklist",
+                extra={
+                    "user_id": user_id,
+                    "exchange": exchange_name,
+                    "count": cleared
+                }
+            )
+
+        return cleared
+
     # Whitelist operations
     async def get_whitelist(
         self, user_id: int, exchange_name: str
@@ -194,3 +253,62 @@ class SymbolListRepositoryPG:
             )
             return True
         return False
+
+    async def remove_from_whitelist_bulk(
+        self, user_id: int, exchange_name: str, symbols: Iterable[str]
+    ) -> int:
+        """
+        Remove multiple symbols from whitelist in a single operation.
+
+        Args:
+            user_id: User identifier
+            exchange_name: Exchange name
+            symbols: Iterable of symbols to remove
+
+        Returns:
+            Number of symbols removed
+        """
+        symbol_list = [symbol for symbol in symbols]
+        if not symbol_list:
+            return 0
+
+        stmt = delete(Whitelist).where(
+            Whitelist.user_id == user_id,
+            Whitelist.exchange_name == exchange_name,
+            Whitelist.symbol.in_(symbol_list)
+        )
+        result = await self.session.execute(stmt)
+        removed = result.rowcount or 0
+
+        if removed:
+            logger.info(
+                "Removed symbols from whitelist",
+                extra={
+                    "user_id": user_id,
+                    "exchange": exchange_name,
+                    "count": removed
+                }
+            )
+
+        return removed
+
+    async def clear_whitelist(self, user_id: int, exchange_name: str) -> int:
+        """Remove all whitelist entries for the given user/exchange."""
+        stmt = delete(Whitelist).where(
+            Whitelist.user_id == user_id,
+            Whitelist.exchange_name == exchange_name,
+        )
+        result = await self.session.execute(stmt)
+        cleared = result.rowcount or 0
+
+        if cleared:
+            logger.info(
+                "Cleared whitelist",
+                extra={
+                    "user_id": user_id,
+                    "exchange": exchange_name,
+                    "count": cleared
+                }
+            )
+
+        return cleared

@@ -1,6 +1,6 @@
 # src/bot/handlers.py
 
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from HYPERRSI.src.bot.command import basic, trading, settings, register, generic, account, dual_side_settings
 from HYPERRSI.src.config import TELEGRAM_BOT_TOKEN

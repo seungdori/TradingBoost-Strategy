@@ -7,15 +7,29 @@
 import asyncio
 import json
 import logging
+import random
 import time
 import traceback
+from datetime import datetime
 from typing import Dict, Any, Optional
 
 from ccxt.async_support import NetworkError, ExchangeError
 
-from GRID.database.redis_database import update_take_profit_orders_info
-from GRID.services.order_service import fetch_order_with_retry
+from GRID.core.redis import get_redis_connection
+from GRID.core.websocket import log_exception
+from GRID.database import redis_database
+from GRID.database.redis_database import update_take_profit_orders_info, update_active_grid
+from GRID.main.main_loop import add_user_log
+from GRID.monitoring.position_monitor import monitor_tp_orders_websocekts
+from GRID.services.balance_service import get_position_size
+from GRID.services.order_service import (
+    fetch_order_with_retry, add_placed_price, set_order_placed, okay_to_place_order, is_price_placed
+)
+from GRID.strategies import strategy
 from GRID.trading.shared_state import user_keys
+from GRID.utils.price import get_corrected_rounded_price
+from HYPERRSI import telegram_message
+from shared.utils import retry_async
 from shared.utils.exchange_precision import adjust_price_precision
 
 logger = logging.getLogger(__name__)
@@ -192,9 +206,10 @@ async def check_order_status(exchange_instance,exchange_name, order_id, symbol, 
                             #print('tp_order04')
                             #print(f"Take profit order placed at {take_profit_level}")
                         # 익절 주문 정보 업데이트
-                        for key in possible_order_id_keys:
-                            if 'info' in tp_order and key in tp_order['info']:
-                                order_id = tp_order['info'][key]
+                        if tp_order is not None:
+                            for key in possible_order_id_keys:
+                                if 'info' in tp_order and key in tp_order['info']:
+                                    order_id = tp_order['info'][key]
                                 if exchange_name == 'okx' or exchange_name == 'okx_spot':
                                     if isinstance(order_id, int) or (isinstance(order_id, str) and order_id.isdigit() and 1 <= len(order_id) <= 20):
                                         break
@@ -276,9 +291,10 @@ async def check_order_status(exchange_instance,exchange_name, order_id, symbol, 
                             #print('tp_order06')
                             #print(f"Take profit order placed at {take_profit_level}")
                         # 익절 주문 정보 업데이트
-                        for key in possible_order_id_keys:
-                            if 'info' in tp_order and key in tp_order['info']:
-                                order_id = tp_order['info'][key]
+                        if tp_order is not None:
+                            for key in possible_order_id_keys:
+                                if 'info' in tp_order and key in tp_order['info']:
+                                    order_id = tp_order['info'][key]
                                 if exchange_name == 'okx' or exchange_name == 'okx_spot':
                                     if (isinstance(order_id, int) or (isinstance(order_id, str)) and order_id.isdigit() and 1 <= len(order_id) <= 20):
                                         break

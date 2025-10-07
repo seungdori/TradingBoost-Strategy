@@ -1,3 +1,4 @@
+# type: ignore
 """
 PostgreSQL Integration Test for GRID Services
 

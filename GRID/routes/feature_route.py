@@ -30,7 +30,7 @@ from shared.config import settings
 REDIS_PASSWORD = settings.REDIS_PASSWORD
 DEFAULT_PORT = int(os.environ.get('PORT', 8000))
 
-async def get_redis_connection():
+async def get_redis_connection() -> aioredis.Redis:
     try:
         if REDIS_PASSWORD:
             redis = aioredis.from_url(settings.REDIS_URL, encoding='utf-8', decode_responses=True, password=REDIS_PASSWORD)
@@ -40,7 +40,7 @@ async def get_redis_connection():
     except Exception as e:
         print(f"Error connecting to Redis: {str(e)}")
         traceback.print_exc()
-        redis = None
+        raise
 
 
 @router.post("/save_running_symbols")
@@ -55,7 +55,7 @@ async def save_running_symbols_router():
         data=None
     )
 
-async def get_request_body(redis, key: str) -> str | None:
+async def get_request_body(redis: aioredis.Redis, key: str) -> str | None:
     """Redis에서 request_body를 가져옴"""
     value = await redis.get(key)
     return value
@@ -79,7 +79,7 @@ def get_app_port(app: FastAPI) -> int:
     return server.config.port
 
 @router.post("/save_request_body")
-async def save_all_running_request_body(request: Request):
+async def save_all_running_request_body(request: Request) -> ResponseDto[None]:
     redis = await get_redis_connection()
     running_users = await get_running_users('okx', redis)
     for user_id in running_users:
@@ -119,9 +119,14 @@ async def save_all_running_request_body(request: Request):
             print(f"Error saving request body for user {user_id}: {str(e)}")
             traceback.print_exc()
     print(f"All running user({len(running_users)}) request bodies saved.")
+    return ResponseDto[None](
+        success=True,
+        message=f"All running user({len(running_users)}) request bodies saved.",
+        data=None
+    )
 
 
-async def restart_single_user(exchange_id, user_id, request_body_str):
+async def restart_single_user(exchange_id: str, user_id: int, request_body_str: str) -> None:
     if request_body_str:
         try:
             request_dict = json.loads(request_body_str)
@@ -136,10 +141,10 @@ async def restart_single_user(exchange_id, user_id, request_body_str):
                 "headers": []
             }
             # 가짜 Request 객체에 json 메서드 추가
-            async def fake_json():
+            async def fake_json() -> dict[str, Any]:
                 return dto.model_dump()
             fake_request = Request(scope=fake_scope)
-            fake_request.json = fake_json
+            fake_request.json = fake_json  # type: ignore[method-assign]
             
             background_tasks = BackgroundTasks()
             await update_user_data(exchange_id, user_id)
@@ -150,7 +155,7 @@ async def restart_single_user(exchange_id, user_id, request_body_str):
             
             
 @router.post("/force_restart")
-async def restart_running_bots(request: Request):
+async def restart_running_bots(request: Request) -> ResponseDto[None]:
     redis = await get_redis_connection()
     #current_port = get_request_port(request)  # Request 객체에서 포트 정보 가져오기
     print("Restarting running bots")
@@ -186,11 +191,11 @@ async def restart_running_bots(request: Request):
                         "headers": []
                     }
                     fake_request = Request(scope=fake_scope)
-                    
+
                     # 가짜 Request 객체에 json 메서드 추가
-                    async def fake_json():
+                    async def fake_json() -> dict[str, Any]:
                         return dto.model_dump()
-                    fake_request.json = fake_json
+                    fake_request.json = fake_json  # type: ignore[method-assign]
                     
                     background_tasks = BackgroundTasks()
                     await save_running_symbols(exchange_id, user_id)
@@ -205,7 +210,11 @@ async def restart_running_bots(request: Request):
                         await redis.delete(redis_key)
                 except Exception as e:
                     print(f"Error restarting bot for user {user_id}: {str(e)}")
-
+    return ResponseDto[None](
+        success=True,
+        message="All running bots restarted successfully.",
+        data=None
+    )
 
 
 @router.post("/start")
@@ -213,7 +222,7 @@ async def start(dto: StartFeatureDto, request: Request, background_tasks: Backgr
     return await start_bot(dto, request, background_tasks)
 
 
-async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: BackgroundTasks, force_restart = False):
+async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: BackgroundTasks, force_restart: bool = False) -> ResponseDto[BotStateDto | None]:
     request_body = await request.json()
     exchange_name = dto.exchange_name
     #try:
@@ -229,15 +238,18 @@ async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: Ba
         # Redis 연결 생성
         redis = await get_redis_connection()
 
+        # user_id 확인 및 변환
+        if dto.user_id is None:
+            raise ValueError("user_id is required")
+        user_id = int(dto.user_id) if isinstance(dto.user_id, str) else dto.user_id
+
         # 요청 본문을 Redis에 저장
-        redis_key = f"{exchange_name}:request_body:{dto.user_id}"
+        redis_key = f"{exchange_name}:request_body:{user_id}"
         await redis.set(redis_key, json.dumps(request_body), ex=1440000)
-        user_id = int(dto.user_id)
-        #await redis.set(f"{exchange_name}:request_body:{dto.user_id}", json.dumps(request_body), ex=1440000)
         print(f"Request body saved to Redis for {redis_key}")
         korea_tz = ZoneInfo("Asia/Seoul")
         current_time = datetime.now(korea_tz).isoformat()
-        await redis.hset(f"{exchange_name}:user:{dto.user_id}", 'last_started', current_time)
+        await redis.hset(f"{exchange_name}:user:{user_id}", 'last_started', current_time)
         enter_strategy = dto.enter_strategy
         enter_symbol_count = dto.enter_symbol_count
         enter_symbol_amount_list = dto.enter_symbol_amount_list
@@ -247,13 +259,12 @@ async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: Ba
         api_keys = dto.api_key
         api_secret = dto.api_secret
         password = dto.password
-        user_id = int(dto.user_id)
         custom_stop = dto.custom_stop
         telegram_id = dto.telegram_id
         
         # enter_symbol_amount_list 처리 로직 (변경 없음)
-        if enter_symbol_amount_list is None:
-            enter_symbol_amount_list = [(max(0, enter_symbol_amount_list[0])) for i in range(grid_num)]
+        if enter_symbol_amount_list is None or len(enter_symbol_amount_list) == 0:
+            enter_symbol_amount_list = [0.0 for i in range(grid_num)]
         elif len(enter_symbol_amount_list) < grid_num:
             diff = grid_num - len(enter_symbol_amount_list)
             last_value = max(enter_symbol_amount_list[-1], 0)
@@ -269,8 +280,7 @@ async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: Ba
             enter_symbol_amount_list = enter_symbol_amount_list[:grid_num]
         
         initial_capital = enter_symbol_amount_list
-        initial_capital_json = json.dumps(initial_capital)
-        await redis_database.save_user(user_id, api_key= api_keys, api_secret= api_secret, password = password ,initial_capital=initial_capital_json, direction = enter_strategy, numbers_to_entry = enter_symbol_count,grid_num = grid_num,leverage=leverage, stop_loss=stop_loss, exchange_name=exchange_name)
+        await redis_database.save_user(user_id, api_key= api_keys, api_secret= api_secret, password = password ,initial_capital=initial_capital, direction = enter_strategy, numbers_to_entry = enter_symbol_count,grid_num = grid_num,leverage=leverage, stop_loss=stop_loss, exchange_name=exchange_name)  # type: ignore[arg-type]
 
         print(f'{user_id} : [START FEATURE]')
         print(dto)
@@ -278,21 +288,22 @@ async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: Ba
         current_bot_state = await bot_state_service.get_bot_state(dto=BotStateKeyDto(
             exchange_name=exchange_name,
             enter_strategy=enter_strategy,
-            user_id=user_id
+            user_id=str(user_id)
         ))
-        
+
         if current_bot_state is None:
             # 봇 상태가 없으면 새로 생성
             current_bot_state = BotStateDto(
                 key=f"{exchange_name}_{enter_strategy}_{user_id}",
                 exchange_name=exchange_name,
                 enter_strategy=enter_strategy,
-                user_id=user_id,
-                is_running=False
+                user_id=str(user_id),
+                is_running=False,
+                error=None
             )
 
         if not force_restart and current_bot_state.is_running:
-            return ResponseDto[None](
+            return ResponseDto[BotStateDto | None](
                 success=False,
                 message=f"{exchange_name} {enter_strategy} already running.",
                 data=None
@@ -310,12 +321,13 @@ async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: Ba
                 key=current_bot_state.key,
                 exchange_name=exchange_name,
                 enter_strategy=enter_strategy,
-                user_id=user_id,
-                is_running=True
+                user_id=str(user_id),
+                is_running=True,
+                error=None
             )
         )
 
-        return ResponseDto[BotStateDto](
+        return ResponseDto[BotStateDto | None](
             success=True,
             message=f"{exchange_name} {enter_strategy} start feature success.",
             data=updated_state
@@ -326,7 +338,7 @@ async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: Ba
         bot_state_key_dto = BotStateKeyDto(
             exchange_name=dto.exchange_name,
             enter_strategy=dto.enter_strategy,
-            user_id=int(dto.user_id)
+            user_id=str(dto.user_id) if dto.user_id is not None else "unknown"
         )
         current_bot_state = await bot_state_service.get_bot_state(dto=bot_state_key_dto)
 
@@ -337,7 +349,8 @@ async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: Ba
                     exchange_name=current_bot_state.exchange_name,
                     enter_strategy=current_bot_state.enter_strategy,
                     user_id=current_bot_state.user_id,
-                    is_running=False
+                    is_running=False,
+                    error=None
                 )
             )
             print('[START EXCEPTION UPDATED BOT STATE]', updated_fail_state)
@@ -346,7 +359,7 @@ async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: Ba
             await redis.hset(f"{exchange_name}:user:{user_id}", 'is_running', '0')
             print('[START EXCEPTION UPDATED BOT STATE]', updated_fail_state)
 
-        return ResponseDto[None](
+        return ResponseDto[BotStateDto | None](
             success=False,
             message=f"{dto.exchange_name} {dto.enter_strategy} start feature fail",
             meta={"error": str(e)},
@@ -426,20 +439,20 @@ async def stop(dto: StopFeatureDto, request: Request) -> ResponseDto[BotStateDto
         
         if success:
             print('[STOP]', dto)
-            return ResponseDto[None](
+            return ResponseDto[BotStateDto | None](
                 success=True,
                 message=f"{user_id}의 {exchange_name} 스탑 요청 성공",
                 data=None
             )
         else:
-            return ResponseDto[None](
+            return ResponseDto[BotStateDto | None](
                 success=False,
                 message=f"{user_id}의 {exchange_name} 테스크를 찾을 수 없거나 이미 종료되었습니다.",
                 data=None
             )
     except Exception as e:
         print('[CATCH STOP FEATURE ROUTE]', e)
-        return ResponseDto[None](
+        return ResponseDto[BotStateDto | None](
             success=False,
             message=f"{dto.exchange_name} 스탑 요청 실패",
             meta={'error': str(e)},
@@ -471,20 +484,20 @@ async def stop_task_only(dto: StopFeatureDto, request: Request) -> ResponseDto[B
      
         if success:
             print('[STOP]', dto)
-            return ResponseDto[None](
+            return ResponseDto[BotStateDto | None](
                 success=True,
                 message=f"{user_id}의 {exchange_name} 스탑 요청 성공",
                 data=None
             )
         else:
-            return ResponseDto[None](
+            return ResponseDto[BotStateDto | None](
                 success=False,
                 message=f"{user_id}의 {exchange_name} 테스크를 찾을 수 없거나 이미 종료되었습니다.",
                 data=None
             )
     except Exception as e:
         print('[CATCH STOP FEATURE ROUTE]', e)
-        return ResponseDto[None](
+        return ResponseDto[BotStateDto | None](
             success=False,
             message=f"{dto.exchange_name} 스탑 요청 실패",
             meta={'error': str(e)},
@@ -549,7 +562,7 @@ async def sell_coins(dto: CoinSellFeatureDto, redis: aioredis.Redis = Depends(ge
             #running_symbols = set(user_data.get('running_symbols', []))
             running_symbols = set(json.loads(running_symbols_json)) if running_symbols_json else set()
             print('running_symbols:', running_symbols)
-            await strategy.close(exchange=exchange_name, symbol=coin.symbol, qty_perc=qty_percent, user_id=user_id)
+            await strategy.close(exchange=exchange_name, symbol=coin.symbol, qty_perc=qty_percent if qty_percent is not None else 100, user_id=str(user_id))
 
             # Redis에서 사용자 데이터 가져오기
             print('user_data:', user_data)
@@ -571,18 +584,18 @@ async def sell_coins(dto: CoinSellFeatureDto, redis: aioredis.Redis = Depends(ge
             #print('updated running_symbols:', running_symbols)
             await redis.hset(user_key, 'completed_trading_symbols', json.dumps(list(completed_trading_symbols)))
 
-        return ResponseDto[List[CoinDto]](
+        return ResponseDto[List[CoinDto] | None](
             success=True,
             message=f"{exchange_name} sell coins request success",
             data=coins
         )
     except Exception as e:
-        return ResponseDto[None](
+        return ResponseDto[List[CoinDto] | None](
             success=False,
             message="sell coins request fail",
             meta={'error': str(e)},
             data=None
         )
     finally:
-        await redis.aclose()
+        await redis.close()
 

@@ -142,11 +142,11 @@ def normalize_symbol(symbol: str, target_format: str = "okx") -> str:
     try:
         # OKX 형식 시도
         base, quote, is_swap = parse_symbol(symbol, "okx")
-    except:
+    except ValueError:
         try:
             # CCXT 형식 시도
             base, quote, is_swap = parse_symbol(symbol, "ccxt")
-        except:
+        except ValueError:
             raise ValueError(f"Cannot parse symbol: {symbol}")
 
     # 목표 형식으로 변환
@@ -186,7 +186,7 @@ def is_valid_symbol(symbol: str, exchange: str = "okx") -> bool:
     try:
         parse_symbol(symbol, exchange)
         return True
-    except:
+    except (ValueError, AttributeError):
         return False
 
 
@@ -209,11 +209,11 @@ def extract_base_currency(symbol: str) -> str:
     try:
         base, _, _ = parse_symbol(symbol, "okx")
         return base
-    except:
+    except ValueError:
         try:
             base, _, _ = parse_symbol(symbol, "ccxt")
             return base
-        except:
+        except ValueError:
             # 마지막 시도: 단순 분리
             if "-" in symbol:
                 return symbol.split("-")[0]
@@ -242,11 +242,11 @@ def extract_quote_currency(symbol: str) -> str:
     try:
         _, quote, _ = parse_symbol(symbol, "okx")
         return quote
-    except:
+    except ValueError:
         try:
             _, quote, _ = parse_symbol(symbol, "ccxt")
             return quote
-        except:
+        except ValueError:
             # 마지막 시도: 단순 분리
             if "-SWAP" in symbol:
                 return symbol.replace("-SWAP", "").split("-")[1]
@@ -281,11 +281,11 @@ def is_swap_symbol(symbol: str) -> bool:
     try:
         _, _, is_swap = parse_symbol(symbol, "okx")
         return is_swap
-    except:
+    except ValueError:
         try:
             _, _, is_swap = parse_symbol(symbol, "ccxt")
             return is_swap
-        except:
+        except ValueError:
             # 마지막 시도: 패턴 검사
             return "-SWAP" in symbol or ":" in symbol
 

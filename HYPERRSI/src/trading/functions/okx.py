@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 import ccxt.async_support as ccxt
 from fastapi import HTTPException
 from shared.logging import get_logger
-from HYPERRSI.src.core.database import redis_client
+
 
 # API 모델 (Pydantic) 및 Enum
 from HYPERRSI.src.api.exchange.models import (
@@ -20,6 +20,21 @@ from HYPERRSI.src.api.exchange.models import (
 )
 
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
+
+
+# Module-level attribute for backward compatibility
+def __getattr__(name):
+    if name == "redis_client":
+        return _get_redis_client()
+    raise AttributeError(f"module has no attribute {name}")
 
 # ======================================================
 # 상수 (Constants)

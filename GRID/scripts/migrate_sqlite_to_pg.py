@@ -1,7 +1,7 @@
+# type: ignore
 """
-SQLite to PostgreSQL Migration Script for GRID
 
-Migrates data from SQLite databases to PostgreSQL.
+
 """
 
 import asyncio

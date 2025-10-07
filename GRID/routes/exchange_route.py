@@ -1,6 +1,6 @@
 from typing import Any, List
 from fastapi import APIRouter
-from shared.dtos.exchange import ExchangeApiKeyDto, WalletDto, ApiKeys
+from shared.dtos.exchange import ExchangeApiKeyDto, WalletDto, ApiKeys, ApiKeyDto
 from shared.dtos.response import ResponseDto
 from GRID.services import exchange_service, api_key_service
 
@@ -11,7 +11,7 @@ router = APIRouter(prefix="/exchange", tags=["exchange"])
 async def get_wallet(exchange_name: str) -> ResponseDto[WalletDto | None]:
     try:
         wallet: WalletDto = await exchange_service.get_wallet(exchange_name)
-        return ResponseDto[WalletDto](
+        return ResponseDto[WalletDto | None](
             success=True,
             message=f"Get {exchange_name} wallet success",
             data=wallet
@@ -19,7 +19,7 @@ async def get_wallet(exchange_name: str) -> ResponseDto[WalletDto | None]:
 
     except Exception as e:
         print(e)
-        return ResponseDto[None](
+        return ResponseDto[WalletDto | None](
             success=False,
             message=f"{e}",
             data=None
@@ -47,10 +47,10 @@ async def get_balance(exchange_name: str) -> ResponseDto[List[Any]]:
 
 
 @router.get('/keys/{exchange_name}', response_model=ResponseDto)
-async def get_exchange_keys(exchange_name: str) -> ResponseDto[ApiKeys]:
-    api_keys: ApiKeys = await api_key_service.get_exchange_api_keys(exchange_name)
+async def get_exchange_keys(exchange_name: str) -> ResponseDto[ApiKeyDto]:
+    api_keys: ApiKeyDto = await api_key_service.get_exchange_api_keys(exchange_name)
 
-    return ResponseDto[ApiKeys](
+    return ResponseDto[ApiKeyDto](
         success=True,
         message=f"Get {exchange_name} api key success.",
         data=api_keys
@@ -61,20 +61,20 @@ async def get_exchange_keys(exchange_name: str) -> ResponseDto[ApiKeys]:
 # 데스크탑 앱 실행 시, 로컬에 저장된 모든 거래소 api key, secret, password를 업데이트합니다.
 # 이후 클라이언트에서 특정 거래소의 api key, secret, password 업데이트를 요청할 때마다 실행됩니다.
 @router.patch('/keys', response_model=ResponseDto)
-async def update_api_keys(dto: ExchangeApiKeyDto) -> ResponseDto[ApiKeys | None]:
+async def update_api_keys(dto: ExchangeApiKeyDto) -> ResponseDto[ApiKeyDto | None]:
     try:
-        updated_api_keys: ApiKeys = await api_key_service.update_exchange_api_keys(dto)
+        updated_api_keys: ApiKeyDto = await api_key_service.update_exchange_api_keys(dto)
 
         exchange_service.revalidate_cache(dto.exchange_name)
 
-        return ResponseDto[ApiKeys](
+        return ResponseDto[ApiKeyDto | None](
             success=True,
             message=f"{dto.exchange_name} credential update success",
             data=updated_api_keys
         )
     except Exception as e:
         print('[UPDATE API KEYS EXCEPTION]', e)
-        return ResponseDto[None](
+        return ResponseDto[ApiKeyDto | None](
             success=False,
             message=f"{dto.exchange_name} credential update fail",
             meta={"error": str(e)},

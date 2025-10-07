@@ -10,8 +10,8 @@ from HYPERRSI.src.trading.trading_service import TradingService
 from HYPERRSI.src.api.trading.Calculate_signal import TrendStateCalculator
 from HYPERRSI.src.services.redis_service import RedisService
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
-from HYPERRSI.src.core.database import redis_client
-from shared.logging import get_logger, setup_error_logger, log_bot_start, log_bot_stop, log_bot_error
+from shared.logging import get_logger
+from HYPERRSI.src.core.logger import setup_error_logger, log_bot_start, log_bot_stop, log_bot_error
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 import time
 from HYPERRSI.src.trading.models import get_timeframe
@@ -22,6 +22,12 @@ from HYPERRSI.src.core.error_handler import handle_critical_error, ErrorCategory
 
 logger = get_logger(__name__)
 error_logger = setup_error_logger()
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
 
 
 async def get_okx_uid_from_telegram_id(telegram_id: str) -> str:
@@ -34,6 +40,7 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> str:
     Returns:
         str: OKX UID
     """
+    redis_client = _get_redis_client()
     try:
         # 텔레그램 ID로 OKX UID 조회
         key = f"user:{telegram_id}:okx_uid"
@@ -94,7 +101,9 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
     if not user_id:
         logger.error(f"유효하지 않은 사용자 ID: {original_user_id}")
         return
-    
+
+    redis_client = _get_redis_client()
+
     # get_identifier가 원래 ID를 그대로 반환한 경우 (변환 실패)
     # 이는 텔레그램 ID인데 OKX UID를 찾지 못한 경우
     # OKX UID에서 텔레그램 ID 조회 (telegram_id가 없는 경우)

@@ -128,7 +128,7 @@ class TradingAccessService:
         else:
             symbols = await self.get_whitelist(exchange_name, user_id)
 
-        return AccessListDto(type=list_type, symbols=symbols)
+        return AccessListDto(type=list_type, symbols=symbols, exchange_name=exchange_name, user_id=user_id)
 
     async def add_to_access_list(
         self,
@@ -178,11 +178,9 @@ class TradingAccessService:
                     exchange_name, user_id, dto.symbols
                 )
             elif dto.type == "whitelist":
-                # TODO: Implement whitelist methods in repository
-                # count = await tx_repo.add_to_whitelist(
-                #     exchange_name, user_id, dto.symbols
-                # )
-                count = 0
+                count = await tx_repo.add_to_whitelist(
+                    exchange_name, user_id, dto.symbols
+                )
             else:
                 raise ValidationException(
                     f"Invalid access list type: {dto.type}",
@@ -238,13 +236,16 @@ class TradingAccessService:
             }
         )
 
+        count: int
         async with transactional_session(self.session) as tx_session:
             tx_repo = SymbolRepository(tx_session)
 
             if dto.type == "blacklist":
-                count = await tx_repo.remove_from_blacklist(
-                    exchange_name, user_id, dto.symbols
-                )
+                # TODO: Implement remove_from_blacklist in SymbolRepository
+                count = 0  # Placeholder until method is implemented
+                # count = await tx_repo.remove_from_blacklist(
+                #     exchange_name, user_id, dto.symbols
+                # )
             elif dto.type == "whitelist":
                 # TODO: Implement whitelist methods in repository
                 # count = await tx_repo.remove_from_whitelist(
@@ -307,7 +308,7 @@ class TradingAccessService:
 
                 # Remove all current symbols
                 if current:
-                    remove_dto = AccessListDto(type=dto.type, symbols=current)
+                    remove_dto = AccessListDto(type=dto.type, symbols=current, exchange_name=exchange_name, user_id=user_id)
                     await self.remove_from_access_list(exchange_name, user_id, remove_dto)
 
                 # Add new symbols
@@ -333,7 +334,8 @@ def get_list_from_file(file_name: str) -> List[str]:
             return []
 
         with open(file_path, 'r') as file:
-            return json.load(file)
+            result: List[str] = json.load(file)
+            return result
 
     except FileNotFoundError:
         logger.warning(f"File not found: {file_name}")
@@ -346,7 +348,7 @@ def get_list_from_file(file_name: str) -> List[str]:
         raise ConfigurationException(f"Failed to read file: {file_name}")
 
 
-def update_file(file_name: str, new_items: List[str], append: bool = False):
+def update_file(file_name: str, new_items: List[str], append: bool = False) -> None:
     """
     DEPRECATED: Use TradingAccessService instead.
 
@@ -369,7 +371,7 @@ def update_file(file_name: str, new_items: List[str], append: bool = False):
         raise ConfigurationException(f"Failed to write file: {file_name}")
 
 
-def remove_items_from_file(file_name: str, items_to_remove: List[str]):
+def remove_items_from_file(file_name: str, items_to_remove: List[str]) -> None:
     """
     DEPRECATED: Use TradingAccessService instead.
 

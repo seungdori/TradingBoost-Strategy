@@ -12,11 +12,26 @@ from datetime import datetime, timedelta
 from typing import Dict, List
 import psutil
 from shared.logging import get_logger
-from HYPERRSI.src.core.database import redis_client, check_redis_connection, reconnect_redis
+from HYPERRSI.src.core.database import check_redis_connection, reconnect_redis
 from .telegram_service import get_identifier
 from .utils import order_status_cache, ORDER_STATUS_CACHE_TTL, MEMORY_CLEANUP_INTERVAL
 
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
+
+
+# Module-level attribute for backward compatibility
+def __getattr__(name):
+    if name == "redis_client":
+        return _get_redis_client()
+    raise AttributeError(f"module has no attribute {name}")
 
 
 async def get_all_running_users() -> List[int]:

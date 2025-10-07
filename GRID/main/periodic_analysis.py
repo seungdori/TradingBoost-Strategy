@@ -1,86 +1,53 @@
 # -*- coding: utf-8 -*-
 
-from math import e
 import os
 import sys
 from datetime import datetime, timedelta
-import datetime as dt
 import pandas as pd
 import asyncio
-import pytz
+import pytz  # type: ignore[import-untyped]
 import ccxt.async_support as ccxt  # noqa: E402
 import random
 import traceback
 import numpy as np
 from pathlib import Path
-import aiohttp
 import time
 import logging
-import psutil
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from GRID.trading.instance_manager import get_exchange_instance, start_cleanup_task
-import fcntl
-from dateutil import parser
+from concurrent.futures import ProcessPoolExecutor
+from GRID.trading.instance_manager import get_exchange_instance
+from dateutil import parser  # type: ignore[import-untyped]
 from collections import defaultdict
-from redis.asyncio import Redis
 from GRID.database.redis_database import RedisConnectionManager
 import json
-import matplotlib.pyplot as plt
 import redis
-import ssl
-from shared.config import OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE  # 환경 변수에서 키 가져오기
 from shared.config import settings  # settings 추가
-from shared.utils import retry_async
 
 # Import from new modular structure
 from shared.indicators import (
     calculate_adx,
-    calc_rma as rma,
     compute_mama_fama,
 )
 from GRID.indicators import (
-    IndicatorState,
     get_indicator_state,
-    save_indicator_state,
-    calculate_adx_incremental,
-    atr_incremental,
-    compute_mama_fama_incremental,
-    compute_adx_state,
     map_4h_adx_to_15m,
     update_adx_state,
     atr,
     crossover,
     crossunder,
-    rising,
-    falling
 )
 from GRID.data import (
     get_cache,
     set_cache,
     get_ttl_for_timeframe,
-    get_cache_range,
-    save_ohlcv_to_redis,
-    save_indicators_to_redis,
-    save_grid_results_to_redis,
-    get_indicators_from_redis,
+    get_last_timestamp,
     get_all_okx_usdt_swap_symbols,
     get_all_okx_usdt_spot_symbols,
     get_all_binance_usdt_symbols,
     get_all_binance_usdt_spot_symbols,
-    get_all_upbit_krw_symbols,
-    fetch_symbols,
-    fetching_data,
-    fetch_ohlcvs,
-    fetch_all_ohlcvs,
-    fetch_symbol_data,
-    get_last_timestamp
+    get_all_upbit_krw_symbols
 )
 from GRID.utils import (
     parse_timeframe_to_ms,
-    convert_timestamp_millis_to_readable,
-    profile_cpu_and_time,
-    lock_file,
-    get_cached_data
 )
 from GRID.analysis import (
     calculate_ohlcv,
@@ -90,7 +57,6 @@ from GRID.analysis import (
     initialize_orders,
     calculate_grid_levels,
     execute_trading_logic,
-    enter_position
 )
 
 #================================================================
@@ -108,7 +74,7 @@ redis_client = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, d
 #================================================================
 
 global_semaphore = asyncio.Semaphore(50)  # 전체 시스템에서 동시에 50개의 요청만 처리
-symbol_semaphores = defaultdict(lambda: asyncio.Semaphore(10))  # 각 심볼당 최대 5개의 동시 요청
+symbol_semaphores: defaultdict[str, asyncio.Semaphore] = defaultdict(lambda: asyncio.Semaphore(10))  # 각 심볼당 최대 5개의 동시 요청
 
 
 #================================================================
@@ -238,7 +204,7 @@ async def calculate_grid_logic(direction, grid_num, symbol, exchange_name, user_
                     ohlcv_data = atr(ohlcv_data, 14)
                     ohlcv_data_4h = update_adx_state(ohlcv_data_4h)
                     ohlcv_data = map_4h_adx_to_15m(ohlcv_data_4h, ohlcv_data)
-                    mama, fama = compute_mama_fama(ohlcv_data['close'], length=20)
+                    _, fama = compute_mama_fama(ohlcv_data['close'], length=20)
                     ohlcv_data['main_plot'] = fama
                     ohlcv_data = initialize_orders(ohlcv_data, n_levels=grid_num)
                     calculated_data = calculate_grid_levels(ohlcv_data, n_levels=grid_num)
@@ -274,9 +240,8 @@ async def handle_symbol(exchange_instance, symbol, exchange_name, semaphore, exe
 
     async with semaphore:
         need_update = False
-        
+
         try:
-            symbol_name = symbol.replace("/", "")
             print(f"Analyzing {symbol}...")
             # 불필요한 대기 시간 줄이기
             await asyncio.sleep(random.uniform(0.2, 0.4))  # 0.4-0.7초에서 0.2-0.4초로 감소
@@ -346,10 +311,10 @@ async def handle_symbol(exchange_instance, symbol, exchange_name, semaphore, exe
                     # 비동기로 직접 계산 (로깅 추가)
                     print(f"Starting calculation for {symbol}...")
                     start_time = time.time()
-                    
+
                     # 직접 비동기 계산 호출
-                    df, results_by_direction = await calculate_ohlcv(exchange_name, symbol, ohlcv_data, ohlcv_data_4h)
-                    
+                    _, _ = await calculate_ohlcv(exchange_name, symbol, ohlcv_data, ohlcv_data_4h)
+
                     elapsed_time = time.time() - start_time
                     print(f"Calculation completed for {symbol} in {elapsed_time:.2f} seconds")
                     
@@ -380,15 +345,11 @@ async def handle_symbol(exchange_instance, symbol, exchange_name, semaphore, exe
 
 async def periodic_analysis(exchange_name, interval=14400):
     # 비동기로 실행할 모든 작업을 수행
-    exchange_instance = await get_exchange_instance(exchange_name, user_id=999999999)
+    exchange_instance = await get_exchange_instance(exchange_name, user_id='999999999')
     # 프로세스 풀 크기 증가
     executor = ProcessPoolExecutor(max_workers=8)  # 4에서 8로 증가
     # 세마포어 값 증가
-    semaphore_upbit = asyncio.Semaphore(5)  # 3에서 5로 증가
-    semaphore_binance = asyncio.Semaphore(5)  # 3에서 5로 증가 
     semaphore_okx = asyncio.Semaphore(5)  # 3에서 5로 증가
-    semaphore_bybit = asyncio.Semaphore(5)  # 3에서 5로 증가
-    semaphore_biget = asyncio.Semaphore(5)  # 3에서 5로 증가
     while True:  # running_event가 set 상태인 동안 실행
         start_time = asyncio.get_event_loop().time()
         await asyncio.sleep(1)

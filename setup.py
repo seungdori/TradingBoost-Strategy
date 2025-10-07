@@ -16,7 +16,7 @@ setup(
         "numpy>=1.26.2",
         "python-telegram-bot>=20.7",
         "sqlalchemy>=2.0.23",
-        "aiosqlite>=0.19.0",
+        "asyncpg>=0.29.0",  # PostgreSQL async driver
         "pydantic>=2.5.3",
         "pydantic-settings>=2.1.0",
         "python-dotenv>=1.0.0",

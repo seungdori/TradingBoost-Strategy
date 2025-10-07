@@ -2,7 +2,6 @@
 
 from HYPERRSI.src.trading.trading_service import round_to_tick_size
 from aiogram import types, Router, F
-import aiogram.exceptions
 from aiogram.filters import Command
 import logging
 import time
@@ -12,18 +11,22 @@ import ccxt.async_support as ccxt
 from datetime import datetime
 import traceback
 import httpx
-from HYPERRSI.src.core.database import redis_client
-from HYPERRSI.src.api.trading.trend_state_calculator import TrendStateCalculator
-from shared.utils import safe_float
-from HYPERRSI.src.trading.models import tf_mapping
+
 import datetime as dt
 import aiohttp
 import json
 router = Router()
 logger = logging.getLogger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
+
 from HYPERRSI.src.core.error_handler import log_error
-from HYPERRSI.src.bot.telegram_message import send_telegram_message
-from HYPERRSI.src.api.routes.user import get_telegram_id_from_okx_uid
 
 API_BASE_URL = "/api"
 allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267"]
@@ -519,7 +522,6 @@ async def handle_timeframe_selection(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     timeframe = callback.data.replace('select_timeframe_', '')
     preference_key = f"user:{user_id}:preferences"
-    preferences = await redis_client.hgetall(preference_key)
 
     await redis_client.set(f"user:{user_id}:selected_timeframe", timeframe)
     await redis_client.hset(preference_key, mapping={
@@ -831,7 +833,6 @@ async def handle_reset_callback(callback: types.CallbackQuery):
 async def status_command(message: types.Message):
     """현재 트레이딩 상태와 통계 표시"""
     user_id = message.from_user.id
-    stats_key = f"user:{user_id}:stats"
     okx_uid = await redis_client.get(f"user:{user_id}:okx_uid")
     if not is_allowed_user(okx_uid):
         await message.reply("⛔ 접근 권한이 없습니다.")
@@ -1000,14 +1001,6 @@ async def status_command(message: types.Message):
                     except Exception as e:
                         logger.warning(f"CCXT 클라이언트 종료 중 오류 발생: {str(e)}")
 
-        # 기존의 중복된 Redis 조회 부분 제거
-        tp_state_str = ''
-        if tp_state == '1':
-            tp_state_str = 'TP 상태 : TP1 달성'
-        elif tp_state == '2':
-            tp_state_str = 'TP 상태 : TP2 달성'
-        elif tp_state == '3':
-            tp_state_str = 'TP 상태 : TP3 달성'
         symbol_str = symbol.split('-')[0] if symbol else ""
         
         # 메시지 구성

@@ -50,7 +50,8 @@ async def get_bot_state(dto: BotStateKeyDto) -> Optional[BotStateDto]:
             exchange_name=dto.exchange_name,
             enter_strategy=dto.enter_strategy,
             user_id=dto.user_id,
-            is_running=is_running
+            is_running=is_running,
+            error=None
         )
     finally:
         await redis.close()

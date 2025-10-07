@@ -314,7 +314,7 @@ async def periodic_15m_logic(exchange_name, user_id, symbol_name, symbol, grid_n
                                             print(f"amount 확인 : {info['quantity']}. new_price : {new_price}")
                                             if info['quantity'] <= 0:
                                                 print(f'🚨익절물량이 0보다 작으므로 확인해봐야한다. 함수 시작saved : {saved_quantity}')
-                                                await telegram_message.send_telegram_message(f'🚨{symbol}의 {level} 익절물량이 0보다 작으므로 확인해봐야한다. 함수 시작saved : {saved_quantity}', exchange_name = 'upbit', user_id = user_id, debug = True)
+                                                await telegram_message.send_telegram_message(f'🚨{symbol}의 {level} 익절물량이 0보다 작으므로 확인해봐야한다. 함수 시작saved : {saved_quantity}', exchange_name = 'upbit', user_id = user_id, debug = True)  # type: ignore[call-arg]
 
                                             tp_order = await retry_async(strategy.place_order, exchange = exchange_instance, symbol=symbol_name,order_type='limit',side='sell',amount=info["quantity"],price=new_price)
                                         except Exception as e: 
@@ -335,7 +335,7 @@ async def periodic_15m_logic(exchange_name, user_id, symbol_name, symbol, grid_n
                                             order_id = tp_order['info'][key]
                                             break
                                     try:
-                                        asyncio.create_task(monitor_tp_orders_websocekts(exchange_name,symbol_name ,user_id, level, take_profit_orders_info))
+                                        asyncio.create_task(monitor_tp_orders_websocekts(user_id, exchange_name, symbol_name, take_profit_orders_info))
                                         await add_placed_price(exchange_name, user_id, symbol, new_price)
                                         await set_order_placed(exchange_name, user_id, symbol, grid_level, level_index=level_index)
                                         print(f"🔥여기에서, grid_level이 어떻게 표현되는지 확인. {grid_level}")
@@ -429,7 +429,7 @@ async def periodic_15m_logic(exchange_name, user_id, symbol_name, symbol, grid_n
                                     if 'info' in tp_order and key in tp_order['info']:
                                         order_id = tp_order['info'][key]
                                         break
-                                asyncio.create_task(monitor_tp_orders_websocekts(exchange_name,symbol_name ,user_id, level, take_profit_orders_info))
+                                asyncio.create_task(monitor_tp_orders_websocekts(user_id, exchange_name, symbol_name, take_profit_orders_info))
                                 #user_keys[user_id]["symbols"][symbol_name]["take_profit_orders_info"][level]['order_id'] = order_id
                                 #user_keys[user_id]["symbols"][symbol_name]["take_profit_orders_info"][level]['target_price'] = new_price
                                 #user_keys[user_id]["symbols"][symbol_name]["take_profit_orders_info"][level]['quantity'] = (info["quantity"])
@@ -558,7 +558,7 @@ async def periodic_15m_logic(exchange_name, user_id, symbol_name, symbol, grid_n
                                 await add_placed_price(exchange_name, user_id, symbol_name, price=new_price)
                                 await set_order_placed(exchange_name, user_id, symbol_name, new_price, level_index = level)
                                 await asyncio.sleep(random.uniform(0.05, order_buffer+0.1))
-                                asyncio.create_task(monitor_tp_orders_websocekts(exchange_name,symbol_name , user_id, level, take_profit_orders_info))
+                                asyncio.create_task(monitor_tp_orders_websocekts(user_id, exchange_name, symbol_name, take_profit_orders_info))
                                 orders_count += 1  # 주문 생성 후 수를 증가
                             else:
                                 pass
@@ -599,7 +599,7 @@ async def periodic_15m_logic(exchange_name, user_id, symbol_name, symbol, grid_n
                             target_price = max(new_price, current_price*1.005)
                             await update_take_profit_orders_info(redis, exchange_name,user_id,symbol_name,level,order_id,target_price,info["quantity"], True, side = 'sell')
                             await asyncio.sleep(random.uniform(0.05, order_buffer+0.1))
-                            asyncio.create_task(monitor_tp_orders_websocekts(exchange_name, symbol_name, user_id, level, take_profit_orders_info))
+                            asyncio.create_task(monitor_tp_orders_websocekts(user_id, exchange_name, symbol_name, take_profit_orders_info))
                             order_placed[level] = True
                             await add_placed_price(exchange_name, user_id, symbol_name, price=new_price)
                             await set_order_placed(exchange_name, user_id, symbol_name, new_price, level_index = level)

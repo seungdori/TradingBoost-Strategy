@@ -2,7 +2,7 @@ from HYPERRSI.src.core.celery_task import celery_app
 from HYPERRSI.src.trading.execute_trading_logic import execute_trading_logic
 import asyncio
 import logging
-from HYPERRSI.src.core.database import redis_client
+
 import traceback
 # from HYPERRSI.src.core.event_loop_manager import EventLoopManager  # 이벤트 루프 매니저 제거
 from datetime import datetime, timezone, timedelta
@@ -767,4 +767,12 @@ def cleanup_event_loop():
 
 # 프로세스 종료 시 이벤트 루프 정리 등록
 import atexit
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 atexit.register(cleanup_event_loop)

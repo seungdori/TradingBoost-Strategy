@@ -4,7 +4,7 @@ Trading Data Repository for PostgreSQL
 Handles Entry, TakeProfit, StopLoss, and WinRate operations.
 """
 
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from GRID.models.trading import Entry, TakeProfit, StopLoss, WinRate
@@ -38,7 +38,7 @@ class TradingDataRepositoryPG:
         self,
         exchange_name: str,
         symbol: str,
-        **kwargs
+        **kwargs: Any
     ) -> Entry:
         """
         Update or create entry data.
@@ -96,7 +96,7 @@ class TradingDataRepositoryPG:
         self,
         exchange_name: str,
         symbol: str,
-        **kwargs
+        **kwargs: Any
     ) -> TakeProfit:
         """
         Update or create take profit data.
@@ -154,7 +154,7 @@ class TradingDataRepositoryPG:
         self,
         exchange_name: str,
         symbol: str,
-        **kwargs
+        **kwargs: Any
     ) -> StopLoss:
         """
         Update or create stop loss data.
@@ -212,7 +212,7 @@ class TradingDataRepositoryPG:
         self,
         exchange_name: str,
         symbol: str,
-        **kwargs
+        **kwargs: Any
     ) -> WinRate:
         """
         Update or create win rate data.

@@ -53,7 +53,7 @@ async def check_user_exist_route(
             extra={
                 "exchange": exchange_name,
                 "user_exist": user_exist_dto.user_exist,
-                "user_count": len(user_exist_dto.user_ids)
+                "user_count": len(user_exist_dto.user_ids or [])
             }
         )
 
@@ -133,7 +133,7 @@ async def get_user_by_id_route(
                 extra={"exchange": exchange_name, "user_id": user_id}
             )
 
-            return ResponseDto[UserWithoutPasswordDto](
+            return ResponseDto[Optional[UserWithoutPasswordDto]](
                 success=True,
                 message=f"User ID [{user_id}] found",
                 data=UserWithoutPasswordDto.from_user_dto(user_dto=user),
@@ -144,7 +144,7 @@ async def get_user_by_id_route(
                 extra={"exchange": exchange_name, "user_id": user_id}
             )
 
-            return ResponseDto[None](
+            return ResponseDto[Optional[UserWithoutPasswordDto]](
                 success=False,
                 message=f"User ID [{user_id}] not found",
                 data=None

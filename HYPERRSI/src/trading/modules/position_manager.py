@@ -11,7 +11,7 @@ import traceback
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 
-from HYPERRSI.src.core.database import redis_client, TradingCache
+from HYPERRSI.src.core.database import TradingCache
 from HYPERRSI.src.trading.models import Position, OrderStatus
 from HYPERRSI.src.trading.stats import record_trade_history_entry, update_trade_history_exit
 from HYPERRSI.telegram_message import send_telegram_message
@@ -20,6 +20,12 @@ from shared.utils import safe_float, round_to_qty, get_minimum_qty, convert_bool
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
 
 
 class PositionManager:
@@ -189,6 +195,7 @@ class PositionManager:
             leverage: 레버리지 (기본값: 10.0)
             settings: 설정 정보
         """
+        redis_client = _get_redis_client()
         print(f"direction: {direction}, size: {size}, leverage: {leverage}, size : {size}")
         contracts_amount = size
         position_qty = await self.contract_size_to_qty(user_id, symbol, contracts_amount)

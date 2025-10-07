@@ -23,7 +23,8 @@ Both strategies support multiple cryptocurrency exchanges (OKX, Binance, Bitget,
 ### Technical Infrastructure
 - **Asynchronous Architecture**: Built on FastAPI with async/await patterns
 - **Distributed Task Processing**: Celery-based job queue with Redis backend
-- **Database Layer**: SQLite for development, PostgreSQL support for production
+- **Database Layer**: PostgreSQL for production (13 tables across both strategies) ✅
+- **Real-time Cache**: Redis for high-speed data access and Celery backend
 - **Real-time Notifications**: Telegram bot integration for trade alerts
 - **Process Management**: Multi-process architecture with graceful shutdown
 - **Monitoring & Logging**: Structured logging with log rotation and error tracking
@@ -190,7 +191,7 @@ REDIS_PASSWORD=  # Optional
 REDIS_DB=0
 
 # Database Configuration
-DATABASE_URL=sqlite:///./trading.db  # Development
+DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname  # Required
 # DATABASE_URL=postgresql://user:pass@host:5432/dbname  # Production
 
 # Telegram Bot

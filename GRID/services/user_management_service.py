@@ -452,7 +452,7 @@ async def check_api_permissions(exchange_name, user_id):
 
     try:
         exchange = await get_exchange_instance(exchange_name, user_id)
-        if exchange_name == 'okx':
+        if exchange is not None and exchange_name == 'okx':
             positions_data = await exchange.private_get_account_positions()
             logging.info(f"✅ {user_id} API 연결 확인: {exchange_name}")
     except Exception as e:

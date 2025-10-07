@@ -12,9 +12,10 @@ from HYPERRSI.src.api.exchange.models import (
     OrderSide
 )
 from HYPERRSI.src.trading.cancel_trigger_okx import TriggerCancelClient
-from HYPERRSI.src.core.database import redis_client  # Redis 클라이언트 가져오기
+  # Redis 클라이언트 가져오기
 import asyncio
-from shared.logging import get_logger, error_logger
+from shared.logging import get_logger
+from HYPERRSI.src.core.logger import error_logger
 from HYPERRSI.src.api.dependencies import get_exchange_context
 from pydantic import BaseModel
 import ccxt.async_support as ccxt
@@ -107,6 +108,14 @@ API_ENDPOINTS = {
 }
 
 logger = get_logger(__name__)
+
+# Dynamic redis_client access
+def _get_redis_client():
+    """Get redis_client dynamically to avoid import-time errors"""
+    from HYPERRSI.src.core import database as db_module
+    return db_module.redis_client
+
+redis_client = _get_redis_client()
 router = APIRouter(prefix="/order", tags=["order"])
 
 
