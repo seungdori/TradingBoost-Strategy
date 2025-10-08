@@ -1,8 +1,13 @@
+"""Binance 서비스 (통합 헬퍼 사용)
+
+이 파일은 shared.exchange.helpers를 사용하도록 업데이트되었습니다.
+"""
 from datetime import datetime, timedelta
 from typing import Any
 
 from shared.exchange_apis import exchange_store
 from shared.helpers.cache_helper import cache_expired
+from shared.exchange.helpers.wallet_helper import extract_binance_wallet_info
 
 CACHE_TIME_SECONDS = 25
 
@@ -13,7 +18,9 @@ binance_futures_mark_price_cache_expiry = datetime.now()
 
 
 def revalidate_binance_cache():
-    global binance_futures_account_balance_cache, binance_futures_account_balance_cache_expiry, binance_futures_mark_price_cache, binance_futures_mark_price_cache_expiry
+    """Binance 캐시 무효화"""
+    global binance_futures_account_balance_cache, binance_futures_account_balance_cache_expiry
+    global binance_futures_mark_price_cache, binance_futures_mark_price_cache_expiry
 
     binance_futures_account_balance_cache = None
     binance_futures_account_balance_cache_expiry = datetime.now()
@@ -21,9 +28,8 @@ def revalidate_binance_cache():
     binance_futures_mark_price_cache_expiry = datetime.now()
 
 
-# 바이낸스 선물 계좌 잔고 정보
 async def get_binance_futures_account_balance():
-    # Todo: refactor after
+    """Binance 선물 계좌 잔고 조회"""
     global binance_futures_account_balance_cache, binance_futures_account_balance_cache_expiry
     binance_client = exchange_store.get_binance_instance()
 
@@ -34,7 +40,9 @@ async def get_binance_futures_account_balance():
 
         futures_account_balance = await binance_client.fetch_balance()
         binance_futures_account_balance_cache = futures_account_balance
-        binance_futures_account_balance_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
+        binance_futures_account_balance_cache_expiry = datetime.now() + timedelta(
+            seconds=CACHE_TIME_SECONDS
+        )
         return futures_account_balance
 
     except Exception as e:
@@ -46,21 +54,17 @@ async def get_binance_futures_account_balance():
 
 
 async def get_binance_wallet():
+    """Binance 지갑 정보 조회 (통합 헬퍼 사용)"""
     try:
         balance_info = await get_binance_futures_account_balance()
-        total_balance = balance_info['info']['totalMarginBalance']  # 총 마진 잔액
-        total_wallet_balance = balance_info['info']['totalWalletBalance']  # 전체 지갑 잔액
-        total_unrealized_profit = balance_info['info']['totalUnrealizedProfit']  # 미실현 이익
-
-        return total_balance, total_wallet_balance, total_unrealized_profit
-
+        return extract_binance_wallet_info(balance_info)
     except Exception as e:
         print("binance", f"선물 계좌 잔고 정보 업데이트 중 오류 발생: {e}")
         raise e
 
 
 async def get_binance_tickers():
-    # Todo: refactor after
+    """Binance 티커 정보 조회"""
     global binance_futures_mark_price_cache, binance_futures_mark_price_cache_expiry
     client = exchange_store.get_binance_instance()
 
@@ -71,7 +75,9 @@ async def get_binance_tickers():
 
         tickers = await client.fetch_tickers()
         binance_futures_mark_price_cache = tickers
-        binance_futures_mark_price_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
+        binance_futures_mark_price_cache_expiry = datetime.now() + timedelta(
+            seconds=CACHE_TIME_SECONDS
+        )
         return tickers
 
     except Exception as e:
@@ -82,6 +88,7 @@ async def get_binance_tickers():
 
 
 async def fetch_binance_positions():
+    """Binance 포지션 조회"""
     print('[FETCH BINACE POSITIONS]')
     exchange = exchange_store.get_binance_instance()
     positions: list[Any] = []

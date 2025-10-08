@@ -15,14 +15,14 @@ class Position:
     contracts_amount: float
     entry_price: float
     leverage: float
-    position_qty: float = None
-    initial_size: float = None
-    contract_size: Optional[float] = None # 심볼 별로 contractSize로 나오는 것. 
-    tp_prices: List[float] = None
+    position_qty: Optional[float] = None
+    initial_size: Optional[float] = None
+    contract_size: Optional[float] = None # 심볼 별로 contractSize로 나오는 것.
+    tp_prices: Optional[List[float]] = None
     sl_price: Optional[float] = None
     order_id: Optional[str] = None  # 진입 주문 ID
     sl_order_id: Optional[str] = None  # SL 주문 ID
-    tp_order_ids: List[str] = None  # TP 주문 ID 리스트
+    tp_order_ids: Optional[List[str]] = None  # TP 주문 ID 리스트
     last_filled_price: Optional[float] = None  # 체결된 가격
     status: str = "open"  # 'open', 'closed', 'rejected' 등의 상태
     message: Optional[str] = None  # 오류 또는 상태 메시지

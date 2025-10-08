@@ -30,27 +30,32 @@ class OrderWrapper:
         if hasattr(self, 'exchange'):
             await self.exchange.close()
     
-    async def create_order(self, symbol: str, order_type: str, side: str, amount: float, 
+    async def create_order(self, symbol: str, order_type: str, side: str, amount: float,
                           price: Optional[float] = None, params: Optional[Dict] = None) -> Dict:
         """주문 생성"""
-        return await self.exchange.create_order(symbol, order_type, side, amount, price, params)
-    
+        result: Dict = await self.exchange.create_order(symbol, order_type, side, amount, price, params)
+        return result
+
     async def cancel_order(self, order_id: str, symbol: Optional[str] = None, params: Optional[Dict] = None) -> Dict:
         """주문 취소"""
-        return await self.exchange.cancel_order(order_id, symbol, params)
-    
+        result: Dict = await self.exchange.cancel_order(order_id, symbol, params)
+        return result
+
     async def fetch_order(self, order_id: str, symbol: str, params: Optional[Dict] = None) -> Dict:
         """주문 조회"""
-        return await self.exchange.fetch_order(order_id, symbol, params)
-    
+        result: Dict = await self.exchange.fetch_order(order_id, symbol, params)
+        return result
+
     async def fetch_positions(self, symbols: Optional[List[str]] = None, params: Optional[Dict] = None) -> List[Dict]:
         """포지션 조회"""
-        return await self.exchange.fetch_positions(symbols, params)
-    
-    async def fetch_open_orders(self, symbol: Optional[str] = None, since: Optional[int] = None, 
+        result: List[Dict] = await self.exchange.fetch_positions(symbols, params)
+        return result
+
+    async def fetch_open_orders(self, symbol: Optional[str] = None, since: Optional[int] = None,
                                limit: Optional[int] = None, params: Optional[Dict] = None) -> List[Dict]:
         """미체결 주문 조회"""
-        return await self.exchange.fetch_open_orders(symbol, since, limit, params)
+        result: List[Dict] = await self.exchange.fetch_open_orders(symbol, since, limit, params)
+        return result
     
     async def cancel_all_orders_for_symbol(self, symbol: str, side: Optional[str] = None) -> Dict:
         """특정 심볼의 모든 주문 취소"""
@@ -75,71 +80,63 @@ class OrderWrapper:
     
     async def fetch_balance(self, params: Optional[Dict] = None) -> Dict:
         """잔고 조회"""
-        return await self.exchange.fetch_balance(params)
-    
+        result: Dict = await self.exchange.fetch_balance(params)
+        return result
+
     async def fetch_ticker(self, symbol: str, params: Optional[Dict] = None) -> Dict:
         """현재가 조회"""
-        return await self.exchange.fetch_ticker(symbol, params)
-    
-    async def fetch_trades(self, symbol: str, since: Optional[int] = None, 
+        result: Dict = await self.exchange.fetch_ticker(symbol, params)
+        return result
+
+    async def fetch_trades(self, symbol: str, since: Optional[int] = None,
                           limit: Optional[int] = None, params: Optional[Dict] = None) -> List[Dict]:
         """거래 내역 조회"""
-        return await self.exchange.fetch_trades(symbol, since, limit, params)
-    
+        result: List[Dict] = await self.exchange.fetch_trades(symbol, since, limit, params)
+        return result
+
     async def set_leverage(self, leverage: int, symbol: str, params: Optional[Dict] = None) -> Dict:
         """레버리지 설정"""
-        return await self.exchange.set_leverage(leverage, symbol, params)
-    
-    # Private API methods
+        result: Dict = await self.exchange.set_leverage(leverage, symbol, params)
+        return result
+
+    # Private API methods - 모두 로컬 exchange 사용
     async def private_get_account_positions(self, params: Optional[Dict] = None) -> Dict:
         """계정 포지션 조회 (private API)"""
-        if self.use_backend:
-            return await self._backend_request("/account/positions", params=params)
-        else:
-            return await self.exchange.private_get_account_positions(params)
-    
+        result: Dict = await self.exchange.private_get_account_positions(params)
+        return result
+
     async def private_post_account_set_leverage(self, params: Dict) -> Dict:
         """레버리지 설정 (private API)"""
-        if self.use_backend:
-            return await self._backend_request("/account/set-leverage", method="POST", json_data=params)
-        else:
-            return await self.exchange.private_post_account_set_leverage(params)
-    
+        result: Dict = await self.exchange.private_post_account_set_leverage(params)
+        return result
+
     async def privateGetTradeOrdersAlgoPending(self, params: Optional[Dict] = None) -> Dict:
         """활성 알고리즘 주문 조회 (private API)"""
-        if self.use_backend:
-            return await self._backend_request("/trade/orders-algo-pending", params=params)
-        else:
-            return await self.exchange.private_get_trade_orders_algo_pending(params)
-    
+        result: Dict = await self.exchange.private_get_trade_orders_algo_pending(params)
+        return result
+
     async def privateGetTradeOrdersAlgoHistory(self, params: Optional[Dict] = None) -> Dict:
         """알고리즘 주문 히스토리 조회 (private API)"""
-        if self.use_backend:
-            return await self._backend_request("/trade/orders-algo-history", params=params)
-        else:
-            return await self.exchange.private_get_trade_orders_algo_history(params)
-    
+        result: Dict = await self.exchange.private_get_trade_orders_algo_history(params)
+        return result
+
     async def private_post_trade_cancel_algos(self, params: Dict) -> Dict:
         """알고리즘 주문 취소 (private API)"""
-        if self.use_backend:
-            return await self._backend_request("/trade/cancel-algos", method="POST", json_data=params)
-        else:
-            return await self.exchange.private_post_trade_cancel_algos(params)
-    
+        result: Dict = await self.exchange.private_post_trade_cancel_algos(params)
+        return result
+
     # Utility methods to mimic ccxt behavior
     def get_market(self, symbol: str) -> Dict:
         """시장 정보 가져오기"""
-        if not self.use_backend and hasattr(self.exchange, 'markets'):
-            return self.exchange.markets.get(symbol, {})
+        if hasattr(self.exchange, 'markets'):
+            result: Dict = self.exchange.markets.get(symbol, {})
+            return result
         return {}
-    
+
     @property
     def has(self) -> Dict:
         """지원 기능 확인"""
-        if not self.use_backend:
-            return self.exchange.has
-        # 백엔드 사용 시 기본값 반환
-        return {
+        return self.exchange.has if hasattr(self.exchange, 'has') else {
             'CORS': None,
             'spot': True,
             'margin': False,

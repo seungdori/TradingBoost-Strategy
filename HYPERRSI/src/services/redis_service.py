@@ -13,6 +13,7 @@ from typing import Optional, Dict, Any, List
 from prometheus_client import Counter, Histogram
 import time
 import os
+from fastapi import HTTPException
 
 from shared.utils import retry_decorator
 from shared.logging import get_logger
@@ -77,8 +78,8 @@ class RedisService:
         # 외부 redis 클라이언트가 제공된 경우, 그것을 사용
         if external_redis is not None:
             self._redis = external_redis
-            self._local_cache = {}  # 메모리 캐시 추가
-            self._cache_ttl = {}
+            self._local_cache: Dict[str, Any] = {}  # 메모리 캐시 추가
+            self._cache_ttl: Dict[str, float] = {}
             logger.info("RedisService initialized with external Redis client")
             return
             
@@ -125,19 +126,21 @@ class RedisService:
     def redis(self):
         return self._redis
 
-    async def ping(self):
+    async def ping(self) -> None:
         try:
+            if self._redis is None:
+                raise ConnectionError("Redis client not initialized")
             await self._redis.ping()
             logger.info("Redis connection established successfully")
         except ConnectionError as e:
             logger.error(f"Failed to connect to Redis: {str(e)}")
             raise
-    async def close(self):
+    async def close(self) -> None:
         if self._redis is not None:
             await self._redis.close()
             self._redis = None
     @property
-    def is_connected(self):
+    def is_connected(self) -> bool:
         if self._redis is None:
             return False
         try:
@@ -149,15 +152,19 @@ class RedisService:
             return False
     
     @retry_decorator(max_retries=3, delay=4.0, backoff=2.0)
-    async def get_user_settings(self, user_id: str) -> Optional[Dict]:
+    async def get_user_settings(self, user_id: str) -> Optional[Dict[str, Any]]:
         with self.operation_duration.time():
             try:
+                if self._redis is None:
+                    raise ConnectionError("Redis client not initialized")
+
                 # 먼저 로컬 캐시 확인
                 cache_key = f"user:{user_id}:settings"
                 if cache_key in self._local_cache:
                     if time.time() < self._cache_ttl.get(cache_key, 0):
                         self.cache_hits.inc()
-                        return self._local_cache[cache_key]
+                        cached_value: Dict[str, Any] = self._local_cache[cache_key]
+                        return cached_value
                     else:
                         del self._local_cache[cache_key]
                         del self._cache_ttl[cache_key]
@@ -168,7 +175,7 @@ class RedisService:
                     self.cache_misses.inc()
                     return None
 
-                user_settings = json.loads(settings)
+                user_settings: Dict[str, Any] = json.loads(settings)
                 updated = False
 
                 # 기본값 확인 및 업데이트
@@ -191,9 +198,12 @@ class RedisService:
                 raise
 
 
-    async def set_user_settings(self, user_id: str, settings: dict):
+    async def set_user_settings(self, user_id: str, settings: dict) -> None:
         with self.operation_duration.time():
             try:
+                if self._redis is None:
+                    raise ConnectionError("Redis client not initialized")
+
                 cache_key = f"user:{user_id}:settings"
                 # Redis 업데이트
                 await self._redis.set(cache_key, json.dumps(settings))
@@ -203,7 +213,7 @@ class RedisService:
             except Exception as e:
                 logger.error(f"Error setting user settings: {e}")
                 raise
-    async def get_multiple_user_settings(self, user_ids: list) -> Dict[str, Dict]:
+    async def get_multiple_user_settings(self, user_ids: List[str]) -> Dict[str, Optional[Dict[str, Any]]]:
         """
         여러 사용자의 설정을 한 번에 조회 (배치 작업 - 개선됨)
 
@@ -218,13 +228,16 @@ class RedisService:
         """
         with self.operation_duration.time():
             try:
+                if self._redis is None:
+                    raise ConnectionError("Redis client not initialized")
+
                 pipeline = self._redis.pipeline()
                 for user_id in user_ids:
                     pipeline.get(f"user:{user_id}:settings")
 
                 results = await pipeline.execute()
 
-                parsed_results = {}
+                parsed_results: Dict[str, Optional[Dict[str, Any]]] = {}
                 for user_id, result in zip(user_ids, results):
                     if result:
                         try:
@@ -245,7 +258,7 @@ class RedisService:
                 logger.error(f"Error in batch get_multiple_user_settings: {e}")
                 raise
 
-    async def set_multiple_user_settings(self, settings_dict: Dict[str, dict]):
+    async def set_multiple_user_settings(self, settings_dict: Dict[str, Dict[str, Any]]) -> None:
         """
         여러 사용자의 설정을 한 번에 저장 (배치 작업 - 신규)
 
@@ -256,6 +269,9 @@ class RedisService:
         """
         with self.operation_duration.time():
             try:
+                if self._redis is None:
+                    raise ConnectionError("Redis client not initialized")
+
                 pipeline = self._redis.pipeline()
                 for user_id, settings in settings_dict.items():
                     cache_key = f"user:{user_id}:settings"
@@ -283,9 +299,12 @@ class RedisService:
         """
         with self.operation_duration.time():
             try:
+                if self._redis is None:
+                    raise ConnectionError("Redis client not initialized")
+
                 # 먼저 로컬 캐시 확인
-                results = {}
-                missing_keys = []
+                results: Dict[str, Any] = {}
+                missing_keys: List[str] = []
 
                 for key in keys:
                     if key in self._local_cache:
@@ -327,7 +346,7 @@ class RedisService:
                 logger.error(f"Error in batch get_many: {e}")
                 raise
 
-    async def set_many(self, items: Dict[str, Any], ttl: int = 300):
+    async def set_many(self, items: Dict[str, Any], ttl: int = 300) -> None:
         """
         여러 키-값 쌍을 한 번에 저장 (범용 배치 작업 - 신규)
 
@@ -337,12 +356,15 @@ class RedisService:
         """
         with self.operation_duration.time():
             try:
+                if self._redis is None:
+                    raise ConnectionError("Redis client not initialized")
+
                 pipeline = self._redis.pipeline()
                 for key, value in items.items():
                     if isinstance(value, (dict, list)):
                         serialized = json.dumps(value)
                     else:
-                        serialized = value
+                        serialized = str(value)
                     pipeline.setex(key, ttl, serialized)
 
                     # 로컬 캐시 업데이트
@@ -356,7 +378,7 @@ class RedisService:
                 logger.error(f"Error in batch set_many: {e}")
                 raise
 
-    async def cleanup(self):
+    async def cleanup(self) -> None:
         """리소스 정리"""
         if self._redis is not None:
             await self._redis.close()
@@ -364,17 +386,17 @@ class RedisService:
         self._local_cache.clear()
         self._cache_ttl.clear()
         if self._pool is not None:
-            self._pool.disconnect()
+            await self._pool.disconnect()
             self._pool = None
 
 
 
 redis_service = RedisService()
 
-async def init_redis():
+async def init_redis() -> None:
     await redis_service.ping()
 
-def validate_settings(settings: dict) -> dict:
+def validate_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     """
     Validate user settings against constraints.
 
@@ -392,14 +414,17 @@ def validate_settings(settings: dict) -> dict:
         for key, constraint in SETTINGS_CONSTRAINTS.items():
             if key in settings:
                 val = settings[key]
-                if val < constraint['min'] or val > constraint['max']:
+                constraint_dict = constraint if isinstance(constraint, dict) else {}
+                min_val = constraint_dict.get('min', float('-inf'))
+                max_val = constraint_dict.get('max', float('inf'))
+                if val < min_val or val > max_val:
                     raise ValidationException(
                         f"Setting '{key}' value ({val}) is out of range",
                         details={
                             "key": key,
                             "value": val,
-                            "min": constraint['min'],
-                            "max": constraint['max']
+                            "min": min_val,
+                            "max": max_val
                         }
                     )
 
@@ -460,7 +485,7 @@ def validate_settings(settings: dict) -> dict:
             details={"error": str(e)}
         )
 
-async def update_user_settings(user_id: str, new_settings: dict) -> dict:
+async def update_user_settings(user_id: str, new_settings: Dict[str, Any]) -> Dict[str, Any]:
     existing_settings = await redis_service.get_user_settings(str(user_id))
     if existing_settings is None:
         existing_settings = DEFAULT_PARAMS_SETTINGS.copy()
@@ -469,47 +494,48 @@ async def update_user_settings(user_id: str, new_settings: dict) -> dict:
     await redis_service.set_user_settings(str(user_id), validated_settings)
     return validated_settings
 
-async def set_user_state(user_id: str, state: str) -> None:
-    await redis_service.set_user_state(str(user_id), state)
-
 class ApiKeyService:
     @staticmethod
-    async def get_user_api_keys(user_id: str) -> dict:
+    async def get_user_api_keys(user_id: str) -> Dict[str, str]:
         """
         사용자 ID를 기반으로 Redis에서 OKX API 키를 가져오는 함수
-        
+
         Args:
             user_id (str): 사용자 ID
-            
+
         Returns:
             dict: API 키 정보 (api_key, api_secret, passphrase)
-            
+
         Raises:
             HTTPException: API 키를 찾을 수 없거나 오류 발생 시
         """
         try:
             api_key_format = f"user:{user_id}:api:keys"
-            api_keys = await redis_client.hgetall(api_key_format)
-            
-            if not api_keys:
+            api_keys_result = await redis_client.hgetall(api_key_format)
+
+            if not api_keys_result:
                 raise HTTPException(status_code=404, detail="API keys not found in Redis")
-                
+
+            # Ensure we return a proper Dict[str, str]
+            api_keys: Dict[str, str] = {k: str(v) for k, v in api_keys_result.items()}
             return api_keys
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"2API 키 조회 실패: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error fetching API keys: {str(e)}")
-    
+
     @staticmethod
     async def set_user_api_keys(user_id: str, api_key: str, api_secret: str, passphrase: str) -> bool:
         """
         사용자 API 키 정보를 Redis에 저장
-        
+
         Args:
             user_id (str): 사용자 ID
             api_key (str): API 키
             api_secret (str): API 시크릿
             passphrase (str): API 패스프레이즈
-            
+
         Returns:
             bool: 성공 여부
         """

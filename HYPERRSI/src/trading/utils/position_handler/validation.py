@@ -1,0 +1,394 @@
+"""
+Position Handler Validation Module
+
+This module provides all pre-entry validation checks including margin blocks,
+cooldowns, position locks, and trend conditions.
+"""
+
+from typing import Tuple, Optional
+from HYPERRSI.src.trading.models import Position, get_timeframe
+from HYPERRSI.src.trading.utils.position_handler.core import get_redis_client
+from HYPERRSI.src.trading.utils.position_handler.constants import (
+    MARGIN_BLOCK_KEY,
+    COOLDOWN_KEY,
+    POSITION_LOCK_KEY,
+    ENTRY_FAIL_COUNT_KEY,
+    MAX_ENTRY_FAILURES,
+    TREND_STATE_STRONG_DOWNTREND,
+    TREND_STATE_STRONG_UPTREND,
+)
+from shared.logging import get_logger
+
+logger = get_logger(__name__)
+
+
+async def check_margin_block(user_id: str, symbol: str) -> bool:
+    """
+    Check if user has margin block status for a specific symbol.
+
+    A margin block indicates that the user has insufficient margin to open
+    new positions for this symbol.
+
+    Args:
+        user_id: User identifier
+        symbol: Trading symbol
+
+    Returns:
+        True if blocked, False if not blocked
+
+    Examples:
+        >>> await check_margin_block("user123", "BTC-USDT-SWAP")
+        False
+    """
+    redis_client = get_redis_client()
+    block_key = MARGIN_BLOCK_KEY.format(user_id=user_id, symbol=symbol)
+    block_status = await redis_client.get(block_key)
+    return block_status is not None
+
+
+async def check_entry_failure_limit(user_id: str) -> Tuple[bool, int]:
+    """
+    Check if entry failure count has exceeded the maximum limit.
+
+    Args:
+        user_id: User identifier
+
+    Returns:
+        Tuple of (exceeded: bool, current_count: int)
+
+    Examples:
+        >>> exceeded, count = await check_entry_failure_limit("user123")
+        >>> if exceeded:
+        ...     print(f"Too many failures: {count}")
+    """
+    redis_client = get_redis_client()
+    key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id)
+    fail_count = int(await redis_client.get(key) or 0)
+    exceeded = fail_count >= MAX_ENTRY_FAILURES
+    return exceeded, fail_count
+
+
+async def increment_entry_failure(user_id: str) -> int:
+    """
+    Increment the entry failure counter for a user.
+
+    Args:
+        user_id: User identifier
+
+    Returns:
+        New failure count
+    """
+    redis_client = get_redis_client()
+    key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id)
+    new_count = await redis_client.incr(key)
+    logger.warning(f"[{user_id}] Entry failure count increased to {new_count}")
+    return new_count
+
+
+async def reset_entry_failure(user_id: str) -> None:
+    """
+    Reset the entry failure counter for a user.
+
+    This should be called after a successful entry.
+
+    Args:
+        user_id: User identifier
+    """
+    redis_client = get_redis_client()
+    key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id)
+    await redis_client.delete(key)
+    logger.info(f"[{user_id}] Entry failure count reset")
+
+
+async def check_cooldown(user_id: str, symbol: str, side: str) -> Tuple[bool, int]:
+    """
+    Check if position entry is in cooldown period.
+
+    Cooldown prevents rapid consecutive entries for the same position.
+
+    Args:
+        user_id: User identifier
+        symbol: Trading symbol
+        side: Position side ("long" or "short")
+
+    Returns:
+        Tuple of (is_cooldown: bool, remaining_seconds: int)
+
+    Examples:
+        >>> is_cooldown, remaining = await check_cooldown("user123", "BTC-USDT-SWAP", "long")
+        >>> if is_cooldown:
+        ...     print(f"In cooldown for {remaining} seconds")
+    """
+    redis_client = get_redis_client()
+    cooldown_key = COOLDOWN_KEY.format(user_id=user_id, symbol=symbol, side=side)
+    is_cooldown = await redis_client.exists(cooldown_key)
+    remaining_time = await redis_client.ttl(cooldown_key) if is_cooldown else 0
+    return bool(is_cooldown), remaining_time
+
+
+async def check_position_lock(
+    user_id: str,
+    symbol: str,
+    side: str,
+    timeframe: str
+) -> Tuple[bool, int]:
+    """
+    Check if position entry is locked for this timeframe.
+
+    Position locks are timeframe-specific to prevent duplicate entries
+    within the same candle/timeframe interval.
+
+    Args:
+        user_id: User identifier
+        symbol: Trading symbol
+        side: Position side ("long" or "short")
+        timeframe: Timeframe string (e.g., "1m", "5m")
+
+    Returns:
+        Tuple of (is_locked: bool, remaining_seconds: int)
+
+    Examples:
+        >>> is_locked, remaining = await check_position_lock(
+        ...     "user123", "BTC-USDT-SWAP", "long", "5m"
+        ... )
+        >>> if is_locked:
+        ...     print(f"Position locked for {remaining} more seconds")
+    """
+    redis_client = get_redis_client()
+    tf_str = get_timeframe(timeframe)
+
+    lock_key = POSITION_LOCK_KEY.format(
+        user_id=user_id,
+        symbol=symbol,
+        side=side,
+        timeframe=tf_str
+    )
+
+    is_locked = await redis_client.exists(lock_key)
+    remaining_time = await redis_client.ttl(lock_key) if is_locked else 0
+
+    if is_locked:
+        logger.info(
+            f"[{user_id}] Position locked for {symbol} {side} on {tf_str}. "
+            f"Remaining: {remaining_time}s"
+        )
+
+    return bool(is_locked), remaining_time
+
+
+async def check_any_direction_locked(
+    user_id: str,
+    symbol: str,
+    timeframe: str
+) -> Tuple[bool, Optional[str], int]:
+    """
+    Check if either long or short position is locked for this timeframe.
+
+    This is used in the initial entry logic to prevent opening any position
+    if either direction is locked.
+
+    Args:
+        user_id: User identifier
+        symbol: Trading symbol
+        timeframe: Timeframe string
+
+    Returns:
+        Tuple of (is_locked: bool, locked_direction: Optional[str], remaining_seconds: int)
+
+    Examples:
+        >>> is_locked, direction, remaining = await check_any_direction_locked(
+        ...     "user123", "BTC-USDT-SWAP", "5m"
+        ... )
+        >>> if is_locked:
+        ...     print(f"{direction} position is locked for {remaining}s")
+    """
+    redis_client = get_redis_client()
+    tf_str = get_timeframe(timeframe)
+
+    # Check long lock first
+    long_lock_key = POSITION_LOCK_KEY.format(
+        user_id=user_id,
+        symbol=symbol,
+        side="long",
+        timeframe=tf_str
+    )
+
+    try:
+        is_long_locked = await redis_client.exists(long_lock_key)
+        if is_long_locked:
+            remaining = await redis_client.ttl(long_lock_key)
+            return True, "long", remaining
+
+        # Check short lock
+        short_lock_key = POSITION_LOCK_KEY.format(
+            user_id=user_id,
+            symbol=symbol,
+            side="short",
+            timeframe=tf_str
+        )
+
+        is_short_locked = await redis_client.exists(short_lock_key)
+        if is_short_locked:
+            remaining = await redis_client.ttl(short_lock_key)
+            return True, "short", remaining
+
+        return False, None, 0
+
+    except Exception as e:
+        logger.error(f"[{user_id}] Error checking position locks: {str(e)}")
+        return False, None, 0
+
+
+async def validate_position_response(
+    position: Optional[Position],
+    user_id: str,
+    side: str,
+    operation: str = "entry"
+) -> None:
+    """
+    Validate that a position creation/update response is valid.
+
+    This function performs comprehensive validation of position objects
+    returned from exchange API calls to ensure they are usable.
+
+    Args:
+        position: Position object to validate (can be None)
+        user_id: User identifier (for logging)
+        side: Position side ("long" or "short")
+        operation: Operation type for error messages (e.g., "entry", "DCA")
+
+    Raises:
+        ValueError: If position is invalid with detailed error message
+
+    Examples:
+        >>> try:
+        ...     await validate_position_response(position, "user123", "long")
+        ... except ValueError as e:
+        ...     logger.error(f"Position invalid: {e}")
+    """
+    # Check if position is None
+    if position is None:
+        error_msg = f"Position {operation} failed - position object is None"
+        logger.warning(f"[{user_id}] {error_msg}")
+        raise ValueError(error_msg)
+
+    # Check for margin_blocked error state
+    if hasattr(position, 'order_id') and position.order_id == "margin_blocked":
+        error_msg = f"Position {operation} failed - insufficient margin (margin_blocked)"
+        logger.warning(f"[{user_id}] {error_msg}")
+        raise ValueError(error_msg)
+
+    # Validate position size
+    if not hasattr(position, 'size') or position.size <= 0:
+        size_value = getattr(position, 'size', None)
+        error_msg = f"Position {operation} failed - invalid position size ({size_value})"
+        logger.warning(f"[{user_id}] {error_msg}")
+        raise ValueError(error_msg)
+
+    # Validate entry price
+    if not hasattr(position, 'entry_price') or position.entry_price <= 0:
+        entry_value = getattr(position, 'entry_price', None)
+        error_msg = f"Position {operation} failed - invalid entry price ({entry_value})"
+        logger.warning(f"[{user_id}] {error_msg}")
+        raise ValueError(error_msg)
+
+    # If all checks pass, position is valid
+    logger.debug(
+        f"[{user_id}] Position validation passed - {side} {operation} "
+        f"size: {position.size}, entry: {position.entry_price}"
+    )
+
+
+async def should_enter_with_trend(
+    settings: dict,
+    current_state: int,
+    side: str
+) -> Tuple[bool, str]:
+    """
+    Check if position entry should proceed based on trend conditions.
+
+    This implements trend-based entry filtering where entries may be
+    restricted during strong counter-trends.
+
+    Args:
+        settings: User settings containing 'use_trend_logic' flag
+        current_state: Current trend state (-2 to +2)
+        side: Position side to check ("long" or "short")
+
+    Returns:
+        Tuple of (should_enter: bool, reason: str)
+
+    Examples:
+        >>> should_enter, reason = await should_enter_with_trend(
+        ...     {"use_trend_logic": True}, -2, "long"
+        ... )
+        >>> if not should_enter:
+        ...     print(f"Entry blocked: {reason}")
+
+    Trend States:
+        -2: Strong downtrend (blocks long entries if trend logic enabled)
+        -1: Downtrend
+         0: Neutral
+         1: Uptrend
+         2: Strong uptrend (blocks short entries if trend logic enabled)
+    """
+    use_trend_logic = settings.get('use_trend_logic', True)
+
+    # If trend logic is disabled, always allow entry
+    if not use_trend_logic:
+        return True, "Trend logic disabled"
+
+    # Long position checks
+    if side == "long":
+        if current_state == TREND_STATE_STRONG_DOWNTREND:
+            return False, "Strong downtrend detected - long entry blocked"
+        return True, "Trend condition satisfied for long"
+
+    # Short position checks
+    elif side == "short":
+        if current_state == TREND_STATE_STRONG_UPTREND:
+            return False, "Strong uptrend detected - short entry blocked"
+        return True, "Trend condition satisfied for short"
+
+    # Unknown side
+    else:
+        logger.warning(f"Unknown side '{side}' in trend check")
+        return False, f"Invalid side: {side}"
+
+
+async def check_dual_side_entry_allowed(
+    user_id: str,
+    symbol: str,
+    intended_side: str,
+    settings: dict
+) -> Tuple[bool, str]:
+    """
+    Check if dual-side entry is allowed based on settings and current positions.
+
+    This validates whether opening a position in the opposite direction
+    is permitted based on dual-side trading configuration.
+
+    Args:
+        user_id: User identifier
+        symbol: Trading symbol
+        intended_side: Side attempting to open ("long" or "short")
+        settings: User settings containing dual-side configuration
+
+    Returns:
+        Tuple of (is_allowed: bool, reason: str)
+    """
+    redis_client = get_redis_client()
+
+    # Check if dual-side trading is enabled
+    use_dual_side = await redis_client.hget(f"user:{user_id}:dual_side", "use_dual_side_entry")
+
+    if not use_dual_side or use_dual_side == "false":
+        # Dual-side disabled - check if opposite position exists
+        opposite_side = "short" if intended_side == "long" else "long"
+        opposite_key = f"user:{user_id}:position:{symbol}:{opposite_side}"
+        has_opposite = await redis_client.exists(opposite_key)
+
+        if has_opposite:
+            return False, f"Dual-side disabled but {opposite_side} position exists"
+
+    return True, "Dual-side check passed"

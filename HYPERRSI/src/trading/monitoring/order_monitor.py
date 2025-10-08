@@ -9,11 +9,12 @@ import json
 import time
 import traceback
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional, Any
 from shared.logging import get_logger, log_order
 
 from HYPERRSI.src.api.dependencies import get_exchange_context
-from HYPERRSI.src.api.routes.order import get_order_detail, get_algo_order_info, close_position, ClosePositionRequest
+from HYPERRSI.src.api.routes.order.order import get_order_detail, get_algo_order_info, close_position
+from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
 from shared.utils import contracts_to_qty
 from .telegram_service import get_identifier, send_telegram_message
 from .utils import order_status_cache, ORDER_STATUS_CACHE_TTL, get_actual_order_type, is_true_value
@@ -38,10 +39,10 @@ def __getattr__(name):
     raise AttributeError(f"module has no attribute {name}")
 
 
-async def check_missing_orders(user_id: str, symbol: str, current_orders: List):
+async def check_missing_orders(user_id: str, symbol: str, current_orders: List) -> None:
     """
     사라진 주문들이 체결되었는지 확인하여 알림을 보냅니다.
-    
+
     Args:
         user_id: 사용자 ID
         symbol: 거래 심볼
@@ -138,7 +139,7 @@ async def check_missing_orders(user_id: str, symbol: str, current_orders: List):
         traceback.print_exc()
 
 
-async def check_recent_filled_orders(user_id: str, symbol: str):
+async def check_recent_filled_orders(user_id: str, symbol: str) -> None:
     """
     최근 체결된 주문들을 확인하여 놓친 알림이 있는지 체크합니다.
     """
@@ -199,7 +200,7 @@ async def check_recent_filled_orders(user_id: str, symbol: str):
         traceback.print_exc()
 
 
-async def check_order_status(user_id: str, symbol: str, order_id: str, order_type: str = None) -> Dict:
+async def check_order_status(user_id: str, symbol: str, order_id: str, order_type: Optional[str] = None) -> Dict[Any, Any]:
     """
     거래소 API를 통해 주문 상태를 확인합니다.
     
@@ -225,7 +226,7 @@ async def check_order_status(user_id: str, symbol: str, order_id: str, order_typ
             cached_time, cached_result = order_status_cache[cache_key]
             if current_time - cached_time < ORDER_STATUS_CACHE_TTL:
                 #logger.debug(f"캐시된 주문 상태 사용: {order_id} (캐시 유효 시간: {ORDER_STATUS_CACHE_TTL - (current_time - cached_time):.1f}초)")
-                return cached_result
+                return dict(cached_result)
             
         # TP 주문(tp1, tp2, tp3)은 일반 리밋 주문으로 처리
         is_algo = True
@@ -241,6 +242,7 @@ async def check_order_status(user_id: str, symbol: str, order_id: str, order_typ
         
         try:
             # src/api/routes/order.py의 get_order_detail 함수 사용
+            response: Any
             if is_algo:
                 response = await get_algo_order_info(
                     user_id=str(okx_uid),
@@ -254,7 +256,7 @@ async def check_order_status(user_id: str, symbol: str, order_id: str, order_typ
                     user_id=str(okx_uid),
                     symbol=symbol,
                     is_algo=is_algo,
-                    algo_type= None
+                    algo_type=""
                 )
             
             if response:
@@ -265,10 +267,10 @@ async def check_order_status(user_id: str, symbol: str, order_id: str, order_typ
                     result = response.dict()
                 else:
                     result = dict(response)
-                
+
                 # 결과 캐싱
                 order_status_cache[cache_key] = (current_time, result)
-                return result
+                return dict(result)
                 
         except Exception as detail_error:
             # 404 오류이거나 '찾을 수 없음' 오류인 경우
@@ -325,7 +327,7 @@ async def check_order_status(user_id: str, symbol: str, order_id: str, order_typ
                                 result = algo_orders['data'][0]
                                 # 결과 캐싱
                                 order_status_cache[cache_key] = (current_time, result)
-                                return result
+                                return dict(result)
                             else:
                                 # 주문이 없는 경우 취소된 것으로 처리
                                 logger.info(f"알고리즘 주문이 존재하지 않음 (취소됨): {order_id}")
@@ -345,7 +347,7 @@ async def check_order_status(user_id: str, symbol: str, order_id: str, order_typ
                                 order_info = await exchange.fetch_order(order_id, symbol)
                                 # 결과 캐싱
                                 order_status_cache[cache_key] = (current_time, order_info)
-                                return order_info
+                                return dict(order_info)
                             except Exception as fetch_error:
                                 error_str = str(fetch_error).lower()
                                 # 주문이 찾을 수 없는 경우 취소된 것으로 처리
@@ -422,7 +424,7 @@ async def check_order_status(user_id: str, symbol: str, order_id: str, order_typ
         return result
 
 
-async def update_order_status(user_id: str, symbol: str, order_id: str, status: str, filled_amount: str = "0", order_type: str = None) -> None:
+async def update_order_status(user_id: str, symbol: str, order_id: str, status: str, filled_amount: str = "0", order_type: Optional[str] = None) -> None:
     """
     주문 상태를 업데이트합니다.
     
@@ -609,8 +611,8 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                         
                         # 직접 알림 메시지 구성 및 전송
                         if order_type and isinstance(order_type, str) and order_type.startswith("tp"):
-                            tp_level = order_type[2:] if len(order_type) > 2 else "1"
-                            title = f"🟢 익절(TP{tp_level}) 체결 완료"
+                            tp_level_str = order_type[2:] if len(order_type) > 2 else "1"
+                            title = f"🟢 익절(TP{tp_level_str}) 체결 완료"
                         elif order_type == "sl":
                             title = f"🔴 손절(SL) 체결 완료"
                         else:
@@ -655,8 +657,8 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
             position_data = await redis_client.hgetall(position_key)
             position_qty = f"{float(position_data.get('position_qty', '0')):.4f}"
             is_hedge = is_true_value(position_data.get("is_hedge", "false"))
-            
-            filled_qty = await contracts_to_qty(symbol = symbol, contracts = filled_contracts)
+
+            filled_qty = await contracts_to_qty(symbol=symbol, contracts=int(filled_contracts))
             
             # 메시지 구성 (주문 유형별 맞춤형 메시지)
             status_emoji = "✅" if status == "filled" else "❌"
@@ -702,16 +704,16 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                     else:
                         title = f"🔴 손절(SL) {status_text}"
                 elif order_type and isinstance(order_type, str) and order_type.startswith("tp"):
-                    tp_level = order_type[2:] if len(order_type) > 2 else "1"
-                    title = f"🟢 익절(TP{tp_level}) {status_text}"
+                    tp_level_str = order_type[2:] if len(order_type) > 2 else "1"
+                    title = f"🟢 익절(TP{tp_level_str}) {status_text}"
                 else:
                     title = f"{status_emoji} 주문 {status_text}"
             else:
                 if order_type == "sl":
                     title = f"⚠️ 손절(SL) 주문 {status_text}"
                 elif order_type and isinstance(order_type, str) and order_type.startswith("tp"):
-                    tp_level = order_type[2:] if len(order_type) > 2 else "1"
-                    title = f"⚠️ 익절(TP{tp_level}) 주문 {status_text}"
+                    tp_level_str = order_type[2:] if len(order_type) > 2 else "1"
+                    title = f"⚠️ 익절(TP{tp_level_str}) 주문 {status_text}"
                 else:
                     title = f"{status_emoji} 주문 {status_text}"
             
@@ -756,9 +758,9 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                 f"방향: {position_side.upper()}\n"
                 f"체결가격: {round(float(price), 3)}\n"
             )
-            
+
             # 체결수량이 0보다 클 때만 메시지에 추가
-            if float(filled_qty) > 0:
+            if filled_qty is not None and float(filled_qty) > 0:
                 message += f"체결수량: {round(float(filled_qty), 4)}{pnl_text}"
 
 
@@ -818,8 +820,8 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                             
                 except Exception as time_check_error:
                     logger.error(f"TP 체결 시간 확인 중 오류: {str(time_check_error)}, 알림 계속 진행")
-                
-                tp_level = int(order_type[2:]) if len(order_type) > 2 and order_type[2:].isdigit() else 1
+
+                tp_level: int = int(order_type[2:]) if len(order_type) > 2 and order_type[2:].isdigit() else 1
                 tp_queue_key = f"tp_queue:user:{okx_uid}:{symbol}:{position_side}"
                 
                 logger.info(f"TP{tp_level} 큐 처리 시작 - 큐 키: {tp_queue_key}")
@@ -883,8 +885,8 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                 
                 # 순서대로 처리 가능한 TP들 찾기
                 expected_next = 1
-                processable_tps = []
-                
+                processable_tps: List[int] = []
+
                 for tp_num in completed_tps:
                     if tp_num == expected_next:
                         processable_tps.append(tp_num)
@@ -970,7 +972,7 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                         action_type=action_type,
                         position_side=position_side,
                         price=price,
-                        quantity=float(filled_qty),
+                        quantity=float(filled_qty) if filled_qty is not None else 0.0,
                         tp_index= 1 if tp_index == 1 else (int(tp_index)-1) if order_type.startswith("tp") else None,
                         is_hedge=is_true_value(is_hedge),
                         pnl_percent=pnl_percent,
@@ -1015,10 +1017,10 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                         await send_telegram_message(f"브레이크이븐 종료 오류!!!: {str(e)}", okx_uid, debug = True)
             # TP 주문이 체결된 경우 tp_state 업데이트
             if order_type and order_type.startswith("tp") and status == "filled":
-                tp_level = order_type[2:] if len(order_type) > 2 else "1"
-                if tp_level.isdigit() and int(tp_level) > 0:
-                    await redis_client.hset(position_key, "tp_state", tp_level)
-                    logger.info(f"tp_state 업데이트: {user_id} {symbol} TP{tp_level} 체결됨")
+                tp_level_str_update = order_type[2:] if len(order_type) > 2 else "1"
+                if tp_level_str_update.isdigit() and int(tp_level_str_update) > 0:
+                    await redis_client.hset(position_key, "tp_state", tp_level_str_update)
+                    logger.info(f"tp_state 업데이트: {user_id} {symbol} TP{tp_level_str_update} 체결됨")
             
     
     except Exception as e:

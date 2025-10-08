@@ -2,7 +2,7 @@
 
 import json
 import traceback
-from typing import Optional
+from typing import Optional, Dict, Any
 import os
 from datetime import datetime
 import ccxt
@@ -10,12 +10,13 @@ from shared.utils import contracts_to_qty
 from HYPERRSI.src.trading.trading_service import TradingService
 from shared.utils.redis_type_converter import prepare_for_redis, parse_from_redis, DUAL_SIDE_SETTINGS_SCHEMA
 from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
-from HYPERRSI.src.api.routes.order import close_position
+from HYPERRSI.src.api.routes.order.order import close_position
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.trading.error_message import map_exchange_error
 from shared.logging import get_logger, log_order
 from HYPERRSI.src.core.logger import log_dual_side_debug
-from HYPERRSI.src.api.routes.order import ClosePositionRequest, cancel_algo_orders
+from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
+from HYPERRSI.src.api.routes.order.order import cancel_algo_orders
 from HYPERRSI.src.core.error_handler import log_error
 from HYPERRSI.src.services.redis_service import RedisService, redis_client
 from shared.utils.task_tracker import TaskTracker
@@ -27,7 +28,7 @@ redis_service = RedisService()
 task_tracker = TaskTracker(name="dual-side-entry")
 
 
-async def set_default_dual_side_entry_settings(user_id: str):
+async def set_default_dual_side_entry_settings(user_id: str) -> bool:
     """
     양방향 진입 설정값들을 기본값으로 설정
     """
@@ -48,20 +49,20 @@ async def get_last_dca_level(user_id: str, symbol: str, position_side: str) -> f
     try:
         dca_key = f"user:{user_id}:position:{symbol}:{position_side}:dca_levels"
         dca_levels = await redis_client.lrange(dca_key, 0, -1)
-        
+
         if not dca_levels:
             return None
-            
+
         # 문자열 리스트를 float로 변환
-        dca_levels = [float(level) for level in dca_levels]
-        
+        dca_levels_float = [float(level) for level in dca_levels]
+
         # long 포지션이면 가장 낮은 값이 마지막 DCA
         # short 포지션이면 가장 높은 값이 마지막 DCA
         if position_side == "long":
-            return min(dca_levels)
+            return float(min(dca_levels_float))
         else:  # short
-            return max(dca_levels)
-            
+            return float(max(dca_levels_float))
+
     except Exception as e:
         logger.error(f"Error getting last DCA level: {e}")
         return None
@@ -111,7 +112,9 @@ async def get_pyramiding_limit(user_id: str) -> int:
     user:{user_id}:settings에서 pyramiding_limit 읽어오기
     """
     settings = await redis_service.get_user_settings(user_id)
-    pyramiding_limit = settings.get('pyramiding_limit', 1)
+    if settings is None:
+        return 1
+    pyramiding_limit: int = int(settings.get('pyramiding_limit', 1))
     return pyramiding_limit
 
 
@@ -358,17 +361,16 @@ async def manage_dual_side_entry(
         if (close_on_last_dca and is_last_dca):
             print("최종 DCA에 헷징포지션을 종료")
             # 헷지 포지션 종료
-            request = ClosePositionRequest(
-                close_type = 'market',
-                user_id=user_id,
-                close_percent=100
+            close_request = ClosePositionRequest(
+                close_type='market',
+                close_percent=100.0
             )
             try:
-                response = await close_position(symbol, request, user_id, opposite_side)
-                
+                response = await close_position(symbol, close_request, user_id, opposite_side)
+
                 # 종료 포지션 결과
                 closed_amount = response.amount
-                closed_position_qty = await contracts_to_qty(symbol, closed_amount)
+                closed_position_qty = await contracts_to_qty(symbol, int(closed_amount))
                 
                 # 양방향 종료 로깅
                 try:
@@ -416,13 +418,14 @@ async def manage_dual_side_entry(
                     main_position = await trading_service.get_current_position(user_id, symbol, main_position_side)
                     if not main_position:
                         logger.warning(f"[{user_id}] DCA 후 메인 포지션 정보를 찾을 수 없음")
-                                        
+                        return
+
                     # 메인 포지션의 반대 방향
                     opposite_side = "long" if main_position_side == "short" else "short"
-                    
+
                     # 현재 헷지 포지션 확인
                     hedge_position = await trading_service.get_current_position(user_id, symbol, opposite_side)
-                    
+
                     # 헷지 포지션이 있는 경우에만 재계산
                     if hedge_position and hedge_position.size > 0.03:
                         log_dual_side_debug(
@@ -434,7 +437,7 @@ async def manage_dual_side_entry(
                             main_position=main_position.__dict__ if hasattr(main_position, '__dict__') else main_position,
                             hedge_position=hedge_position.__dict__ if hasattr(hedge_position, '__dict__') else hedge_position
                         )
-                        
+
                         # 메인 포지션 정보 변환
                         main_position_dict = {
                             "avg_price": main_position.entry_price if hasattr(main_position, 'entry_price') else current_price,
@@ -488,7 +491,7 @@ async def manage_dual_side_entry(
             # (G-2) 헷지 포지션 오픈
 
             try:
-                request = OpenPositionRequest(
+                open_request = OpenPositionRequest(
                     user_id=user_id,
                     symbol=symbol,
                     direction=opposite_side,
@@ -496,23 +499,23 @@ async def manage_dual_side_entry(
                     leverage=settings.get('leverage', 1.0),
                     take_profit=None,
                     stop_loss=None,
-                    settings=settings,
-                    is_DCA = False,
-                    is_hedge = True,
-                    hedge_tp_price = hedge_tp_price,
-                    hedge_sl_price = hedge_sl_price
+                    order_concept='',
+                    is_DCA=False,
+                    is_hedge=True,
+                    hedge_tp_price=hedge_tp_price,
+                    hedge_sl_price=hedge_sl_price
                 )
-                
+
                 log_dual_side_debug(
                     user_id=user_id,
                     symbol=symbol,
                     function_name='manage_dual_side_entry',
                     message='헷지 포지션 오픈 요청 준비됨',
                     level='DEBUG',
-                    request=request.__dict__
+                    request=open_request.__dict__
                 )
-                
-                entry_result = await open_position_endpoint(request)
+
+                entry_result = await open_position_endpoint(open_request)
                 
                 try:
                     log_dual_side_debug(
@@ -569,7 +572,7 @@ async def manage_dual_side_entry(
             logger.info(f"[manage_dual_side_entry] 헷지 포지션 오픈 결과: {entry_result}")
             entry_amount = entry_result.size
             if entry_amount <= 0.02:
-                logger.error(f"[manage_dual_side_entry] 헷지 포지션 오픈 실패: {str(e)}")
+                logger.error(f"[manage_dual_side_entry] 헷지 포지션 오픈 실패: entry_amount={entry_amount}")
                 return
             contract_size = await trading_service.get_contract_size(symbol)
             new_entering_position = entry_amount * contract_size
@@ -684,18 +687,18 @@ async def calculate_hedge_sl_tp(
     symbol: str,
     main_position_side: str,  # "long" 또는 "short"
     dual_side_settings: dict,
-    trading_service: TradingService = None
+    trading_service: Optional[TradingService] = None
 ) -> tuple[float | None, float | None]:
     """
     헷지 포지션의 SL/TP 가격을 계산합니다.
-    
+
     Args:
         user_id: 사용자 ID
         symbol: 거래 심볼
         main_position_side: 메인 포지션 방향
         settings: 사용자 설정
         trading_service: 트레이딩 서비스 인스턴스
-        
+
     Returns:
         tuple: (SL 가격, TP 가격) 쌍
     """
@@ -709,11 +712,10 @@ async def calculate_hedge_sl_tp(
             main_position_side=main_position_side,
             settings=dual_side_settings
         )
-        
+
         # (1) 트레이딩 서비스 인스턴스가 없으면 생성
         if not trading_service:
-            from HYPERRSI.src.trading.trading_service import get_trading_service
-            trading_service = await get_trading_service()
+            trading_service = TradingService()
             
             log_dual_side_debug(
                 user_id=user_id,
@@ -842,11 +844,11 @@ async def calculate_hedge_sl_tp(
 async def update_hedge_sl_tp_after_dca(
     user_id: str,
     symbol: str,
-    exchange: ccxt.Exchange,          # ccxt 익스체인지 객체    
+    exchange: ccxt.Exchange,          # ccxt 익스체인지 객체
     main_position: dict,
     hedge_position: dict,
     settings: dict,
-):
+) -> None:
     """
     - 메인 포지션에 추가 DCA가 체결된 뒤(평단 or SL/TP 변경),
       헷지 포지션의 SL/TP를 다시 계산해서 취소 후 재생성하는 예시 함수
@@ -1061,14 +1063,14 @@ async def recalc_hedge_sl_tp(
         tp_prices = main_position.get("tp_prices", [])
         main_first_tp = tp_prices[0] if tp_prices else None
         main_avg_price = main_position.get("avg_price", main_position.get("entry_price"))
-        
+
         # 헷지 포지션 정보
         hedge_side = hedge_position.get("side")
-        
+
         # 기본값 설정
         hedge_sl_price = None
         hedge_tp_price = None
-        
+
         # SL 계산 (사용자 설정에 따라 계산)
         if use_dual_sl:
             if sl_trigger_type == "existing_position":
@@ -1076,14 +1078,15 @@ async def recalc_hedge_sl_tp(
                 hedge_sl_price = main_first_tp
             else:
                 # "percent" 모드 - 평단가에서 일정 비율 떨어진 가격
-                if hedge_side == "short":
-                    # 헷지 숏 => 손절(SL)은 평단보다 올라간 가격
-                    hedge_sl_price = main_avg_price * (1 + sl_value / 100.0)
-                else:
-                    # hedge_side == "long"
-                    # 헷지 롱 => 손절(SL)은 평단보다 내려간 가격
-                    hedge_sl_price = main_avg_price * (1 - sl_value / 100.0)
-        
+                if main_avg_price is not None:
+                    if hedge_side == "short":
+                        # 헷지 숏 => 손절(SL)은 평단보다 올라간 가격
+                        hedge_sl_price = main_avg_price * (1 + sl_value / 100.0)
+                    else:
+                        # hedge_side == "long"
+                        # 헷지 롱 => 손절(SL)은 평단보다 내려간 가격
+                        hedge_sl_price = main_avg_price * (1 - sl_value / 100.0)
+
         # TP 계산 (사용자 설정에 따라 계산)
         if tp_trigger_type == "do_not_close":
             hedge_tp_price = None
@@ -1092,16 +1095,18 @@ async def recalc_hedge_sl_tp(
             hedge_tp_price = main_sl_price
         elif tp_trigger_type == "last_dca_on_position":
             # 마지막 DCA 레벨에 도달하면 종료 (TP 가격 계산 안함)
-            hedge_tp_price = await get_last_dca_level(user_id, symbol, hedge_side)
+            if hedge_side is not None:
+                hedge_tp_price = await get_last_dca_level(user_id, symbol, str(hedge_side))
         else:
             # "percent" 모드 - 평단가에서 일정 비율 떨어진 가격
-            if hedge_side == "short":
-                # 헷지 숏 => 목표가(익절)는 평단보다 내려간 가격
-                hedge_tp_price = main_avg_price * (1 - tp_value / 100.0)
-            else:
-                # hedge_side == "long"
-                # 헷지 롱 => 목표가(익절)는 평단보다 올라간 가격
-                hedge_tp_price = main_avg_price * (1 + tp_value / 100.0)
+            if main_avg_price is not None:
+                if hedge_side == "short":
+                    # 헷지 숏 => 목표가(익절)는 평단보다 내려간 가격
+                    hedge_tp_price = main_avg_price * (1 - tp_value / 100.0)
+                else:
+                    # hedge_side == "long"
+                    # 헷지 롱 => 목표가(익절)는 평단보다 올라간 가격
+                    hedge_tp_price = main_avg_price * (1 + tp_value / 100.0)
         
         # 로깅
         log_dual_side_debug(

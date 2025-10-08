@@ -7,6 +7,7 @@ import traceback
 import os
 import json
 from datetime import datetime
+from typing import Any
 
 
 
@@ -132,42 +133,43 @@ def setup_order_logger():
     
     return order_logger
 
-def get_user_order_logger(user_id: str):
+def get_user_order_logger(user_id: str | int) -> logging.Logger:
     """
     특정 사용자 ID 전용 주문 로거를 설정합니다.
     사용자별로 분리된 로그 파일을 생성합니다.
-    
+
     Args:
         user_id: 사용자 ID
-        
+
     Returns:
         logging.Logger: 사용자 전용 로거 인스턴스
     """
     try:
         # 파라미터 안전성 검증
+        user_id_int: int
         try:
-            user_id = int(user_id)
+            user_id_int = int(user_id)
         except (ValueError, TypeError):
             error_logger.warning(f"유효하지 않은 user_id={user_id}, 기본값 0으로 설정합니다.")
-            user_id = 0  # 기본값 설정
+            user_id_int = 0  # 기본값 설정
         
         # 사용자 전용 로거 생성
-        logger_name = f'order_logger_user_{user_id}'
+        logger_name = f'order_logger_user_{user_id_int}'
         user_logger = logging.getLogger(logger_name)
         user_logger.setLevel(logging.INFO)
-        
+
         # 이미 핸들러가 설정되어 있으면 바로 반환
         if user_logger.handlers:
             return user_logger
-        
+
         try:
             # 사용자별 로그 디렉토리 생성
             log_dir = Path(LOG_DIR).parent / 'orders' / 'users'
             os.makedirs(log_dir, exist_ok=True)
-            
+
             # 파일 핸들러 설정
             user_file_handler = RotatingFileHandler(
-                filename=f'{log_dir}/user_{user_id}_orders.log',
+                filename=f'{log_dir}/user_{user_id_int}_orders.log',
                 maxBytes=5*1024*1024,  # 5MB
                 backupCount=10,
                 encoding='utf-8'
@@ -175,13 +177,13 @@ def get_user_order_logger(user_id: str):
             
             # JSON 형식 포맷터
             class OrderJSONFormatter(logging.Formatter):
-                def format(self, record):
+                def format(self, record: logging.LogRecord) -> str:
                     try:
                         log_data = {
                             'timestamp': datetime.now().isoformat(),
                             'level': record.levelname,
                             'message': record.getMessage(),
-                            'user_id': user_id  # 항상 user_id 포함
+                            'user_id': user_id_int  # 항상 user_id 포함
                         }
                         
                         # 추가 정보가 있는 경우 로그 데이터에 추가
@@ -202,7 +204,7 @@ def get_user_order_logger(user_id: str):
                             'timestamp': datetime.now().isoformat(),
                             'level': 'ERROR',
                             'message': f'로그 포맷팅 실패: {str(e)}',
-                            'user_id': user_id
+                            'user_id': user_id_int
                         }, ensure_ascii=False)
             
             user_file_handler.setFormatter(OrderJSONFormatter())
@@ -361,9 +363,9 @@ def log_debug(
     function: str,
     message: str,
     level: str = 'DEBUG',
-    exception: Exception = None,
-    **additional_data
-):
+    exception: Exception | None = None,
+    **additional_data: Any
+) -> None:
     """
     디버깅용 로그를 기록합니다.
     복잡한 로직이나 특정 모듈의 동작을 상세하게 추적할 때 사용합니다.
@@ -408,9 +410,9 @@ def log_dual_side_debug(
     function_name: str,
     message: str,
     level: str = 'DEBUG',
-    exception: Exception = None,
-    **additional_data
-):
+    exception: Exception | None = None,
+    **additional_data: Any
+) -> None:
     """
     dual_side_entry 모듈 전용 디버깅 로그 함수입니다.
     양방향 엔트리 관련 로직을 추적하기 위한 특별 로거입니다.
@@ -445,16 +447,16 @@ def log_dual_side_debug(
     
     
 def alert_log(
-    user_id: str,
+    user_id: str | int,
     symbol: str,
     message: str,
     level: str = 'INFO',
-    exception: Exception = None,
-    **additional_data
-):
+    exception: Exception | None = None,
+    **additional_data: Any
+) -> None:
     """
     봇의 시작, 종료, 오류 등의 중요 알림 메시지를 로깅합니다.
-    
+
     Args:
         user_id: 사용자 ID
         symbol: 거래 심볼 (예: BTC-USDT)
@@ -465,10 +467,11 @@ def alert_log(
     """
     try:
         # 파라미터 안전성 검증 및 기본값 설정
+        user_id_int: int
         try:
-            user_id = int(user_id)
+            user_id_int = int(user_id)
         except (ValueError, TypeError):
-            user_id = 0  # 기본값 설정
+            user_id_int = 0  # 기본값 설정
             additional_data['original_user_id'] = str(user_id)  # 원래 값 보존
         
         if not symbol or not isinstance(symbol, str):
@@ -487,7 +490,7 @@ def alert_log(
         
         # 알림 데이터 준비
         alert_data = {
-            'user_id': user_id,
+            'user_id': user_id_int,
             'symbol': symbol,
             'message': message,
             'alert_type': 'system_alert'
@@ -530,7 +533,7 @@ def alert_log(
         # 사용자별 로그 디렉토리 및 파일
         log_dir = Path(LOG_DIR).parent / 'alerts' / 'users'
         os.makedirs(log_dir, exist_ok=True)
-        user_log_file = log_dir / f'user_{user_id}_alerts.log'
+        user_log_file = log_dir / f'user_{user_id_int}_alerts.log'
         
         # 사용자별 로그 파일에 JSON 형식으로 직접 기록
         try:
@@ -574,15 +577,15 @@ def alert_log(
             print(f"[CRITICAL] 알림 로깅 완전 실패: {str(e)}")
 
 def log_order(
-    user_id: str, 
-    symbol: str, 
+    user_id: str,
+    symbol: str,
     action_type: str,
-    position_side: str, 
-    price: float = None,
-    quantity: float = None,
-    level: int = None,
-    **additional_data
-):
+    position_side: str,
+    price: float | None = None,
+    quantity: float | None = None,
+    level: int | None = None,
+    **additional_data: Any
+) -> None:
     """
     트레이딩 주문 정보를 로깅합니다.
     
@@ -598,10 +601,11 @@ def log_order(
     """
     try:
         # 파라미터 안전성 검증 및 기본값 설정
+        user_id_int: int
         try:
-            user_id = int(user_id)
+            user_id_int = int(user_id)
         except (ValueError, TypeError):
-            user_id = 0  # 기본값 설정
+            user_id_int = 0  # 기본값 설정
             additional_data['original_user_id'] = str(user_id)  # 원래 값 보존
         
         if not symbol or not isinstance(symbol, str):
@@ -634,7 +638,7 @@ def log_order(
             level = None
         
         log_data = {
-            'user_id': user_id,
+            'user_id': user_id_int,
             'symbol': symbol,
             'action_type': action_type,
             'position_side': position_side,
@@ -679,16 +683,16 @@ def log_order(
         
         # 사용자별 로그 파일에도 기록
         try:
-            user_logger = get_user_order_logger(user_id)
+            user_logger = get_user_order_logger(user_id_int)
             user_logger.handle(record)
         except Exception as e:
             error_logger.error(f"사용자별 주문 로거 처리 실패: {str(e)}")
-            
+
             # 직접 로그 파일에 기록 시도
             try:
                 log_dir = Path(LOG_DIR).parent / 'orders' / 'users'
                 os.makedirs(log_dir, exist_ok=True)
-                log_file = log_dir / f'user_{user_id}_orders_fallback.log'
+                log_file = log_dir / f'user_{user_id_int}_orders_fallback.log'
                 
                 with open(log_file, 'a', encoding='utf-8') as f:
                     log_data['timestamp'] = datetime.now().isoformat()
@@ -706,22 +710,23 @@ def log_order(
             # 모든 로깅 시도가 실패한 경우 콘솔에 출력
             print(f"[CRITICAL] 주문 로깅 완전 실패: {str(e)}")
 
-def get_order_logs_by_user_id(user_id: str, limit: int = 100, offset: int = 0):
+def get_order_logs_by_user_id(user_id: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     """
     특정 사용자 ID에 해당하는 주문 로그를 조회합니다.
-    
+
     Args:
         user_id: 조회할 사용자 ID
         limit: 반환할 최대 로그 수 (기본값: 100)
         offset: 건너뛸 로그 수 (기본값: 0)
-        
+
     Returns:
         list: 사용자의 주문 로그 목록
     """
     try:
         # 파라미터 안전성 검증
+        user_id_int: int
         try:
-            user_id = int(user_id)
+            user_id_int = int(user_id)
             limit = max(1, min(int(limit), 1000))  # 1~1000 사이로 제한
             offset = max(0, int(offset))
         except (ValueError, TypeError):
@@ -744,7 +749,7 @@ def get_order_logs_by_user_id(user_id: str, limit: int = 100, offset: int = 0):
                     try:
                         log_entry = json.loads(line)
                         # user_id가 일치하는 로그만 필터링
-                        if 'user_id' in log_entry and log_entry['user_id'] == user_id:
+                        if 'user_id' in log_entry and log_entry['user_id'] == user_id_int:
                             if skipped < offset:
                                 skipped += 1
                                 continue
@@ -770,7 +775,7 @@ def get_order_logs_by_user_id(user_id: str, limit: int = 100, offset: int = 0):
                         for line in f:
                             try:
                                 log_entry = json.loads(line)
-                                if 'user_id' in log_entry and log_entry['user_id'] == user_id:
+                                if 'user_id' in log_entry and log_entry['user_id'] == user_id_int:
                                     if skipped < offset:
                                         skipped += 1
                                         continue
@@ -790,34 +795,31 @@ def get_order_logs_by_user_id(user_id: str, limit: int = 100, offset: int = 0):
         error_logger.error(f"get_order_logs_by_user_id 함수 실행 중 오류: {str(e)}", exc_info=True)
         return []  # 안전한 기본값 반환
 
-def get_order_logs_by_date_range(start_date: datetime, end_date: datetime, user_id: str = None, limit: int = 100, offset: int = 0):
+def get_order_logs_by_date_range(start_date: datetime, end_date: datetime, user_id: str | None = None, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     """
     특정 날짜 범위 내의 주문 로그를 조회합니다. 선택적으로 사용자 ID로 필터링할 수 있습니다.
-    
+
     Args:
         start_date: 시작 날짜 (datetime 객체)
         end_date: 종료 날짜 (datetime 객체)
         user_id: 조회할 사용자 ID (선택적)
         limit: 반환할 최대 로그 수 (기본값: 100)
         offset: 건너뛸 로그 수 (기본값: 0)
-        
+
     Returns:
         list: 조건에 맞는 주문 로그 목록
     """
     try:
-        # 파라미터 안전성 검증
-        if not isinstance(start_date, datetime) or not isinstance(end_date, datetime):
-            error_logger.error(f"잘못된 날짜 파라미터: start_date={start_date}, end_date={end_date}")
-            return []
-        
+        # start_date와 end_date 교정
         if start_date > end_date:
             start_date, end_date = end_date, start_date  # 자동 교정
-            
+
+        user_id_int: int | None = None
         try:
             limit = max(1, min(int(limit), 1000))  # 1~1000 사이로 제한
             offset = max(0, int(offset))
             if user_id is not None:
-                user_id = int(user_id)
+                user_id_int = int(user_id)
         except (ValueError, TypeError):
             error_logger.error(f"잘못된 파라미터: limit={limit}, offset={offset}, user_id={user_id}")
             return []  # 안전한 기본값 반환
@@ -849,19 +851,19 @@ def get_order_logs_by_date_range(start_date: datetime, end_date: datetime, user_
                             # 날짜 범위 체크
                             if start_date <= log_time <= end_date:
                                 # 사용자 ID 필터링 (지정된 경우)
-                                if user_id is not None:
-                                    if 'user_id' in log_entry and log_entry['user_id'] == user_id:
+                                if user_id_int is not None:
+                                    if 'user_id' in log_entry and log_entry['user_id'] == user_id_int:
                                         if skipped < offset:
                                             skipped += 1
                                             continue
-                                        
+
                                         filtered_logs.append(log_entry)
                                         count += 1
                                 else:
                                     if skipped < offset:
                                         skipped += 1
                                         continue
-                                    
+
                                     filtered_logs.append(log_entry)
                                     count += 1
                                 
@@ -881,23 +883,24 @@ def get_order_logs_by_date_range(start_date: datetime, end_date: datetime, user_
         error_logger.error(f"get_order_logs_by_date_range 함수 실행 중 오류: {str(e)}", exc_info=True)
         return []  # 안전한 기본값 반환
 
-def get_user_order_logs_from_file(user_id: str, limit: int = 100, offset: int = 0):
+def get_user_order_logs_from_file(user_id: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     """
     사용자별 로그 파일에서 직접 주문 로그를 조회합니다.
     이 함수는 사용자별 로그 파일이 존재할 때 더 효율적입니다.
-    
+
     Args:
         user_id: 조회할 사용자 ID
         limit: 반환할 최대 로그 수 (기본값: 100)
         offset: 건너뛸 로그 수 (기본값: 0)
-        
+
     Returns:
         list: 사용자의 주문 로그 목록
     """
     try:
         # 파라미터 안전성 검증
+        user_id_int: int
         try:
-            user_id = int(user_id)
+            user_id_int = int(user_id)
             limit = max(1, min(int(limit), 1000))  # 1~1000 사이로 제한
             offset = max(0, int(offset))
         except (ValueError, TypeError):
@@ -905,12 +908,12 @@ def get_user_order_logs_from_file(user_id: str, limit: int = 100, offset: int = 
             return []  # 안전한 기본값 반환
             
         log_dir = Path(LOG_DIR).parent / 'orders' / 'users'
-        log_file = log_dir / f'user_{user_id}_orders.log'
-        
+        log_file = log_dir / f'user_{user_id_int}_orders.log'
+
         # 사용자별 로그 파일이 없으면 전체 로그에서 필터링
         if not log_file.exists():
-            print(f"{user_id}의 로그 파일이 없어서 user_id를 기준으로 로그 파일을 가져옵니다.")
-            return get_order_logs_by_user_id(user_id, limit, offset)
+            print(f"{user_id_int}의 로그 파일이 없어서 user_id를 기준으로 로그 파일을 가져옵니다.")
+            return get_order_logs_by_user_id(str(user_id_int), limit, offset)
         
         user_logs = []
         count = 0
@@ -927,7 +930,7 @@ def get_user_order_logs_from_file(user_id: str, limit: int = 100, offset: int = 
                             continue
                         
                         # 로그 엔트리 유효성 확인
-                        if 'user_id' not in log_entry or log_entry['user_id'] != user_id:
+                        if 'user_id' not in log_entry or log_entry['user_id'] != user_id_int:
                             continue  # 잘못된 사용자 ID인 경우 스킵
                         
                         user_logs.append(log_entry)
@@ -945,7 +948,7 @@ def get_user_order_logs_from_file(user_id: str, limit: int = 100, offset: int = 
             error_logger.error(f"로그 파일 {log_file} 읽기 실패: {str(e)}")
             # 사용자 로그 파일 읽기 실패시 전체 로그에서 필터링 시도
             try:
-                return get_order_logs_by_user_id(user_id, limit, offset)
+                return get_order_logs_by_user_id(str(user_id_int), limit, offset)
             except Exception:
                 error_logger.error(f"대체 메서드 get_order_logs_by_user_id 호출 실패")
                 return []
@@ -956,10 +959,10 @@ def get_user_order_logs_from_file(user_id: str, limit: int = 100, offset: int = 
         return []  # 안전한 기본값 반환
 
 # 편의 함수: 봇 시작 로깅
-def log_bot_start(user_id: str, symbol: str, config: dict = None):
+def log_bot_start(user_id: str, symbol: str, config: dict[str, Any] | None = None) -> None:
     """
     트레이딩 봇 시작을 로깅합니다.
-    
+
     Args:
         user_id: 사용자 ID
         symbol: 거래 심볼
@@ -967,8 +970,8 @@ def log_bot_start(user_id: str, symbol: str, config: dict = None):
     """
     try:
         message = f"트레이딩 봇 시작 - {symbol}"
-        additional_data = {}
-        
+        additional_data: dict[str, Any] = {'event_type': 'bot_start'}
+
         if config:
             # config 데이터가 직렬화 가능한지 확인
             try:
@@ -1003,10 +1006,10 @@ def log_bot_start(user_id: str, symbol: str, config: dict = None):
         print(f"[ERROR] 봇 시작 로깅 실패: {str(e)}")
 
 # 편의 함수: 봇 종료 로깅
-def log_bot_stop(user_id: str, symbol: str, reason: str = None):
+def log_bot_stop(user_id: str, symbol: str, reason: str | None = None) -> None:
     """
     트레이딩 봇 종료를 로깅합니다.
-    
+
     Args:
         user_id: 사용자 ID
         symbol: 거래 심볼
@@ -1030,10 +1033,10 @@ def log_bot_stop(user_id: str, symbol: str, reason: str = None):
         print(f"[ERROR] 봇 종료 로깅 실패: {str(e)}")
 
 # 편의 함수: 봇 오류 로깅
-def log_bot_error(user_id: str, symbol: str, error_message: str, exception: Exception = None, **additional_data):
+def log_bot_error(user_id: str, symbol: str, error_message: str, exception: Exception | None = None, **additional_data: Any) -> None:
     """
     트레이딩 봇 오류를 로깅합니다.
-    
+
     Args:
         user_id: 사용자 ID
         symbol: 거래 심볼

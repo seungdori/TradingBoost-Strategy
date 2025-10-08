@@ -1,6 +1,6 @@
 # bot/utils/validators.py
 
-from typing import Tuple
+from typing import Tuple, Dict, Any, cast
 from shared.constants.default_settings import SETTINGS_CONSTRAINTS
 
 def validate_setting(setting_type: str, value: float) -> Tuple[bool, str]:
@@ -11,11 +11,11 @@ def validate_setting(setting_type: str, value: float) -> Tuple[bool, str]:
     """
     if setting_type not in SETTINGS_CONSTRAINTS:
         return True, ""
-        
-    constraints = SETTINGS_CONSTRAINTS[setting_type]
+
+    constraints = cast(Dict[str, Any], SETTINGS_CONSTRAINTS[setting_type])
     if not constraints["min"] <= float(value) <= constraints["max"]:
         return False, f"값이 허용 범위({constraints['min']}-{constraints['max']})를 벗어났습니다."
-    
+
     return True, ""
 
 def validate_trading_settings(settings: dict) -> Tuple[bool, str]:

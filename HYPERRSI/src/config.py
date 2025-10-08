@@ -46,7 +46,7 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     """캐시된 설정 가져오기"""
-    return Settings()
+    return Settings()  # type: ignore[call-arg]
 
 # 설정 인스턴스 생성
 settings = get_settings()

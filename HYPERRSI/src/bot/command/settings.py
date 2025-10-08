@@ -1,5 +1,5 @@
 # src/bot/commands/settings.py
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from aiogram import types, Router, F
 from aiogram.filters import Command
@@ -25,6 +25,7 @@ from HYPERRSI.src.bot.keyboards.settings_keyboard import get_settings_keyboard
 from HYPERRSI.src.bot.utils import validator
 import traceback  # 상단에 추가
 from aiogram.exceptions import TelegramBadRequest
+from typing import Optional, Dict, Any
 
 
 
@@ -41,19 +42,22 @@ redis_client = _get_redis_client()
 redis_service = RedisService()
 
 allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267"]
-def is_allowed_user(user_id):
+
+def is_allowed_user(user_id: Optional[str]) -> bool:
     """허용된 사용자인지 확인"""
+    if user_id is None:
+        return False
     return str(user_id) in allowed_uid
 
-async def get_okx_uid_from_telegram_id(telegram_id: str) -> str:
+async def get_okx_uid_from_telegram_id(telegram_id: str) -> Optional[str]:
     """
     텔레그램 ID를 OKX UID로 변환하는 함수
-    
+
     Args:
         telegram_id: 텔레그램 ID
-        
+
     Returns:
-        str: OKX UID
+        Optional[str]: OKX UID or None if not found
     """
     try:
         # 텔레그램 ID로 OKX UID 조회
@@ -87,54 +91,76 @@ async def get_identifier(user_id: str) -> str:
 
 
 @router.message(Command("settings"))
-async def settings_command(message: types.Message):
+async def settings_command(message: types.Message) -> None:
     """설정 메뉴 표시"""
+    if message.from_user is None:
+        return
+
     user_id = str(message.from_user.id)
-    
+
     # 텔레그램 ID인지 OKX UID인지 확인
     user_id = await get_identifier(user_id)
-    
+
     okx_uid = await redis_client.get(f"user:{user_id}:okx_uid")
     if not is_allowed_user(okx_uid):
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
-    
+
     settings = await redis_service.get_user_settings(user_id)
-    
-    if not settings:
+    if settings is None:
         settings = DEFAULT_PARAMS_SETTINGS.copy()
         await redis_service.set_user_settings(user_id, settings)
-    settings['current_category'] = None  
-    
+
+    settings['current_category'] = None
+
     keyboard = get_settings_keyboard(settings)
     await message.answer("변경할 설정 항목을 선택하세요:", reply_markup=keyboard)
 
         
 @router.callback_query(F.data.startswith("direction:"))
-async def handle_direction_callback(callback: types.CallbackQuery):
+async def handle_direction_callback(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
+    if callback.data is None:
+        return
+
     await callback.answer()  # 클라이언트에게 콜백이 처리되었음을 알림
-    
+
     direction = callback.data.split(":")[1]
     direction_map = {"long": "롱", "short": "숏", "both": "롱숏"}
-    
+
     user_id = str(callback.from_user.id)
     user_id = await get_identifier(user_id)
     settings = await redis_service.get_user_settings(user_id)
+    if settings is None:
+        settings = DEFAULT_PARAMS_SETTINGS.copy()
+
     settings['direction'] = direction_map[direction]
     await redis_service.set_user_settings(user_id, settings)
-    
+
     keyboard = get_settings_keyboard(settings)
     await callback.message.edit_text(
-        f"✅ 진입 방향이 {direction_map[direction]}으로 변경되었습니다.", 
+        f"✅ 진입 방향이 {direction_map[direction]}으로 변경되었습니다.",
         reply_markup=keyboard
     )
 @router.callback_query(F.data.startswith("setting:"))
-async def handle_setting_callback(callback: types.CallbackQuery, state: FSMContext):
+async def handle_setting_callback(callback: types.CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
+    if callback.data is None:
+        return
+
     setting_type = callback.data.split(":")[1]
     callback_parts = callback.data.split(":")
     user_id = str(callback.from_user.id)
     user_id = await get_identifier(user_id)
     settings = await redis_service.get_user_settings(user_id)
+    if settings is None:
+        settings = DEFAULT_PARAMS_SETTINGS.copy()
     def get_cancel_keyboard():
         return types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="❌ 취소", callback_data="setting:cancel")]
@@ -149,6 +175,8 @@ async def handle_setting_callback(callback: types.CallbackQuery, state: FSMConte
             user_id = str(callback.from_user.id)
             user_id = await get_identifier(user_id)
             settings = await redis_service.get_user_settings(user_id)
+            if settings is None:
+                settings = DEFAULT_PARAMS_SETTINGS.copy()
             
             if category == "main":
                 settings.pop('current_category', None)
@@ -357,12 +385,21 @@ async def handle_setting_callback(callback: types.CallbackQuery, state: FSMConte
 @router.callback_query(F.data.startswith("sl_option:"))
 @router.callback_query(F.data.startswith("pyramiding_entry_type:"))
 @router.callback_query(F.data.startswith("entry_criterion:"))
-async def handle_option_callback(callback: types.CallbackQuery):
+async def handle_option_callback(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
+    if callback.data is None:
+        return
+
     setting_type, value = callback.data.split(":")
     
     user_id = str(callback.from_user.id)
     user_id = await get_identifier(user_id)
     settings = await redis_service.get_user_settings(user_id)
+    if settings is None:
+        settings = DEFAULT_PARAMS_SETTINGS.copy()
     settings[setting_type] = value
     
     await redis_service.set_user_settings(user_id, settings)
@@ -384,13 +421,22 @@ async def handle_option_callback(callback: types.CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("use_"))
-async def handle_boolean_callback(callback: types.CallbackQuery):
+async def handle_boolean_callback(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
+    if callback.data is None:
+        return
+
     setting_type, value = callback.data.split(":")
     bool_value = (value == "true")
     
     user_id = str(callback.from_user.id)
     user_id = await get_identifier(user_id)
     settings = await redis_service.get_user_settings(user_id)
+    if settings is None:
+        settings = DEFAULT_PARAMS_SETTINGS.copy()
     settings[setting_type] = bool_value
     await redis_service.set_user_settings(user_id, settings)
     
@@ -422,9 +468,14 @@ async def handle_boolean_callback(callback: types.CallbackQuery):
 # 1) 일반 수치 입력 설정 처리
 # ─────────────────────────────
 @router.callback_query(F.data == "setting:use_sl_on_last")
-async def handle_sl_last_toggle(callback: types.CallbackQuery):
+async def handle_sl_last_toggle(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
+
     try:
-        user_id = callback.from_user.id
+        user_id = str(callback.from_user.id)
         user_id = await get_identifier(user_id)
         settings_key = f"user:{user_id}:settings"
         
@@ -453,7 +504,13 @@ async def handle_sl_last_toggle(callback: types.CallbackQuery):
   
   
 @router.message(SettingStates.waiting_for_cooldown_time)
-async def process_cooldown_time(message: types.Message, state: FSMContext):
+async def process_cooldown_time(message: types.Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     try:
         time = int(message.text)
         if not 1 <= time <= 3000:
@@ -463,6 +520,8 @@ async def process_cooldown_time(message: types.Message, state: FSMContext):
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         settings['cooldown_time'] = time
         await redis_service.set_user_settings(user_id, settings)
         
@@ -473,16 +532,22 @@ async def process_cooldown_time(message: types.Message, state: FSMContext):
         await message.answer("올바른 숫자를 입력해주세요.")
         
 @router.message(SettingStates.waiting_for_investment)
-async def process_investment(message: types.Message, state: FSMContext):
+async def process_investment(message: types.Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     try:
         investment = float(message.text)
-        if not validator.validate_setting("investment", investment):
-            constraints = SETTINGS_CONSTRAINTS["investment"]
+        is_valid, error_msg = validator.validate_setting("investment", investment)
+        if not is_valid:
             cancel_keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(text="❌ 취소", callback_data="setting:cancel")]
             ])
             await message.answer(
-                f"투입금액은 {constraints['min']}에서 {constraints['max']} USDT 사이여야 합니다.\n\n"
+                f"{error_msg}\n\n"
                 "값을 다시 입력하세요. 취소하려면 아래 버튼을 클릭하세요.",
                 reply_markup=cancel_keyboard
             )
@@ -491,12 +556,14 @@ async def process_investment(message: types.Message, state: FSMContext):
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         settings['investment'] = investment
         await redis_service.set_user_settings(user_id, settings)
         
         # entry_amount_option에 따라 단위 표시
         entry_amount_option = settings.get('entry_amount_option', 'usdt')
-        unit = ENTRY_AMOUNT_UNITS.get(entry_amount_option, 'USDT')
+        unit = ENTRY_AMOUNT_UNITS.get(str(entry_amount_option), 'USDT')
         
         await state.clear()
         keyboard = get_settings_keyboard(settings)
@@ -512,7 +579,12 @@ async def process_investment(message: types.Message, state: FSMContext):
         )
         
 @router.callback_query(lambda c: c.data == "setting:done")
-async def handle_done(callback_query: types.CallbackQuery, state: FSMContext):
+async def handle_done(callback_query: types.CallbackQuery, state: FSMContext) -> None:
+    if callback_query.from_user is None or callback_query.message is None:
+        return
+    if not isinstance(callback_query.message, Message):
+        return
+
     try:
         # 상태 초기화
         await state.clear()
@@ -534,7 +606,13 @@ async def handle_done(callback_query: types.CallbackQuery, state: FSMContext):
             logger.error("Failed to send error message")
 
 @router.message(SettingStates.waiting_for_leverage)
-async def process_leverage(message: types.Message, state: FSMContext):
+async def process_leverage(message: types.Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     try:
         leverage = int(message.text)
         is_valid, error_msg = validator.validate_setting("leverage", leverage)
@@ -545,6 +623,8 @@ async def process_leverage(message: types.Message, state: FSMContext):
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         settings['leverage'] = leverage
         await redis_service.set_user_settings(user_id, settings)
         await state.clear()
@@ -554,7 +634,13 @@ async def process_leverage(message: types.Message, state: FSMContext):
         await message.answer("올바른 정수를 입력해주세요.")
 
 @router.message(SettingStates.waiting_for_rsi_length)
-async def process_rsi_length(message: types.Message, state: FSMContext):
+async def process_rsi_length(message: types.Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     try:
         rsi_length = int(message.text)
         is_valid, error_msg = validator.validate_setting("rsi_length", rsi_length)
@@ -565,6 +651,8 @@ async def process_rsi_length(message: types.Message, state: FSMContext):
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         settings['rsi_length'] = rsi_length
         await redis_service.set_user_settings(user_id, settings)
         
@@ -575,12 +663,20 @@ async def process_rsi_length(message: types.Message, state: FSMContext):
         await message.answer("올바른 정수를 입력해주세요.")
         
 @router.message(SettingStates.waiting_for_tp1_value)
-async def handle_tp1_value(message: types.Message, state: FSMContext):
+async def handle_tp1_value(message: types.Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     try:
         value = float(message.text)
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         settings['tp1_value'] = value
         await redis_service.set_user_settings(user_id, settings)
         
@@ -591,12 +687,20 @@ async def handle_tp1_value(message: types.Message, state: FSMContext):
         await message.answer("올바른 숫자를 입력해주세요.")
  
 @router.message(SettingStates.waiting_for_tp2_value)
-async def handle_tp2_value(message: types.Message, state: FSMContext):  # 함수 이름 변경
+async def handle_tp2_value(message: types.Message, state: FSMContext) -> None:  # 함수 이름 변경
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     try:
         value = float(message.text)
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         settings['tp2_value'] = value
         await redis_service.set_user_settings(user_id, settings)
         
@@ -607,12 +711,20 @@ async def handle_tp2_value(message: types.Message, state: FSMContext):  # 함수
         await message.answer("올바른 숫자를 입력해주세요.")
         
 @router.message(SettingStates.waiting_for_tp3_value)
-async def handle_tp3_value(message: types.Message, state: FSMContext):  # 함수 이름 변경
+async def handle_tp3_value(message: types.Message, state: FSMContext) -> None:  # 함수 이름 변경
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     try:
         value = float(message.text)
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         settings['tp3_value'] = value
         await redis_service.set_user_settings(user_id, settings)
         
@@ -628,7 +740,13 @@ async def handle_tp3_value(message: types.Message, state: FSMContext):  # 함수
 #
 
 @router.message(SettingStates.waiting_for_tp_ratios)
-async def process_tp_ratios(message: types.Message, state: FSMContext):
+async def process_tp_ratios(message: types.Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     """
     사용자가 "30 30 40"처럼 TP1/TP2/TP3 비율을 한 줄에 입력하면 처리하는 핸들러
     """
@@ -651,6 +769,8 @@ async def process_tp_ratios(message: types.Message, state: FSMContext):
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         settings["tp1_ratio"] = tp1_ratio
         settings["tp2_ratio"] = tp2_ratio
         settings["tp3_ratio"] = tp3_ratio
@@ -670,7 +790,13 @@ async def process_tp_ratios(message: types.Message, state: FSMContext):
         await message.answer("숫자 형식이 잘못되었습니다. 예) 30 30 40 식으로 입력해주세요.")
 
 @router.message(SettingStates.waiting_for_sl_value)
-async def process_sl_value(message: types.Message, state: FSMContext):
+async def process_sl_value(message: types.Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     try:
         sl_value = float(message.text)
         is_valid, error_msg = validator.validate_setting("sl_value", sl_value)
@@ -681,6 +807,8 @@ async def process_sl_value(message: types.Message, state: FSMContext):
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         settings['sl_value'] = sl_value
         await redis_service.set_user_settings(user_id, settings)
         
@@ -691,7 +819,13 @@ async def process_sl_value(message: types.Message, state: FSMContext):
         await message.answer("올바른 숫자를 입력해주세요.")
 
 @router.message(SettingStates.waiting_for_pyramiding_value)
-async def process_pyramiding_value(message: types.Message, state: FSMContext):
+async def process_pyramiding_value(message: types.Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     try:
         pyramiding_value = float(message.text)
         is_valid, error_msg = validator.validate_setting("pyramiding_value", pyramiding_value)
@@ -702,6 +836,8 @@ async def process_pyramiding_value(message: types.Message, state: FSMContext):
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         settings['pyramiding_value'] = pyramiding_value
         await redis_service.set_user_settings(user_id, settings)
         
@@ -713,7 +849,13 @@ async def process_pyramiding_value(message: types.Message, state: FSMContext):
         
         
 @router.message(SettingStates.waiting_for_entry_multiplier)
-async def process_entry_multiplier(message: types.Message, state: FSMContext):
+async def process_entry_multiplier(message: types.Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     try:
         multiplier = float(message.text)
         if not 0.1 <= multiplier <= 5.0:
@@ -723,6 +865,8 @@ async def process_entry_multiplier(message: types.Message, state: FSMContext):
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         settings['entry_multiplier'] = multiplier
         await redis_service.set_user_settings(user_id, settings)
         
@@ -734,12 +878,21 @@ async def process_entry_multiplier(message: types.Message, state: FSMContext):
 
 
 @router.callback_query(lambda c: c.data.startswith("trailing_stop_type:"))
-async def handle_trailing_type_selection(callback: types.CallbackQuery, state: FSMContext):
+async def handle_trailing_type_selection(callback: types.CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
+    if callback.data is None:
+        return
+
     try:
         type_ = callback.data.split(":")[1]
         user_id = str(callback.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         
         # 타입 저장 추가
         settings['trailing_stop_type'] = type_
@@ -771,7 +924,13 @@ async def handle_trailing_type_selection(callback: types.CallbackQuery, state: F
         await callback.answer("설정 변경 중 오류가 발생했습니다.")
 
 @router.message(SettingStates.waiting_for_trailing_stop_offset_value)
-async def process_trailing_stop_offset_value(message: types.Message, state: FSMContext):
+async def process_trailing_stop_offset_value(message: types.Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     try:
         offset_value = float(message.text)
         if not 0.0 <= offset_value <= 50.0:
@@ -781,6 +940,8 @@ async def process_trailing_stop_offset_value(message: types.Message, state: FSMC
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         
         settings['trailing_stop_offset_value'] = offset_value
         settings['use_trailing_stop_value_with_tp2_tp3_difference'] = False
@@ -800,7 +961,13 @@ async def process_trailing_stop_offset_value(message: types.Message, state: FSMC
         
         
 @router.message(SettingStates.waiting_for_pyramiding_limit)
-async def process_pyramiding_limit(message: types.Message, state: FSMContext):
+async def process_pyramiding_limit(message: types.Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     print("process_pyramiding_limit")
     try:
         pyramiding_limit = int(message.text)
@@ -824,7 +991,13 @@ async def process_pyramiding_limit(message: types.Message, state: FSMContext):
 
 
 @router.message(SettingStates.waiting_for_rsi_oversold)
-async def process_rsi_oversold(message: types.Message, state: FSMContext):
+async def process_rsi_oversold(message: types.Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     try:
         rsi_value = int(message.text)
         if not 0 <= rsi_value <= 100:
@@ -834,6 +1007,8 @@ async def process_rsi_oversold(message: types.Message, state: FSMContext):
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         settings['rsi_oversold'] = rsi_value
         await redis_service.set_user_settings(user_id, settings)
         
@@ -844,7 +1019,13 @@ async def process_rsi_oversold(message: types.Message, state: FSMContext):
         await message.answer("올바른 숫자를 입력해주세요.")
 
 @router.message(SettingStates.waiting_for_rsi_overbought)
-async def process_rsi_overbought(message: types.Message, state: FSMContext):
+async def process_rsi_overbought(message: types.Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     try:
         rsi_value = int(message.text)
         if not 0 <= rsi_value <= 100:
@@ -854,6 +1035,8 @@ async def process_rsi_overbought(message: types.Message, state: FSMContext):
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         settings['rsi_overbought'] = rsi_value
         await redis_service.set_user_settings(user_id, settings)
         
@@ -868,7 +1051,12 @@ async def process_rsi_overbought(message: types.Message, state: FSMContext):
 # 트랜드 로직 타임프레임
 #================================================================================================
 @router.callback_query(lambda c: c.data == "trend_timeframe_setting")
-async def handle_trend_timeframe_setting(callback_query: CallbackQuery):
+async def handle_trend_timeframe_setting(callback_query: CallbackQuery) -> None:
+    if callback_query.from_user is None or callback_query.message is None:
+        return
+    if not isinstance(callback_query.message, Message):
+        return
+
     try:
         # 사용 가능한 타임프레임 옵션들
         timeframe_options = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d']
@@ -877,7 +1065,9 @@ async def handle_trend_timeframe_setting(callback_query: CallbackQuery):
         user_id = str(callback_query.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
-        current_tf = settings.get('trend_timeframe', '').lower() if settings else ''
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
+        current_tf = str(settings.get('trend_timeframe', '')).lower() if settings else ''
         
         # 인라인 키보드 생성
         buttons = []
@@ -909,7 +1099,14 @@ async def handle_trend_timeframe_setting(callback_query: CallbackQuery):
 
 
 @router.callback_query(lambda c: c.data.startswith("set_trend_timeframe:"))
-async def handle_trend_timeframe_value(callback_query: CallbackQuery):
+async def handle_trend_timeframe_value(callback_query: CallbackQuery) -> None:
+    if callback_query.from_user is None or callback_query.message is None:
+        return
+    if not isinstance(callback_query.message, Message):
+        return
+    if callback_query.data is None:
+        return
+
     try:
         timeframe = callback_query.data.split(":")[1]
         user_id = str(callback_query.from_user.id)
@@ -941,11 +1138,18 @@ async def handle_trend_timeframe_value(callback_query: CallbackQuery):
 
 
 @router.callback_query(lambda c: c.data == "settings_back")
-async def handle_settings_back(callback_query: CallbackQuery):
+async def handle_settings_back(callback_query: CallbackQuery) -> None:
+    if callback_query.from_user is None or callback_query.message is None:
+        return
+    if not isinstance(callback_query.message, Message):
+        return
+
     try:
         user_id = str(callback_query.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         keyboard = get_settings_keyboard(settings)
         await callback_query.message.edit_text("설정을 선택하세요:", reply_markup=keyboard)
     except Exception as e:
@@ -958,7 +1162,7 @@ async def handle_settings_back(callback_query: CallbackQuery):
 
 # 에러 핸들링
 @router.errors()
-async def error_handler(event: ErrorEvent):
+async def error_handler(event: ErrorEvent) -> None:
     try:
         # message is not modified 에러는 무시
         if isinstance(event.exception, TelegramBadRequest) and "message is not modified" in str(event.exception):
@@ -983,7 +1187,12 @@ async def error_handler(event: ErrorEvent):
         
 
 @router.callback_query(F.data.startswith("trailing_stop_active"))
-async def handle_trailing_stop_selection(callback: types.CallbackQuery):
+async def handle_trailing_stop_selection(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
+
     try:
         # 트레일링 스탑 설정 메뉴 표시
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1003,12 +1212,21 @@ async def handle_trailing_stop_selection(callback: types.CallbackQuery):
         await callback.answer("설정 변경 중 오류가 발생했습니다.")
 
 @router.callback_query(lambda c: c.data.startswith("set_trailing_start:"))
-async def handle_trailing_start_point(callback: types.CallbackQuery):
+async def handle_trailing_start_point(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
+    if callback.data is None:
+        return
+
     try:
         point = callback.data.split(":")[1]
         user_id = str(callback.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         
         if point == "disable":
             # 트레일링 스탑 비활성화
@@ -1032,11 +1250,20 @@ async def handle_trailing_start_point(callback: types.CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("symbol_investment:"))
-async def handle_symbol_investment(callback: types.CallbackQuery, state: FSMContext):
+async def handle_symbol_investment(callback: types.CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
+    if callback.data is None:
+        return
+
     symbol = callback.data.split(":")[1]
     user_id = str(callback.from_user.id)
     user_id = await get_identifier(user_id)
     settings = await redis_service.get_user_settings(user_id)
+    if settings is None:
+        settings = DEFAULT_PARAMS_SETTINGS.copy()
     
     # 심볼별 상태 설정
     symbol_states = {
@@ -1071,7 +1298,13 @@ async def handle_symbol_investment(callback: types.CallbackQuery, state: FSMCont
 
 # BTC 투입금액 처리
 @router.message(SettingStates.waiting_for_btc_investment)
-async def process_btc_investment(message: types.Message, state: FSMContext):
+async def process_btc_investment(message: types.Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     try:
         investment = float(message.text)
         if investment <= 0:
@@ -1081,6 +1314,8 @@ async def process_btc_investment(message: types.Message, state: FSMContext):
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         settings['btc_investment'] = investment
         await redis_service.set_user_settings(user_id, settings)
         
@@ -1096,7 +1331,13 @@ async def process_btc_investment(message: types.Message, state: FSMContext):
 
 # ETH 투입금액 처리
 @router.message(SettingStates.waiting_for_eth_investment)
-async def process_eth_investment(message: types.Message, state: FSMContext):
+async def process_eth_investment(message: types.Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     try:
         investment = float(message.text)
         if investment <= 0:
@@ -1106,6 +1347,8 @@ async def process_eth_investment(message: types.Message, state: FSMContext):
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         settings['eth_investment'] = investment
         await redis_service.set_user_settings(user_id, settings)
         
@@ -1121,7 +1364,13 @@ async def process_eth_investment(message: types.Message, state: FSMContext):
 
 # SOL 투입금액 처리
 @router.message(SettingStates.waiting_for_sol_investment)
-async def process_sol_investment(message: types.Message, state: FSMContext):
+async def process_sol_investment(message: types.Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if message.text is None:
+        await message.answer("텍스트를 입력해주세요.")
+        return
+
     try:
         investment = float(message.text)
         if investment <= 0:
@@ -1131,6 +1380,8 @@ async def process_sol_investment(message: types.Message, state: FSMContext):
         user_id = str(message.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         settings['sol_investment'] = investment
         await redis_service.set_user_settings(user_id, settings)
         
@@ -1146,11 +1397,18 @@ async def process_sol_investment(message: types.Message, state: FSMContext):
 
 # 투입금액 기준 설정 핸들러
 @router.callback_query(F.data == "setting:entry_amount_option")
-async def handle_entry_amount_option(callback: types.CallbackQuery):
+async def handle_entry_amount_option(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
+
     try:
         user_id = str(callback.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         
         # 현재 설정값 가져오기
         current_option = settings.get('entry_amount_option', 'usdt')
@@ -1177,7 +1435,7 @@ async def handle_entry_amount_option(callback: types.CallbackQuery):
         
         await callback.message.edit_text(
             "투입금액 기준을 선택해주세요:\n"
-            f"현재 설정: [{options_display[current_option]}]",
+            f"현재 설정: [{options_display[str(current_option)]}]",
             reply_markup=keyboard
         )
         
@@ -1187,12 +1445,21 @@ async def handle_entry_amount_option(callback: types.CallbackQuery):
 
 # 투입금액 기준 설정 변경 처리
 @router.callback_query(lambda c: c.data.startswith("set_entry_amount_option:"))
-async def handle_entry_amount_option_selection(callback: types.CallbackQuery):
+async def handle_entry_amount_option_selection(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
+    if callback.data is None:
+        return
+
     try:
         option = callback.data.split(":")[1]
         user_id = str(callback.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
+        if settings is None:
+            settings = DEFAULT_PARAMS_SETTINGS.copy()
         
         # 투입금액 기준 설정 업데이트
         settings['entry_amount_option'] = option

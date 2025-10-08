@@ -26,7 +26,7 @@ class OrderType(str, Enum):
 
 class OpenPositionRequest(BaseModel):
     """포지션 오픈 요청 (HYPERRSI)"""
-    user_id: str = Field(1709556958, description="사용자 ID (텔레그램 ID 또는 OKX UID)")
+    user_id: str = Field("1709556958", description="사용자 ID (텔레그램 ID 또는 OKX UID)")
     symbol: str = Field("BTC-USDT-SWAP", description="심볼")
     direction: str = Field("long", description="포지션 방향")
     size: float = Field(0.1, description="포지션 크기")

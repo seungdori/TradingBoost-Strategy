@@ -36,8 +36,10 @@ def is_allowed_user(user_id):
     return str(user_id) in allowed_uid
 
 @router.message(Command("start"))
-async def start_command(message: types.Message, state: FSMContext):
+async def start_command(message: types.Message, state: FSMContext) -> None:
     """시작 명령어 처리"""
+    if not message.from_user:
+        return
     user_id = message.from_user.id
     
     telegram_uid_key = f"user:{user_id}:okx_uid"
@@ -81,12 +83,14 @@ async def start_command(message: types.Message, state: FSMContext):
 
 # UID 입력 상태에서의 메시지 처리
 @router.message(StateFilter("waiting_for_uid"))
-async def process_uid(message: types.Message, state: FSMContext):
+async def process_uid(message: types.Message, state: FSMContext) -> None:
     """UID 입력 처리"""
+    if not message.from_user or not message.text:
+        return
     user_id = message.from_user.id
-    
+
     telegram_uid_key = f"user:{user_id}:okx_uid"
-    
+
     # 입력된 텍스트가 UID
     okx_uid = message.text.strip()
     
@@ -155,8 +159,10 @@ async def process_uid(message: types.Message, state: FSMContext):
         )
 
 @router.message(Command("reset"))
-async def reset_command(message: types.Message):
+async def reset_command(message: types.Message) -> None:
     """UID 리셋 명령어 처리"""
+    if not message.from_user:
+        return
     user_id = message.from_user.id
     
     telegram_uid_key = f"user:{user_id}:okx_uid"
@@ -219,8 +225,10 @@ async def reset_command(message: types.Message):
 #        )
 
 @router.message(Command("cancel"), StateFilter(any_state))
-async def cancel_command(message: types.Message, state: FSMContext):
+async def cancel_command(message: types.Message, state: FSMContext) -> None:
     """현재 진행 중인 상태/명령어 취소"""
+    if not message.from_user:
+        return
     user_id = message.from_user.id
     
 
@@ -246,8 +254,10 @@ async def cancel_command(message: types.Message, state: FSMContext):
         await message.reply("✅ 진행 중인 작업이 취소되었습니다.")
 
 @router.message(Command("help"))
-async def help_command(message: types.Message):
+async def help_command(message: types.Message) -> None:
    """도움말 표시"""
+   if not message.from_user:
+       return
    user_id = message.from_user.id
    
    okx_uid = await redis_client.get(f"user:{user_id}:okx_uid")

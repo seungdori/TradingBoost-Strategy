@@ -1,6 +1,11 @@
+"""Upbit 서비스 (통합 헬퍼 사용)
+
+이 파일은 shared.exchange.helpers를 사용하도록 업데이트되었습니다.
+"""
 from datetime import datetime, timedelta
 from shared.exchange_apis import exchange_store
 from shared.helpers.cache_helper import cache_expired
+from shared.exchange.helpers.wallet_helper import extract_upbit_wallet_info
 from typing import Any
 
 CACHE_TIME_SECONDS = 30
@@ -15,7 +20,10 @@ upbit_avg_price_cache_expiry = datetime.now()
 
 
 def revalidate_upbit_cache():
-    global upbit_balances_cache, upbit_balances_cache_expiry, upbit_tickers_cache, upbit_tickers_cache_expiry, upbit_avg_price_cache, upbit_avg_price_cache_expiry
+    """Upbit 캐시 무효화"""
+    global upbit_balances_cache, upbit_balances_cache_expiry
+    global upbit_tickers_cache, upbit_tickers_cache_expiry
+    global upbit_avg_price_cache, upbit_avg_price_cache_expiry
 
     upbit_balances_cache = None
     upbit_balances_cache_expiry = datetime.now()
@@ -26,7 +34,7 @@ def revalidate_upbit_cache():
 
 
 async def get_upbit_tickers():
-    # Todo: refactor after
+    """Upbit 티커 정보 조회"""
     global upbit_tickers_cache, upbit_tickers_cache_expiry
     upbit_client = exchange_store.get_upbit_instance()
 
@@ -34,7 +42,6 @@ async def get_upbit_tickers():
         if (not cache_expired(upbit_tickers_cache_expiry)) and (upbit_tickers_cache is not None):
             return upbit_tickers_cache
 
-        # exchange = exchange_store.get_upbit_instance()
         tickers = await upbit_client.fetch_tickers()
         upbit_tickers_cache = tickers
         upbit_tickers_cache_expiry = datetime.now() + timedelta(seconds=CACHE_TIME_SECONDS)
@@ -48,7 +55,7 @@ async def get_upbit_tickers():
 
 
 async def get_upbit_balances():
-    # Todo: refactor after
+    """Upbit 잔고 조회"""
     global upbit_balances_cache, upbit_balances_cache_expiry
     upbit_client = exchange_store.get_upbit_instance()
 
@@ -69,6 +76,7 @@ async def get_upbit_balances():
 
 
 async def fetch_upbit_avg_price():
+    """Upbit 평균 구매가 조회"""
     global upbit_avg_price_cache, upbit_avg_price_cache_expiry
 
     if not (cache_expired(upbit_avg_price_cache_expiry)) and (upbit_avg_price_cache is not None):
@@ -82,8 +90,9 @@ async def fetch_upbit_avg_price():
             if 'currency' in item and 'avg_buy_price' in item and item['balance'] != '0'
         }
 
-        # 캐시 만료 시간을 10초로 설정
-        upbit_avg_price_cache_expiry = datetime.now() + timedelta(seconds=AVG_PRICE_CACHE_TIME_SECONDS)
+        upbit_avg_price_cache_expiry = datetime.now() + timedelta(
+            seconds=AVG_PRICE_CACHE_TIME_SECONDS
+        )
 
         return global_avg_price_cache
 
@@ -93,6 +102,7 @@ async def fetch_upbit_avg_price():
 
 
 async def fetch_upbit_positions():
+    """Upbit 포지션 조회"""
     positions: list[Any] = []
 
     try:
@@ -134,27 +144,15 @@ async def fetch_upbit_positions():
 
 
 async def get_upbit_wallet():
+    """Upbit 지갑 정보 조회 (통합 헬퍼 사용)"""
     try:
         balance_info = await get_upbit_balances()
         tickers = await get_upbit_tickers()
-        total_balance: float = 0
-        krw_balance: float = 0
 
         if balance_info is None or tickers is None:
-            return total_balance, krw_balance
+            return 0.0, 0.0
 
-        krw_balance = float(balance_info['total'].get('KRW', 0))
-        total_balance += krw_balance
-
-        for currency, balance in balance_info['total'].items():
-            if balance > 0 and currency != "KRW":
-                symbol = f'{currency}/KRW'
-                if symbol in tickers:  # 업비트에서 지원하는 통화 쌍만 처리합니다.
-                    ticker = tickers[symbol]
-                    total_balance += balance * ticker['last']
-
-        return total_balance, krw_balance
-
+        return extract_upbit_wallet_info(balance_info, tickers)
 
     except Exception as e:
         print("upbit", f"총 잔고 계산 중 오류 발생: {e}")

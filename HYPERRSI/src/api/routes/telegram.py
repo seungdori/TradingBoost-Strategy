@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query, Path, WebSocket, WebSocketDisconnect
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from shared.logging import get_logger
 
@@ -10,6 +10,16 @@ import asyncio
 import telegram
 import os
 import json
+
+# Try to import telegram errors, fallback to generic Exception if not available
+try:
+    from telegram.error import TelegramError, Unauthorized, BadRequest, RetryAfter
+except ImportError:
+    # Fallback for older versions
+    TelegramError = Exception  # type: ignore
+    Unauthorized = Exception  # type: ignore
+    BadRequest = Exception  # type: ignore
+    RetryAfter = Exception  # type: ignore
 
 logger = get_logger(__name__)
 
@@ -29,13 +39,30 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 # 응답 모델
 class TelegramResponse(BaseModel):
     """텔레그램 메시지 전송 응답 모델"""
-    status: str = Field(..., example="success", description="요청 처리 상태")
-    message: str = Field(..., example="메시지가 성공적으로 전송되었습니다.", description="응답 메시지")
+    status: str = Field(description="요청 처리 상태")
+    message: str = Field(description="응답 메시지")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "status": "success",
+                "message": "메시지가 성공적으로 전송되었습니다."
+            }
+        }
+    }
 
 # 에러 응답 모델
 class ErrorResponse(BaseModel):
     """에러 응답 모델"""
-    detail: str = Field(..., example="메시지 전송 실패", description="에러 상세 내용")
+    detail: str = Field(description="에러 상세 내용")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "detail": "메시지 전송 실패"
+            }
+        }
+    }
 
 class LogEntry(BaseModel):
     """로그 항목 모델"""
@@ -104,56 +131,67 @@ semaphore = asyncio.Semaphore(3)
 )
 async def send_message(
     user_id: str = Path(
-        ..., 
+        ...,
         description="메시지를 받을 사용자의 텔레그램 ID",
         example=123456789
     ),
     message: str = Query(
-        ..., 
+        ...,
         description="전송할 메시지 내용",
         min_length=1,
         max_length=4096,
         example="거래가 체결되었습니다."
     )
-):
+) -> Dict[str, Any]:
     try:
-        user_id = await get_telegram_id_from_uid(user_id, TimescaleUserService)
+        telegram_id = await get_telegram_id_from_uid(redis_client, user_id, TimescaleUserService)
+        if not telegram_id:
+            raise HTTPException(
+                status_code=404,
+                detail="사용자의 텔레그램 ID를 찾을 수 없습니다."
+            )
         if not message.strip():
             raise HTTPException(
                 status_code=400,
                 detail="메시지 내용이 비어있습니다."
             )
 
+        if not TELEGRAM_BOT_TOKEN:
+            raise HTTPException(
+                status_code=500,
+                detail="텔레그램 봇 토큰이 설정되지 않았습니다."
+            )
+
         async with semaphore:
             max_retries = 3
             retry_delay = 1
             success = False
-            
+
             bot = telegram.Bot(TELEGRAM_BOT_TOKEN)
 
             for attempt in range(max_retries):
                 try:
                     await bot.send_message(
-                        chat_id=str(user_id),
+                        chat_id=str(telegram_id),
                         text=message,
                         parse_mode='HTML'  # HTML 포맷팅 지원
                     )
                     success = True
                     break
 
-                except telegram.error.Unauthorized:
+                except Unauthorized:
                     raise HTTPException(
                         status_code=400,
                         detail="봇이 해당 사용자에게 메시지를 보낼 권한이 없습니다."
                     )
 
-                except telegram.error.BadRequest as e:
+                except BadRequest as e:
                     raise HTTPException(
                         status_code=400,
                         detail=f"잘못된 요청: {str(e)}"
                     )
 
-                except telegram.error.RetryAfter as e:
+                except TelegramError as e:
                     raise HTTPException(
                         status_code=429,
                         detail=f"메시지 전송 제한 초과. {e.retry_after}초 후 다시 시도하세요."
@@ -207,26 +245,32 @@ async def get_telegram_logs(
     offset: int = Query(0, description="조회 시작 오프셋", ge=0),
     category: Optional[str] = Query(None, description="필터링할 로그 카테고리 (e.g., start, stop, entry)"),
     strategy_type: Optional[str] = Query(None, description="필터링할 전략 타입 (e.g., HyperRSI)")
-):
+) -> Dict[str, Any]:
     """지정된 사용자의 텔레그램 메시지 로그를 시간 역순으로 조회합니다."""
-    
+
     print(f"OG user_id: {user_id}")
-    
+
     # user_id를 문자열로 변환 (int일 수도 있으므로)
     user_id_str = str(user_id)
-    
+
     # OKX UID 형식인지 Telegram ID 형식인지 구분
     # OKX UID는 일반적으로 18자리 이상
     if len(user_id_str) >= 18:
         # OKX UID로 조회
         log_set_key = LOG_SET_KEY_BY_OKX.format(okx_uid=user_id_str)
         print(f"OKX UID로 조회: {user_id_str}")
+        final_user_id = user_id_str
     else:
         # Telegram ID로 조회 (18자리 미만인 경우)
-        telegram_id = await get_telegram_id_from_uid(user_id_str, TimescaleUserService)
+        telegram_id = await get_telegram_id_from_uid(redis_client, user_id_str, TimescaleUserService)
+        if not telegram_id:
+            raise HTTPException(
+                status_code=404,
+                detail="사용자의 텔레그램 ID를 찾을 수 없습니다."
+            )
         log_set_key = LOG_SET_KEY.format(user_id=telegram_id)
         print(f"telegram id: {telegram_id}")
-        user_id = telegram_id
+        final_user_id = telegram_id
     
     print(f"log_set_key: {log_set_key}")
     try:
@@ -299,11 +343,14 @@ async def get_telegram_logs(
         raise HTTPException(status_code=500, detail="로그 조회 중 오류가 발생했습니다.")
 
 @router.websocket("/ws/logs/{user_id}")
-async def websocket_log_endpoint(websocket: WebSocket, user_id: str):
+async def websocket_log_endpoint(websocket: WebSocket, user_id: str) -> None:
     """WebSocket을 통해 실시간 텔레그램 로그를 스트리밍합니다."""
     await websocket.accept()
-    user_id = await get_telegram_id_from_uid(user_id, TimescaleUserService)
-    log_channel = LOG_CHANNEL_KEY.format(user_id=user_id)
+    telegram_id = await get_telegram_id_from_uid(redis_client, user_id, TimescaleUserService)
+    if not telegram_id:
+        await websocket.close(code=1008, reason="사용자의 텔레그램 ID를 찾을 수 없습니다.")
+        return
+    log_channel = LOG_CHANNEL_KEY.format(user_id=telegram_id)
     pubsub = redis_client.pubsub()
     
 

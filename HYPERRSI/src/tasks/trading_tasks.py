@@ -13,7 +13,7 @@ import signal
 from billiard.exceptions import SoftTimeLimitExceeded, TimeLimitExceeded
 from contextlib import contextmanager, asynccontextmanager
 from types import TracebackType
-from typing import Optional, Type, Dict, Any
+from typing import Optional, Type, Dict, Any, List, AsyncGenerator
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 logger = logging.getLogger(__name__)
 
@@ -35,14 +35,14 @@ _child_tasks = set()  # 생성된 모든 자식 태스크 추적
 
 # 비동기 컨텍스트 매니저 정의
 @asynccontextmanager
-async def trading_context(okx_uid: str, symbol: str): # user_id -> okx_uid (타입은 str 가정)
+async def trading_context(okx_uid: str, symbol: str) -> AsyncGenerator[None, None]: # user_id -> okx_uid (타입은 str 가정)
     """
     트레이딩 작업을 위한 비동기 컨텍스트 매니저.
     모든 리소스가 적절히 정리되도록 보장합니다.
     """
     # 태스크와 리소스 추적
     task = asyncio.current_task()
-    local_resources = []
+    local_resources: List[Any] = []
     
     logger.debug(f"[{okx_uid}] 트레이딩 컨텍스트 시작: {symbol}")
     
@@ -76,7 +76,7 @@ async def trading_context(okx_uid: str, symbol: str): # user_id -> okx_uid (타�
             logger.error(f"[{okx_uid}] Redis 정리 중 오류: {str(e)}")
 
 # 트레이딩 래퍼 함수
-async def execute_trading_with_context(okx_uid: str, symbol: str, timeframe: str, restart: bool = False): # user_id -> okx_uid
+async def execute_trading_with_context(okx_uid: str, symbol: str, timeframe: str, restart: bool = False) -> None: # user_id -> okx_uid
     """
     컨텍스트 매니저를 사용하여 트레이딩 로직을 실행하는 래퍼 함수
     """
@@ -85,10 +85,9 @@ async def execute_trading_with_context(okx_uid: str, symbol: str, timeframe: str
         try:
             user_id = okx_uid # user_id -> okx_uid
             # execute_trading_logic 호출 시 okx_uid 전달 (가정)
-            result = await execute_trading_logic(
+            await execute_trading_logic(
                 user_id=user_id, symbol=symbol, timeframe=timeframe, restart=restart
             )
-            return result
         except asyncio.CancelledError:
             logger.warning(f"[{okx_uid}] 트레이딩 로직이 취소되었습니다: {symbol}")
             raise
@@ -228,10 +227,10 @@ async def check_if_running(okx_uid: str) -> bool: # user_id -> okx_uid
     # 문자열 정규화 (공백 제거 및 따옴표 제거)
     if status:
         status = status.strip().strip('"\'')
-        
-    return status == "running"
 
-async def set_trading_status(okx_uid: str, status: str): # user_id -> okx_uid
+    return bool(status == "running")
+
+async def set_trading_status(okx_uid: str, status: str) -> None: # user_id -> okx_uid
     """
     사용자의 트레이딩 상태 설정
     """
@@ -239,7 +238,7 @@ async def set_trading_status(okx_uid: str, status: str): # user_id -> okx_uid
     await redis_client.set(key, status)
     logger.info(f"[{okx_uid}] 트레이딩 상태를 '{status}'로 설정")
 
-async def set_symbol_status(okx_uid: str, symbol: str, status: str): # user_id -> okx_uid
+async def set_symbol_status(okx_uid: str, symbol: str, status: str) -> None: # user_id -> okx_uid
     """
     특정 심볼에 대한 트레이딩 상태 설정
     """
@@ -247,7 +246,7 @@ async def set_symbol_status(okx_uid: str, symbol: str, status: str): # user_id -
     await redis_client.set(key, status)
     logger.info(f"[{okx_uid}] {symbol} 심볼 상태를 '{status}'로 설정")
 
-async def set_task_running(okx_uid: str, running=True, expiry=900): # user_id -> okx_uid
+async def set_task_running(okx_uid: str, running: bool = True, expiry: int = 900) -> None: # user_id -> okx_uid
     """
     사용자의 태스크 실행 상태를 설정
     만료 시간을 설정하여 비정상 종료 시에만 만료되도록 함
@@ -313,7 +312,7 @@ async def is_task_running(okx_uid: str) -> bool: # user_id -> okx_uid
             except (ValueError, TypeError):
                 logger.warning(f"[{okx_uid}] 시작 시간 파싱 오류: {status.get('started_at')}")
         
-        is_running = status.get("status") == "running"
+        is_running: bool = status.get("status") == "running"
         logger.debug(f"[{okx_uid}] 태스크 실행 상태: {is_running}")
         return is_running
         
@@ -322,16 +321,16 @@ async def is_task_running(okx_uid: str) -> bool: # user_id -> okx_uid
         # 오류 발생 시 안전하게 False 반환
         return False
 
-async def update_last_execution(okx_uid: str, success: bool, error_message: str = None): # user_id -> okx_uid
+async def update_last_execution(okx_uid: str, success: bool, error_message: Optional[str] = None) -> None: # user_id -> okx_uid
     """
     마지막 실행 정보 업데이트
     """
     key = REDIS_KEY_LAST_EXECUTION.format(okx_uid=okx_uid)
-    data = {
+    data: Dict[str, Any] = {
         "timestamp": datetime.now().timestamp(),
         "success": success
     }
-    
+
     if error_message:
         data["error"] = error_message
     
@@ -347,7 +346,7 @@ async def get_active_trading_users(): # 내부 로직 변경 필요
     pattern = 'user:*:trading:status' # 스캔 패턴 변경
 
     try:
-        while cursor != 0:
+        while cursor != '0':
             cursor, keys = await redis_client.scan(cursor=cursor, match=pattern, count=100)
 
             for key in keys:
@@ -467,7 +466,7 @@ async def get_active_trading_users(): # 내부 로직 변경 필요
     return active_users
 
 @asynccontextmanager
-async def acquire_okx_lock(okx_uid: str, symbol: str, timeframe: str, ttl: int = 60): # 함수 이름 및 파라미터 변경
+async def acquire_okx_lock(okx_uid: str, symbol: str, timeframe: str, ttl: int = 60) -> AsyncGenerator[bool, None]: # 함수 이름 및 파라미터 변경
     """
     특정 OKX UID, 심볼, 타임프레임 조합에 대한 분산 락을 획득하는 비동기 컨텍스트 매니저
 
@@ -575,7 +574,7 @@ def check_and_execute_trading():
         traceback.print_exc()
 
 @celery_app.task(name='trading_tasks.execute_trading_cycle', bind=True, max_retries=3, time_limit=50, soft_time_limit=45)
-def execute_trading_cycle(self, okx_uid: str, symbol: str, timeframe: str, restart: bool = False): # user_id -> okx_uid
+def execute_trading_cycle(self: Any, okx_uid: str, symbol: str, timeframe: str, restart: bool = False) -> Dict[str, Any]: # user_id -> okx_uid
     """
     하나의 트레이딩 사이클 실행 태스크 (OKX UID 기반)
     time_limit과 soft_time_limit을 추가하여 무한 실행 방지
@@ -593,7 +592,7 @@ def execute_trading_cycle(self, okx_uid: str, symbol: str, timeframe: str, resta
             run_async(set_task_running(okx_uid, True, expiry=60), timeout=5)
 
             # 실제 비동기 로직 실행 - 타임아웃 45초 설정 (okx_uid 전달)
-            result = run_async(
+            result: Dict[str, Any] = run_async(
                 _execute_trading_cycle(okx_uid, task_id, symbol, timeframe, restart),
                 timeout=45
             )
@@ -638,7 +637,7 @@ def execute_trading_cycle(self, okx_uid: str, symbol: str, timeframe: str, resta
 
 async def _execute_trading_cycle(
     okx_uid: str, task_id: str, symbol: str, timeframe: str, restart: bool = False # user_id -> okx_uid
-):
+) -> Dict[str, Any]:
     """
     실제 비동기 트레이딩 로직 (OKX UID 기반)
     컨텍스트 매니저 패턴 적용
@@ -698,7 +697,7 @@ async def _execute_trading_cycle(
             if is_running:
                 # 컨텍스트 매니저를 통한 실행으로 확실한 자원 정리 (okx_uid 사용)
                 # restart 파라미터를 그대로 전달하여 execute_trading_logic에서도 재시작 모드 인식
-                result = await execute_trading_with_context(
+                await execute_trading_with_context(
                     okx_uid=okx_uid, symbol=symbol, timeframe=timeframe, restart=restart
                 )
 

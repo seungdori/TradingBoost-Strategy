@@ -1,19 +1,17 @@
-class OKXAPIException(Exception):
-    """OKX API 관련 예외"""
-    def __init__(self, message: str, status_code: int = None, response: dict = None):
-        self.message = message
-        self.status_code = status_code
-        self.response = response
-        super().__init__(self.message)
+"""HYPERRSI OKX 예외 (하위 호환성)
 
-class OKXRequestException(OKXAPIException):
-    """API 요청 관련 예외"""
-    pass
+이 파일은 하위 호환성을 위해 유지되며, shared.exchange.okx를 재export합니다.
+"""
+from shared.exchange.okx.exceptions import (
+    OKXAPIException,
+    OKXRequestException,
+    OKXResponseException,
+    OKXWebsocketException
+)
 
-class OKXResponseException(OKXAPIException):
-    """API 응답 관련 예외"""
-    pass
-
-class OKXWebsocketException(Exception):
-    """웹소켓 관련 예외"""
-    pass
+__all__ = [
+    'OKXAPIException',
+    'OKXRequestException',
+    'OKXResponseException',
+    'OKXWebsocketException'
+]

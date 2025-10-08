@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Path, Body
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 import logging
 import traceback
@@ -122,15 +122,15 @@ redis_client = _get_redis_client()
 
 
 # ✅ Redis에서 사용자 API 키 가져오기
-async def get_okx_uid_from_telegram_id(telegram_id: str) -> str:
+async def get_okx_uid_from_telegram_id(telegram_id: str) -> Optional[str]:
     """
     텔레그램 ID를 OKX UID로 변환하는 함수
-    
+
     Args:
         telegram_id: 텔레그램 ID
-        
+
     Returns:
-        str: OKX UID
+        Optional[str]: OKX UID 또는 None
     """
     try:
         # 텔레그램 ID로 OKX UID 조회
@@ -174,7 +174,7 @@ async def get_user_api_keys(user_id: str) -> Dict[str, str]:
         
         if not api_keys:
             raise HTTPException(status_code=404, detail="API keys not found in Redis")
-        return api_keys
+        return dict(api_keys)
     except HTTPException:
         raise
     except Exception as e:
@@ -195,15 +195,15 @@ async def get_user_api_keys(user_id: str) -> Dict[str, str]:
 async def fetch_okx_position_with_symbol(
     user_id: str = Path(..., example="1709556958", description="사용자 ID (텔레그램 ID 또는 OKX UID)"),
     symbol: str = Path(..., example="BTC-USDT-SWAP")
-):
+) -> ApiResponse:
     """리다이렉션 용도로만 사용되는 레거시 엔드포인트"""
     return await fetch_okx_position(user_id, symbol)
 
 @router.get("/{user_id}", response_model=ApiResponse)
 async def fetch_okx_position(
     user_id: str = Path(..., example="1709556958", description="사용자 ID (텔레그램 ID 또는 OKX UID)"),
-    symbol: str = None
-):
+    symbol: Optional[str] = None
+) -> ApiResponse:
     """
     특정 사용자의 OKX 포지션 정보를 조회하는 API 엔드포인트
 
@@ -407,7 +407,7 @@ async def set_position_leverage(
     user_id: str = Path(..., example="1709556958", description="사용자 ID (텔레그램 ID 또는 OKX UID)"),
     symbol: str = Path(..., example="BTC-USDT-SWAP", description="거래 심볼"),
     request: LeverageRequest = Body(..., description="레버리지 설정 요청")
-):
+) -> LeverageResponse:
     """
     특정 심볼의 레버리지를 변경하는 API 엔드포인트
 
@@ -538,7 +538,7 @@ async def set_position_leverage(
 async def open_position_endpoint(
     req: OpenPositionRequest = Body(
         ...,
-        examples={
+        example={
             "basic_example": {
                 "summary": "기본 포지션 생성 예시",
                 "value": {
@@ -559,7 +559,7 @@ async def open_position_endpoint(
         },
         description="포지션 생성 매개변수"
     )
-):
+) -> PositionResponse:
     """
     지정된 매개변수로 새로운 트레이딩 포지션을 생성합니다.
 
@@ -584,10 +584,9 @@ async def open_position_endpoint(
     try:
         # user_id를 OKX UID로 변환
         okx_uid = await get_identifier(str(req.user_id))
-        req.user_id = int(okx_uid)  # req.user_id를 변환된 okx_uid로 업데이트
-        
-        client = await TradingService.create_for_user(req.user_id)
-        
+
+        client = await TradingService.create_for_user(okx_uid)
+
         try:
             is_dca = req.is_DCA
         except AttributeError:
@@ -607,16 +606,19 @@ async def open_position_endpoint(
             hedge_sl_price = req.hedge_sl_price
         except AttributeError:
             hedge_sl_price = None
-        
+
+        # take_profit 변환: list → float (첫 번째 값 사용)
+        take_profit_value = req.take_profit[0] if req.take_profit and len(req.take_profit) > 0 else None
+
         try:
             position_result = await client.open_position(
-                user_id=req.user_id,
+                user_id=okx_uid,
                 symbol=req.symbol,
                 direction=req.direction,
                 size=req.size,
                 leverage=req.leverage,
                 stop_loss=req.stop_loss,
-                take_profit=req.take_profit,
+                take_profit=take_profit_value,
                 is_DCA=is_dca,
                 is_hedge=is_hedge,
                 hedge_tp_price=hedge_tp_price,
@@ -693,7 +695,7 @@ async def open_position_endpoint(
 - `side`를 명시하지 않으면 Service 측에서 심볼의 롱/숏 포지션 여부를 보고 자동 결정합니다.
 """
 )
-async def close_position_endpoint(req: ClosePositionRequest):
+async def close_position_endpoint(req: ClosePositionRequest) -> Dict[str, Any]:
     """
     TradingService.close_position() 호출 → 포지션 청산
     """
@@ -701,35 +703,36 @@ async def close_position_endpoint(req: ClosePositionRequest):
     try:
         # user_id를 OKX UID로 변환
         okx_uid = await get_identifier(str(req.user_id))
-        req.user_id = int(okx_uid)  # req.user_id를 변환된 okx_uid로 업데이트
-        
-        client = await TradingService.create_for_user(req.user_id)
-        
+
+        client = await TradingService.create_for_user(okx_uid)
+
+        # side가 None이면 기본값 설정
+        position_side = req.side if req.side is not None else "long"
+
         # size가 None이고 percent가 지정된 경우에만 percent 사용
-        if (req.size is None or req.size == 0) and req.percent > 0:
+        if (req.size is None or req.size == 0) and req.percent and req.percent > 0:
             use_size = None  # trading_service가 percent를 사용하도록 함
         else:
             use_size = req.size
-            
+
         success = await client.close_position(
-            user_id=req.user_id,
+            user_id=okx_uid,
             symbol=req.symbol,
-            percent=req.percent,
+            side=position_side,
             size=use_size,
-            comment=req.comment,
-            side=req.side
+            reason=req.comment
         )
-        
+
         if not success:
             raise HTTPException(
-                status_code=404, 
+                status_code=404,
                 detail="포지션 청산 실패 혹은 활성화된 포지션이 없습니다."
             )
         return {"success": True, "message": "Position closed successfully."}
     except Exception as e:
         log_error(
             error=e,
-            user_id=req.user_id,
+            user_id=okx_uid,
             additional_info={
                 "function": "close_position_endpoint",
                 "timestamp": datetime.now().isoformat()

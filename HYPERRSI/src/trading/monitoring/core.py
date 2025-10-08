@@ -14,11 +14,13 @@ import sys
 import time
 import traceback
 from datetime import datetime
+from typing import Any, Dict, List
 from shared.logging import get_logger, log_order
 from HYPERRSI.src.core.database import check_redis_connection, reconnect_redis
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 from HYPERRSI.src.api.dependencies import get_exchange_context
-from HYPERRSI.src.api.routes.order import close_position, ClosePositionRequest
+from HYPERRSI.src.api.routes.order.order import close_position
+from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
 from .redis_manager import get_all_running_users, get_user_monitor_orders, perform_memory_cleanup, check_redis_connection_task
 from .order_monitor import check_order_status, update_order_status, check_missing_orders, check_recent_filled_orders, should_check_tp_order, should_check_sl_order
 from .position_validator import check_position_exists, verify_and_handle_position_closure, check_position_change, check_and_cleanup_orders, cancel_algo_orders_for_no_position_sides
@@ -53,12 +55,12 @@ async def monitor_orders_loop():
     주문을 지속적으로 모니터링하는 무한 루프 함수
     """
     logger.info("주문 모니터링 서비스 시작")
-    last_order_check_time = 0  # 마지막 주문 상태 전체 확인 시간
-    last_position_check_time = 0  # 마지막 포지션 확인 시간
-    last_memory_cleanup_time = 0  # 마지막 메모리 정리 시간
-    last_memory_check_time = 0    # 마지막 메모리 체크 시간
-    last_algo_cancel_time = 0     # 마지막 알고리즘 주문 취소 시간
-    last_redis_check_time = 0     # 마지막 Redis 연결 확인 시간
+    last_order_check_time: float = 0.0  # 마지막 주문 상태 전체 확인 시간
+    last_position_check_time: float = 0.0  # 마지막 포지션 확인 시간
+    last_memory_cleanup_time: float = 0.0  # 마지막 메모리 정리 시간
+    last_memory_check_time: float = 0.0    # 마지막 메모리 체크 시간
+    last_algo_cancel_time: float = 0.0     # 마지막 알고리즘 주문 취소 시간
+    last_redis_check_time: float = 0.0     # 마지막 Redis 연결 확인 시간
     POSITION_CHECK_INTERVAL = 60  # 포지션 확인 간격(초)
     MEMORY_CHECK_INTERVAL = 60    # 메모리 체크 간격(초)
     REDIS_CHECK_INTERVAL = 30     # Redis 연결 확인 간격(초)
@@ -66,7 +68,7 @@ async def monitor_orders_loop():
     consecutive_errors = 0  # 연속 오류 카운터
     
     # API 속도 제한 관리
-    api_call_timestamps = []
+    api_call_timestamps: List[float] = []
     
     # 루프 카운터 초기화
     loop_count = 0
@@ -149,7 +151,7 @@ async def monitor_orders_loop():
                 # 5분마다 모든 사용자에 대해 포지션 없는 방향의 알고리즘 주문 취소
                 for user_id in running_users:
                     # 각 사용자에 대해 포지션이 없는 방향의 알고리즘 주문 취소 함수 호출
-                    asyncio.create_task(cancel_algo_orders_for_no_position_sides(user_id))
+                    asyncio.create_task(cancel_algo_orders_for_no_position_sides(str(user_id)))
             
             # 먼저 모든 활성 트레일링 스탑 체크 (독립적인 트레일링 스탑)
             active_trailings = await get_active_trailing_stops()
@@ -174,7 +176,7 @@ async def monitor_orders_loop():
                                     continue
                                 
                                 # 트레일링 스탑 조건 체크
-                                ts_hit = await check_trailing_stop(user_id, symbol, direction, current_price)
+                                ts_hit = await check_trailing_stop(str(user_id), symbol, direction, current_price)
                                 
                                 # 트레일링 스탑 조건 충족 시
                                 if ts_hit:
@@ -190,7 +192,7 @@ async def monitor_orders_loop():
                                     await close_position(
                                         symbol=symbol,
                                         close_request=close_request,
-                                        user_id=user_id,
+                                        user_id=str(user_id),
                                         side=direction
                                     )
                                     
@@ -202,29 +204,29 @@ async def monitor_orders_loop():
                                         # SL 주문 상태 확인
                                         logger.info(f"[트레일링] SL 주문 상태 확인: {sl_order_id}")
                                         sl_status = await check_order_status(
-                                            user_id=user_id,
+                                            user_id=str(user_id),
                                             symbol=symbol,
                                             order_id=sl_order_id,
                                             order_type="sl"
                                         )
-                                        
+
                                         # SL 주문이 체결되었는지 확인
                                         if isinstance(sl_status, dict) and sl_status.get('status') in ['FILLED', 'CLOSED', 'filled', 'closed']:
                                             logger.info(f"[트레일링] SL 주문 체결됨: {sl_order_id}")
                                             # 트레일링 스탑 데이터 삭제
-                                            await clear_trailing_stop(user_id, symbol, direction)
+                                            await clear_trailing_stop(str(user_id), symbol, direction)
                                         elif isinstance(sl_status, dict) and sl_status.get('status') in ['CANCELED', 'canceled']:
                                             # SL 주문이 취소된 경우 트레일링 스탑 데이터 삭제
                                             logger.info(f"[트레일링] SL 주문 취소됨: {sl_order_id}")
-                                            await clear_trailing_stop(user_id, symbol, direction)
+                                            await clear_trailing_stop(str(user_id), symbol, direction)
                                     else:
                                         # SL 주문 ID가 없는 경우 (포지션 자체 확인)
-                                        position_exists, _ = await check_position_exists(user_id, symbol, direction)
-                                        
+                                        position_exists, _ = await check_position_exists(str(user_id), symbol, direction)
+
                                         if not position_exists:
                                             # 포지션이 없으면 트레일링 스탑 데이터 삭제
                                             logger.info(f"[트레일링] 포지션 없음, 트레일링 스탑 삭제: {user_id}:{symbol}:{direction}")
-                                            asyncio.create_task(clear_trailing_stop(user_id, symbol, direction))
+                                            asyncio.create_task(clear_trailing_stop(str(user_id), symbol, direction))
                             except Exception as e:
                                 logger.error(f"트레일링 스탑 현재가 조회 오류: {str(e)}")
                     except Exception as ts_error:
@@ -251,7 +253,7 @@ async def monitor_orders_loop():
             for user_id in running_users:
                 try:
                     # 사용자의 모든 모니터링 주문 가져오기
-                    user_orders = await get_user_monitor_orders(user_id)
+                    user_orders = await get_user_monitor_orders(str(user_id))
                     if not user_orders:
                         continue
                         
@@ -261,10 +263,12 @@ async def monitor_orders_loop():
                         logger.info(f"사용자 {user_id}의 모니터링 주문 수: {len(user_orders)}")
                     
                     # 심볼별 주문 그룹화 (한 번만 현재가를 가져오기 위함)
-                    symbol_orders = {}
+                    symbol_orders: Dict[str, List[Dict[str, Any]]] = {}
                     
                     for order_id, order_data in user_orders.items():
                         symbol = order_data.get("symbol")
+                        if symbol is None:
+                            continue
                         if symbol not in symbol_orders:
                             symbol_orders[symbol] = []
                         symbol_orders[symbol].append(order_data)
@@ -285,10 +289,10 @@ async def monitor_orders_loop():
                                 force_check_all_orders = True
                                 
                                 # 사라진 주문이 체결되었는지 확인하기 위해 별도 태스크 실행
-                                asyncio.create_task(check_missing_orders(user_id, symbol, orders))
-                                
+                                asyncio.create_task(check_missing_orders(str(user_id), symbol, orders))
+
                                 # 추가로 최근 체결된 주문도 확인
-                                asyncio.create_task(check_recent_filled_orders(user_id, symbol))
+                                asyncio.create_task(check_recent_filled_orders(str(user_id), symbol))
                         
                         # 현재 주문 수 저장
                         await redis_client.set(order_count_key, current_order_count, ex=600)  # 10분 TTL
@@ -315,9 +319,9 @@ async def monitor_orders_loop():
                                             continue
                                         
                                         # 포지션이 없는 경우에만 정리 작업 (API 호출 최소화)
-                                        position_exists, _ = await check_position_exists(user_id, symbol, direction)
+                                        position_exists, _ = await check_position_exists(str(user_id), symbol, direction)
                                         if not position_exists:
-                                            await check_and_cleanup_orders(user_id, symbol, direction)
+                                            await check_and_cleanup_orders(str(user_id), symbol, direction)
                                 
                                 # 심볼별로 트레일링 스탑 활성화된 방향 확인
                                 trailing_sides = set()
@@ -344,10 +348,10 @@ async def monitor_orders_loop():
                                 
                                 # 각 주문 확인 (정렬된 순서로)
                                 for order_data in sorted_orders:
-                                    order_id = order_data.get("order_id")
-                                    order_type = order_data.get("order_type", "")
-                                    position_side = order_data.get("position_side", "")
-                                    current_status = order_data.get("status", "")
+                                    order_id = str(order_data.get("order_id", ""))
+                                    order_type = str(order_data.get("order_type", ""))
+                                    position_side = str(order_data.get("position_side", ""))
+                                    current_status = str(order_data.get("status", ""))
                                     
                                     # 모니터링되는 주문 로깅
                                     logger.debug(f"모니터링 주문: {order_id}, 타입: {order_type}, 포지션: {position_side}, 상태: {current_status}")
@@ -414,19 +418,17 @@ async def monitor_orders_loop():
                                     
                                     # 주문 상태 확인이 필요한 경우
                                     if check_needed:
-                                        order_id = order_data.get("order_id")
-                                        order_type = order_data.get("order_type", "")
                                         # 주문 상태 확인 로깅도 5분마다 한번만
                                         order_log_key = f"order_status_{order_id}"
                                         if should_log(order_log_key):
                                             logger.info(f"주문 상태 확인: {order_id}, 타입: {order_type}")
-                                        
+
                                         # 주문 상태 확인 전 포지션 정보 로깅 (5분마다 한번만)
                                         log_key = f"order_check_{user_id}_{symbol}_{position_side}"
                                         if should_log(log_key):
                                             logger.info(f"주문 확인 전 포지션 정보 - user_id: {user_id}, symbol: {symbol}, position_side: {position_side}")
                                             logger.info(f"주문 데이터: {order_data}")
-                                        tp_index = 0
+                                        tp_index: int = 0
                                         if order_type.startswith("tp"):
                                             tp_index = int(order_type[2:])
                                         # 주문 확인 간 짧은 딜레이 추가 (서버 부하 방지)
@@ -435,15 +437,15 @@ async def monitor_orders_loop():
                                         # order_type 매개변수를 추가하여 호출
                                         try:
                                             order_status = await check_order_status(
-                                                user_id=user_id, 
-                                                symbol=symbol, 
+                                                user_id=str(user_id),
+                                                symbol=symbol,
                                                 order_id=order_id,
                                                 order_type=order_type
                                             )
-                                            
-                                            # 디버깅을 위한 API 응답 로깅  
+
+                                            # 디버깅을 위한 API 응답 로깅
                                             #logger.debug(f"주문 상태 API 응답: {order_id} -> {order_status}")
-                                            
+
                                             # order_status가 None인 경우 체크
                                             if order_status is None:
                                                 logger.warning(f"주문 상태 API가 None을 반환: {order_id}")
@@ -511,7 +513,7 @@ async def monitor_orders_loop():
                                                         
                                                         # 사용자 설정에 따른 브레이크이븐/트레일링스탑 처리
                                                         asyncio.create_task(process_break_even_settings(
-                                                            user_id=user_id,
+                                                            user_id=str(user_id),
                                                             symbol=symbol,
                                                             order_type=order_type,
                                                             position_data=order_data
@@ -522,19 +524,19 @@ async def monitor_orders_loop():
                                                 
                                                 # 주문 상태 업데이트 (order_type 매개변수 추가)
                                                 await update_order_status(
-                                                    user_id=user_id,
+                                                    user_id=str(user_id),
                                                     symbol=symbol,
                                                     order_id=order_id,
                                                     status=status,
                                                     filled_amount=str(filled_sz),
                                                     order_type=order_type
                                                 )
-                                                
+
                                                 # SL 주문이 체결된 경우, 관련 트레일링 스탑 데이터 정리
                                                 if status == 'filled' and order_type == 'sl':
                                                     # SL 체결 후 포지션이 실제로 종료되었는지 확인
-                                                    asyncio.create_task(verify_and_handle_position_closure(user_id, symbol, position_side, "stop_loss"))
-                                                    asyncio.create_task(clear_trailing_stop(user_id, symbol, position_side))
+                                                    asyncio.create_task(verify_and_handle_position_closure(str(user_id), symbol, position_side, "stop_loss"))
+                                                    asyncio.create_task(clear_trailing_stop(str(user_id), symbol, position_side))
                                                     
                                                     
                                                     # 알고리즘 주문 - SL 주문 체결 로깅
@@ -583,41 +585,41 @@ async def monitor_orders_loop():
                                                         logger.error(f"OKX TP 주문 체결 로깅 실패: {str(e)}")
                                             # OKX API 응답 (알고리즘 주문)
                                             elif 'state' in order_status:
-                                                state = order_status.get('state')
+                                                state = order_status.get('state', '')
                                                 filled_sz = order_status.get('filled_amount', '0')
                                                 if filled_sz == '0':
                                                     filled_sz = order_status.get('amount', '0')
                                                     if filled_sz == '0':
                                                         filled_sz = order_status.get('sz', '0')
-                                                
+
                                                 # 상태 매핑
-                                                status_mapping = {
+                                                status_mapping: Dict[str, str] = {
                                                     'filled': 'filled',
                                                     'effective': 'open',
                                                     'canceled': 'canceled',
                                                     'order_failed': 'failed'
                                                 }
                                                 status = status_mapping.get(state, 'unknown')
-                                                
+
                                                 # 주문 상태 업데이트 (order_type 매개변수 추가)
                                                 await update_order_status(
-                                                    user_id=user_id,
+                                                    user_id=str(user_id),
                                                     symbol=symbol,
                                                     order_id=order_id,
                                                     status=status,
                                                     filled_amount=filled_sz,
                                                     order_type=order_type
                                                 )
-                                                
+
                                                 # SL 주문이 체결된 경우, 관련 트레일링 스탑 데이터 정리
                                                 if status == 'filled' and order_type == 'sl':
-                                                    await clear_trailing_stop(user_id, symbol, position_side)
+                                                    await clear_trailing_stop(str(user_id), symbol, position_side)
                                             else:
                                                 # dict이지만 'status'나 'state' 키가 없는 경우
                                                 logger.warning(f"주문 상태 응답에 'status' 또는 'state' 키가 없음: {order_id} -> {order_status}")
                                                 # 기본적으로 canceled로 처리
                                                 await update_order_status(
-                                                    user_id=user_id,
+                                                    user_id=str(user_id),
                                                     symbol=symbol,
                                                     order_id=order_id,
                                                     status='canceled',
@@ -629,7 +631,7 @@ async def monitor_orders_loop():
                                             logger.warning(f"예상하지 못한 주문 상태 형식: {order_id} -> {order_status}")
                                             # 기본적으로 canceled로 처리
                                             await update_order_status(
-                                                user_id=user_id,
+                                                user_id=str(user_id),
                                                 symbol=symbol,
                                                 order_id=order_id,
                                                 status='canceled',
@@ -779,8 +781,8 @@ async def start_monitoring():
                 # 텔레그램으로 관리자에게 알림 (선택적)
                 try:
                     await send_telegram_message(
-                        f"⚠️ 모니터링 서비스 오류 발생\n재시작 시도: {restart_attempts}/{MAX_RESTART_ATTEMPTS}\n오류: {str(e)}\n타입: {error_type}\n서버 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                        user_id=1709556958,
+                        message=f"⚠️ 모니터링 서비스 오류 발생\n재시작 시도: {restart_attempts}/{MAX_RESTART_ATTEMPTS}\n오류: {str(e)}\n타입: {error_type}\n서버 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                        okx_uid="1709556958",
                         debug=True
                     )
                 except Exception as telegram_error:
@@ -800,8 +802,8 @@ async def start_monitoring():
         # 마지막 텔레그램 알림
         try:
             await send_telegram_message(
-                f"🚨 모니터링 서비스 강제 종료\n최대 재시작 시도 횟수({MAX_RESTART_ATTEMPTS})를 초과했습니다.\n수동 개입이 필요합니다.\n서버 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                user_id=1709556958,
+                message=f"🚨 모니터링 서비스 강제 종료\n최대 재시작 시도 횟수({MAX_RESTART_ATTEMPTS})를 초과했습니다.\n수동 개입이 필요합니다.\n서버 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                okx_uid="1709556958",
                 debug=True
             )
         except Exception as final_error:

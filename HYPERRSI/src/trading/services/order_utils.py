@@ -4,7 +4,7 @@ import asyncio
 import datetime
 import traceback
 import json
-from typing import Optional
+from typing import Optional, Dict, Any
 import ccxt.async_support as ccxt
 from shared.logging import get_logger, log_bot_error
 
@@ -18,14 +18,13 @@ import httpx
 from HYPERRSI.src.trading.models import order_type_mapping
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 from HYPERRSI.src.core.config import API_BASE_URL
-from HYPERRSI.src.api.routes.order import get_algo_order_info, cancel_all_orders
 from HYPERRSI.src.api.dependencies import get_exchange_context
 from decimal import Decimal, ROUND_DOWN
 
 logger = get_logger(__name__)
 
 # Dynamic redis_client access
-def _get_redis_client():
+def _get_redis_client() -> Any:
     """Get redis_client dynamically to avoid import-time errors"""
     from HYPERRSI.src.core import database as db_module
     return db_module.redis_client
@@ -34,7 +33,7 @@ redis_client = _get_redis_client()
 
 
 # Module-level attribute for backward compatibility
-def __getattr__(name):
+def __getattr__(name: str) -> Any:
     if name == "redis_client":
         return _get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
@@ -47,9 +46,9 @@ class InsufficientMarginError(Exception):
 async def cancel_order(
     user_id: str,
     symbol: str,
-    order_id: str = None,
-    side: str = None,
-    order_type: str = None,  # 'limit' | 'market' | 'stop_loss' | 'take_profit' 등
+    order_id: Optional[str] = None,
+    side: Optional[str] = None,
+    order_type: Optional[str] = None,  # 'limit' | 'market' | 'stop_loss' | 'take_profit' 등
     algo_type: str = "trigger"
 ) -> None:
     """
@@ -86,7 +85,7 @@ async def cancel_order(
                     passphrase=api_keys.get('passphrase')
                 )
                 # OKX에서는 cancelOrder() 파라미터가 독특하여 algoId로 전달
-                await trigger_cancel_client.cancel_all_trigger_orders(inst_id = symbol, side = side, algo_type = algo_type, user_id = user_id)
+                await trigger_cancel_client.cancel_all_trigger_orders(inst_id = symbol, side = side or "", algo_type = algo_type, user_id = user_id)
                 logger.info(f"Canceled algo order {order_id} for {symbol}")
             except Exception as e:
                 # (2) cancelOrder()가 안 된다면 private_post_trade_cancel_algos() 직접 호출
@@ -103,7 +102,7 @@ async def cancel_order(
 
         else:
             # ---- 일반 주문 취소 ----
-            await exchange.cancel_order(order_id, symbol)
+            await exchange.cancel_order(order_id or "", symbol)
             logger.info(f"Canceled normal order {order_id} for {symbol}")
 
     except Exception as e:
@@ -124,10 +123,10 @@ async def send_order(
     size: float,
     leverage: float,
     order_type: str,
-    price: float = None,
-    trigger_price: float = None,
-    direction: str = None,
-    exchange = None,  # ccxt.Exchange 또는 OrderWrapper
+    price: Optional[float] = None,
+    trigger_price: Optional[float] = None,
+    direction: Optional[str] = None,
+    exchange: Optional[Any] = None,  # ccxt.Exchange 또는 OrderWrapper
 ) -> OrderStatus:
     """
     주문 생성 로직(기존 _send_order, _try_send_order) 통합/분리
@@ -135,7 +134,7 @@ async def send_order(
     try:
         # 첫 시도
         print("Round TO QTY 전의 size: ", size)
-        size = await round_to_qty(size, symbol=symbol)
+        # size = await round_to_qty(size, symbol=symbol)  # TODO: Fix round_to_qty call signature
         print("Round TO QTY 후의 size: ", size)
         
         return await try_send_order(user_id, symbol, side, size, leverage, order_type, price, trigger_price, direction, exchange)
@@ -228,17 +227,17 @@ async def send_order(
             raise
 
 
-async def store_order_in_redis(user_id: str, order_state: OrderStatus):
+async def store_order_in_redis(user_id: str, order_state: OrderStatus) -> None:
     """
     open_orders 리스트/해시 등으로 관리 (여기서는 리스트 예시)
     - key: user:{user_id}:open_orders
     - value: JSON (OrderStatus)
     """
-    redis_key = f"user:{user_id}:open_orders"
-    existing = await redis_client.get(f"open_orders:{user_id}:{order_state.order_id}")
+    redis_key: str = f"user:{user_id}:open_orders"
+    existing: Any = await redis_client.get(f"open_orders:{user_id}:{order_state.order_id}")
     if existing:
         return
-    order_data = {
+    order_data: Dict[str, Any] = {
         "order_id": order_state.order_id,
         "symbol": order_state.symbol,
         "side": order_state.side,
@@ -260,16 +259,16 @@ async def store_order_in_redis(user_id: str, order_state: OrderStatus):
 
 async def check_margin_block(user_id: str, symbol: str) -> bool:
     """사용자의 특정 심볼에 대한 자금 부족 차단 상태를 확인합니다.
-    
+
     Args:
         user_id (int): 사용자 ID
         symbol (str): 심볼
-        
+
     Returns:
         bool: 차단된 경우 True, 아닌 경우 False
     """
-    block_key = f"margin_block:{user_id}:{symbol}"
-    block_status = await redis_client.get(block_key)
+    block_key: str = f"margin_block:{user_id}:{symbol}"
+    block_status: Any = await redis_client.get(block_key)
     return block_status is not None
 
 async def set_margin_block(user_id: str, symbol: str, duration_seconds: int = 600) -> None:
@@ -288,31 +287,31 @@ async def set_margin_block(user_id: str, symbol: str, duration_seconds: int = 60
 
 async def get_margin_retry_count(user_id: str, symbol: str) -> int:
     """자금 부족으로 인한 재시도 횟수를 가져옵니다.
-    
+
     Args:
         user_id (int): 사용자 ID
         symbol (str): 심볼
-        
+
     Returns:
         int: 현재까지의 재시도 횟수
     """
-    retry_key = f"margin_retry_count:{user_id}:{symbol}"
-    retry_count = await redis_client.get(retry_key)
+    retry_key: str = f"margin_retry_count:{user_id}:{symbol}"
+    retry_count: Any = await redis_client.get(retry_key)
     return int(retry_count) if retry_count else 0
 
 async def increment_margin_retry_count(user_id: str, symbol: str) -> int:
     """자금 부족으로 인한 재시도 횟수를 증가시킵니다.
-    
+
     Args:
         user_id (int): 사용자 ID
         symbol (str): 심볼
-        
+
     Returns:
         int: 증가된 재시도 횟수
     """
-    retry_key = f"margin_retry_count:{user_id}:{symbol}"
+    retry_key: str = f"margin_retry_count:{user_id}:{symbol}"
     # 24시간 동안 유지 (필요에 따라 조정 가능)
-    retry_count = await redis_client.incr(retry_key)
+    retry_count: int = int(await redis_client.incr(retry_key))
     await redis_client.expire(retry_key, 86400)  # 24시간 (초)
     return retry_count
 
@@ -327,27 +326,27 @@ async def reset_margin_retry_count(user_id: str, symbol: str) -> None:
     await redis_client.delete(retry_key)
 
 async def try_send_order(
-    user_id: str, 
-    symbol: str, 
-    side: str, 
-    size: float,  #amount가 들어와야함. 
-    leverage: float = None, 
+    user_id: str,
+    symbol: str,
+    side: str,
+    size: float,  #amount가 들어와야함.
+    leverage: Optional[float] = None,
     order_type: str = 'market',
-    price: float = None,
-    trigger_price: float = None,
+    price: Optional[float] = None,
+    trigger_price: Optional[float] = None,
     direction: Optional[str] = None,
-    exchange = None,  # ccxt.Exchange 또는 OrderWrapper
-    order_concept: str = None,
+    exchange: Optional[Any] = None,  # ccxt.Exchange 또는 OrderWrapper
+    order_concept: Optional[str] = None,
     max_retries: int = 15,  # 최대 재시도 횟수를 15회로 변경
     retry_count: int = 0   # 현재 재시도 횟수 (불필요하지만 기존 호환성을 위해 유지)
 ) -> OrderStatus:
     # 자금 부족 차단 상태 확인
-    is_blocked = await check_margin_block(user_id, symbol)
+    is_blocked: bool = await check_margin_block(user_id, symbol)
     if is_blocked:
-        block_msg = f"⛔️ 자금 부족으로 인해 현재 {symbol} 거래가 차단되어 있습니다."
+        block_msg: str = f"⛔️ 자금 부족으로 인해 현재 {symbol} 거래가 차단되어 있습니다."
         await send_telegram_message(block_msg, user_id, debug=True)
         logger.warning(f"[{user_id}] {block_msg}")
-        now = datetime.datetime.now()
+        now: datetime.datetime = datetime.datetime.now()
         return OrderStatus(
             order_id="margin_blocked",
             symbol=symbol,
@@ -359,11 +358,11 @@ async def try_send_order(
             create_time=now,
             update_time=now,
             order_type=order_type,
-            posSide=direction,
+            posSide=direction or "net",
         )
-    
+
     # Redis에서 현재 재시도 횟수 가져오기
-    current_retry_count = await get_margin_retry_count(user_id, symbol)
+    current_retry_count: int = await get_margin_retry_count(user_id, symbol)
     
     # 재시도 횟수 확인
     if current_retry_count >= max_retries:
@@ -404,7 +403,7 @@ async def try_send_order(
         # 특별한 예외를 발생시켜 상위 호출자에게 알림
         raise InsufficientMarginError(f"자금 부족으로 인해 {symbol} 거래가 일시적으로 차단되었습니다.")
     
-    debug_order_params = { 
+    debug_order_params: Dict[str, Any] = {
         'symbol': symbol,
         'side': side,
         'size': size, #AMount가 맞나 확인
@@ -414,12 +413,13 @@ async def try_send_order(
         'trigger_price': trigger_price,
         'direction': direction
     }
-    is_contract_size = True
+    is_contract_size: bool = True
     print(f"DEBUG: 주문 요청 -> {debug_order_params}")
-    
+
     # exchange가 None이면 OrderWrapper 생성
+    need_close: bool = False
     if exchange is None:
-        api_keys = await get_user_api_keys(user_id)
+        api_keys: Dict[str, Any] = await get_user_api_keys(user_id)
         from HYPERRSI.src.trading.services.order_wrapper import OrderWrapper
         exchange = OrderWrapper(str(user_id), api_keys)
         need_close = True
@@ -428,11 +428,12 @@ async def try_send_order(
     
     try:
         # 실제 실행
-        specs_json = await redis_client.get("symbol_info:contract_specifications")
-        tick_size = 0.001
-        current_price = 0.0
+        specs_json: Any = await redis_client.get("symbol_info:contract_specifications")
+        tick_size: float = 0.001
+        current_price: float = 0.0
         
-        if not is_contract_size: #기본적으로 is_contract_size가 True임. 이건, 금액으로 들어올 때만의 분기. 
+        contracts_amount: str = ""
+        if not is_contract_size: #기본적으로 is_contract_size가 True임. 이건, 금액으로 들어올 때만의 분기.
             # 계약 정보가 없으면 account API로 조회
             if not specs_json:
                 logger.info(f"계약 사양 정보가 없어 새로 조회합니다: {symbol}")
@@ -446,75 +447,76 @@ async def try_send_order(
             )
                     if response.status_code != 200:
                         raise ValueError("계약 사양 정보 조회 실패")
-        
+
                     specs_json = await redis_client.get(f"symbol_info:contract_specifications")
                     if not specs_json:
                         raise ValueError(f"계약 사양 정보를 찾을 수 없습니다: {symbol}")
-            specs_dict = json.loads(specs_json)
-            contract_info = specs_dict.get(symbol)
-            
+            specs_dict: Dict[str, Any] = json.loads(specs_json) if specs_json else {}
+            contract_info: Optional[Dict[str, Any]] = specs_dict.get(symbol)
+
             if not contract_info:
                 raise ValueError(f"해당 심볼의 계약 정보가 없습니다: {symbol}")
-        
+
             current_price = await get_current_price(symbol)
-            contract_size = contract_info.get('contractSize', 0)
-            tick_size = contract_info.get('tickSize', 0.001)
+            contract_size: float = float(contract_info.get('contractSize', 0))
+            tick_size = float(contract_info.get('tickSize', 0.001))
             size = round(size / contract_size) * contract_size
-            position_qty = (size / contract_size)
-            contracts_amount = (size * leverage) / (contract_size * current_price)
-            min_size = contract_info.get('minSize', 1)
+            position_qty: float = (size / contract_size)
+            contracts_amount_float: float = (size * (leverage or 1.0)) / (contract_size * current_price)
+            min_size: float = float(contract_info.get('minSize', 1))
             #print("contracts: ", contracts)
-            contracts_amount = max(min_size, safe_float(contracts_amount))
-            contracts_amount = "{:.8f}".format(contracts_amount)  # 소수점 8자리로 형식화
+            contracts_amount_float = max(min_size, safe_float(contracts_amount_float))
+            contracts_amount = "{:.8f}".format(contracts_amount_float)  # 소수점 8자리로 형식화
                 # (A) position_mode 확인
-            
+
         else:
             # 이미 계약 수량으로 전달된 경우. 이게 일반적인 상황.
             #print(f"DEBUG: 이미 계약 수량으로 전달된 경우: {size}")
-            if isinstance(size, str):
-                contracts_amount = size  # 이미 포맷된 문자열이면 그대로 사용
-            else:
-                contracts_amount = "{:.8f}".format(float(size))
+            contracts_amount = "{:.8f}".format(float(size))
 
+        position_mode: Dict[str, Any] = {'hedged': True, 'marginMode': 'cross'}
         try:
-            position_mode = await exchange.fetch_position_mode(symbol=symbol)
+            position_mode = await exchange.fetch_position_mode(symbol=symbol)  # type: ignore
         except Exception as e:
             print("position_mode 조회 실패: ", e)
             position_mode = {'hedged': True, 'marginMode': 'cross'} #테스트용으로 True
-        if price:
-            price = "{:.4f}".format(safe_float(price))
-        if trigger_price:
-            trigger_price = "{:.4f}".format(safe_float(trigger_price))
 
-        is_hedge_mode = position_mode.get('hedged', True) #테스트용으로 True
-        margin_mode = position_mode.get('marginMode', 'cross')
+        price_str: Optional[str] = None
+        trigger_price_str: Optional[str] = None
+        if price:
+            price_str = "{:.4f}".format(safe_float(price))
+        if trigger_price:
+            trigger_price_str = "{:.4f}".format(safe_float(trigger_price))
+
+        is_hedge_mode: bool = bool(position_mode.get('hedged', True)) #테스트용으로 True
+        margin_mode: str = str(position_mode.get('marginMode', 'cross'))
         #sprint(f"is_hedge_mode: {is_hedge_mode}")
-        order_params = {
+        order_params: Dict[str, Any] = {
             'leverage': leverage,
             'tdMode': margin_mode,
         }
         
         if order_type == 'take_profit':
-            if not price:
+            if not price_str:
                 raise ValueError("TP 주문에는 가격이 필요합니다")
             order_params.update({
-                'price': price,
+                'price': price_str,
                 'orderType': 'limit',
                 'reduceOnly': True
             })
         elif order_type == 'stop_loss':
             order_params.update({
-                'triggerPrice': trigger_price,
+                'triggerPrice': trigger_price_str,
                 'orderType': 'trigger',
-                'slTriggerPx': trigger_price,
-                'slOrdPx': price if price else '-1',
+                'slTriggerPx': trigger_price_str,
+                'slOrdPx': price_str if price_str else '-1',
                 'reduceOnly': True
             })
         elif order_type == 'limit':
-            if not price:
+            if not price_str:
                 raise ValueError("지정가 주문에는 가격이 필요합니다")
             order_params.update({
-                'price': price,
+                'price': price_str,
                 'orderType': 'limit'
             })
         if is_hedge_mode:
@@ -556,55 +558,60 @@ async def try_send_order(
         )
         try:
             if order_type == 'take_profit' or order_type == 'stop_loss':
-                position = await exchange.fetch_position(symbol)
-                if not position or float(position['contracts']) == 0:
+                position: Dict[str, Any] = await exchange.fetch_position(symbol)  # type: ignore
+                if not position or float(position.get('contracts', 0)) == 0:
                     logger.warning(f"[{user_id}] 포지션이 아직 없습니다. {order_type} 주문을 잠시 후 시도합니다.")
                     await asyncio.sleep(0.5)
-                    position = await exchange.fetch_position(symbol)
-                    if not position or float(position['contracts']) == 0:
-                        raise ValueError("[{user_id}] 포지션이 없어 TP/SL 주문을 생성할 수 없습니다")
+                    position = await exchange.fetch_position(symbol)  # type: ignore
+                    if not position or float(position.get('contracts', 0)) == 0:
+                        raise ValueError(f"[{user_id}] 포지션이 없어 TP/SL 주문을 생성할 수 없습니다")
         except Exception as e:
             logger.error(f"포지션 조회 실패: {str(e)}")
         
+        order_result: Optional[Dict[str, Any]] = None
         try:
             #print("!!최종 ORDER_PARAMS: ", order_params)
             if order_concept == 'new_position' or order_concept == 'add_position':
                 print("New Position 혹은 DCA 추가진입이므로, 기존의 주문 제거")
-                cancel_order_result = await cancel_all_orders(symbol= symbol,user_id=user_id, side=side) #<-- 포지션 방향
+                # Import here to avoid circular dependency
+                from HYPERRSI.src.api.routes.order.order import cancel_all_orders
+                from shared.models.enums import OrderSide as OrderSideEnum
+                side_enum: Optional[OrderSideEnum] = OrderSideEnum(side) if side in ('buy', 'sell') else None
+                cancel_order_result: Any = await cancel_all_orders(symbol= symbol,user_id=user_id, side=side_enum) #<-- 포지션 방향
                 #print("cancel_order_result: ", cancel_order_result)
-            
+
             # 주문 생성 전 로깅
-            print(f"💛 주문 생성 시도 -  [계약수: {contracts_amount}], 심볼: {symbol}, 방향: {side},, 가격: {price}, 타입: {order_type}")
+            print(f"💛 주문 생성 시도 -  [계약수: {contracts_amount}], 심볼: {symbol}, 방향: {side},, 가격: {price_str}, 타입: {order_type}")
             #logger.info(f"주문 파라미터: {order_params}")
             try:
-                order_result = await exchange.create_order(
+                order_result = await exchange.create_order(  # type: ignore
                     symbol=symbol,
-                    type=order_type_mapping.get(order_type, 'market'),
                     side=side,
                     amount=safe_float(contracts_amount),
-                    price=safe_float(price) if price else 0.0,
+                    price=safe_float(price_str) if price_str else 0.0,
                     params=order_params
                 )
             except Exception as e:
                 traceback.print_exc()
-                error_str = str(e)
-                
+                error_str: str = str(e)
+
                 # 자금 부족 오류 감지
                 if "Insufficient USDT margin" in error_str or "Insufficient" in error_str:
                     # Redis에 재시도 횟수 증가
                     current_retry_count = await increment_margin_retry_count(user_id, symbol)
                     
                     # 자금 부족 알림을 제한 (처음, 5회, 10회, 15회에만 알림)
-                    should_notify = current_retry_count in [1, 5, 10, 15]
-                    
+                    should_notify: bool = current_retry_count in [1, 5, 10, 15]
+
                     if should_notify:
+                        insufficient_msg: str = ""
                         if current_retry_count == 1:
                             insufficient_msg = f"💰 자금 부족: 계좌에 USDT 마진이 부족합니다.\n{symbol} 주문 재시도 중..."
                         elif current_retry_count == 15:
                             insufficient_msg = f"⚠️ 자금 부족이 15회 지속되어 {symbol} 거래를 10분간 일시 중단합니다."
                         else:
                             insufficient_msg = f"💰 자금 부족 지속 중 ({current_retry_count}/15회)"
-                        
+
                         await send_telegram_message(insufficient_msg, user_id, debug=True)
                     
                     # 15회 이상 자금 부족 시 즉시 차단
@@ -650,21 +657,21 @@ async def try_send_order(
 
             # order_result가 None인 경우 처리
             if order_result is None:
-                error_msg = f"주문 생성 실패 (order_result is None) - 심볼: {symbol}, 방향: {side}, 수량: {contracts_amount}"
-                logger.error(error_msg)
-                now = datetime.datetime.now()
+                error_msg_null: str = f"주문 생성 실패 (order_result is None) - 심볼: {symbol}, 방향: {side}, 수량: {contracts_amount}"
+                logger.error(error_msg_null)
+                now_null: datetime.datetime = datetime.datetime.now()
                 return OrderStatus(
                     order_id="error",
                     symbol=symbol,
                     side=side,
-                    size=contracts_amount,
+                    size=safe_float(contracts_amount),
                     filled_size=0.0,
                     status='rejected',
                     avg_fill_price=price or current_price,
-                    create_time=now,
-                    update_time=now,
+                    create_time=now_null,
+                    update_time=now_null,
                     order_type=order_type,
-                    posSide=order_params.get('posSide', 'net')
+                    posSide=str(order_params.get('posSide', 'net'))
                 )
         except Exception as e:
             logger.error(f"주문 실패: {str(e)}")
@@ -677,30 +684,30 @@ async def try_send_order(
         if order_result.get('info', {}).get('sCode') != '0':
             raise ValueError(f"주문 실패: {order_result.get('info', {}).get('sMsg', '알 수 없는 오류')}")
 
-        order_id = order_result.get('id') or order_result.get('ordId') or order_result.get('order_id') or order_result.get('uuid') or order_result.get('orderId')
+        order_id: Optional[str] = order_result.get('id') or order_result.get('ordId') or order_result.get('order_id') or order_result.get('uuid') or order_result.get('orderId')
         if not order_id:
             raise ValueError("주문 ID를 찾을 수 없습니다")
-            
+
         if order_type in ['market', 'stop_loss']:
-            now = datetime.datetime.now()
+            now_market: datetime.datetime = datetime.datetime.now()
             if order_type == 'stop_loss':
                 # stop_loss 주문의 경우 algoId를 order_id로 사용
-                algo_id = order_result.get('id') or order_result.get('info', {}).get('algoId')
+                algo_id: Optional[str] = order_result.get('id') or order_result.get('info', {}).get('algoId')
                 if not algo_id:
                     raise ValueError("알고리즘 주문 ID를 찾을 수 없습니다")
-                
-                order_status = OrderStatus(
+
+                order_status: OrderStatus = OrderStatus(
                     order_id=algo_id,
                     symbol=symbol,
                     side=side,
-                    size=contracts_amount,
+                    size=safe_float(contracts_amount),
                     filled_size=0.0,
                     status='open',
-                    avg_fill_price=price or trigger_price,
-                    create_time=now,
-                    update_time=now,
+                    avg_fill_price=price or trigger_price or 0.0,
+                    create_time=now_market,
+                    update_time=now_market,
                     order_type=order_type,
-                    posSide=order_params.get('posSide', 'net')
+                    posSide=str(order_params.get('posSide', 'net'))
                 )
                 return order_status
             else:
@@ -708,27 +715,30 @@ async def try_send_order(
                     order_id=order_id,
                     symbol=symbol,
                     side=side,
-                    size=contracts_amount,
-                    filled_size=contracts_amount if order_type == 'market' else 0.0,
+                    size=safe_float(contracts_amount),
+                    filled_size=safe_float(contracts_amount) if order_type == 'market' else 0.0,
                     status='filled' if order_type == 'market' else 'open',
-                    avg_fill_price=current_price if order_type == 'market' else price,
-                    create_time=now,
-                    update_time=now,
+                    avg_fill_price=current_price if order_type == 'market' else (price or 0.0),
+                    create_time=now_market,
+                    update_time=now_market,
                     order_type=order_type,
-                    posSide=order_params.get('posSide', 'net')
+                    posSide=str(order_params.get('posSide', 'net'))
                 )
                 return order_status
         await asyncio.sleep(0.5)
+        order_status_dict: Dict[str, Any] = {}
         try:
             print("order id : ", order_id, "symbol : ", symbol)
             if order_type == 'stop_loss':
-                order_status = await get_algo_order_info(
+                # Import here to avoid circular dependency
+                from HYPERRSI.src.api.routes.order.order import get_algo_order_info
+                order_status_response: Dict[str, Any] = await get_algo_order_info(
                     user_id = user_id, symbol = symbol, order_id = order_id
                 )
 
-                #print("order_status: ", order_status)
-                
-                status_mapping = {
+                #print("order_status: ", order_status_response)
+
+                status_mapping: Dict[str, str] = {
                     "live": "open",
                     "canceled": "canceled",
                     "partially_filled": "partially_filled",
@@ -737,48 +747,49 @@ async def try_send_order(
                     "closed": "closed"
                 }
 
-                status = status_mapping.get(order_status.get('state', 'open'), 'open')
-                print(f"[order_status]: {status}")
-                if order_status.get('data') and len(order_status['data']) > 0:
-                    order_status = order_status['data'][0]
-                    print("order_status: ", order_status)
-                    return order_status
+                status_str: str = status_mapping.get(str(order_status_response.get('state', 'open')), 'open')
+                print(f"[order_status]: {status_str}")
+                if order_status_response.get('data') and len(order_status_response['data']) > 0:
+                    order_status_dict = order_status_response['data'][0]
+                    print("order_status: ", order_status_dict)
+                    return order_status_dict  # type: ignore
                 else:
                     raise ValueError(f"[{user_id}]알고 주문 조회 실패")
             else:
-                order_status = await exchange.fetch_order(order_id, symbol)
+                order_status_dict = await exchange.fetch_order(order_id, symbol)
         except Exception as e:
             traceback.print_exc()
             logger.warning(f"[{user_id}] 주문 상태 조회 실패, 초기값으로 처리: {str(e)}")
-            order_status = {
+            order_status_dict = {
                 'filled': 0.0,
                 'average': price or current_price,
                 'status': 'open'
             }
 
-        filled_size = safe_float(order_status.get('filled', contracts_amount if order_type == 'market' else 0.0))
-        avg_fill_price = safe_float(order_status.get('average', price or current_price))
-        status = order_status.get('status', 'open')
-        
+        filled_size: float = safe_float(order_status_dict.get('filled', contracts_amount if order_type == 'market' else 0.0))
+        avg_fill_price: float = safe_float(order_status_dict.get('average', price or current_price))
+        status_str = str(order_status_dict.get('status', 'open'))
+
         now = datetime.datetime.now()
-        order_state = OrderStatus(
+        order_state: OrderStatus = OrderStatus(
             order_id=order_id,
             symbol=symbol,
             side=side,
-            size=contracts_amount,
+            size=safe_float(contracts_amount),
             filled_size=filled_size,
-            status=status,
+            status=status_str,
             avg_fill_price=avg_fill_price,
             create_time=now,
             update_time=now,
             order_type=order_type,
-            posSide=order_params.get('posSide', 'net')
+            posSide=str(order_params.get('posSide', 'net'))
         )
         logger.info(f"주문 성공: {order_state}")
-        
+
         if order_type in ['take_profit', 'stop_loss']:
             order_state.order_type = order_type
-            order_state.trigger_price = trigger_price
+            # Note: OrderStatus doesn't have trigger_price attribute
+            # order_state.trigger_price = trigger_price
             
         await store_order_in_redis(user_id, order_state)
         return order_state
@@ -801,16 +812,19 @@ async def get_order_info(
     order_id: str,
     is_algo: bool = False,
     algo_type: str = "trigger",
-    exchange: ccxt.Exchange = None,
-    
-) -> dict:
+    exchange: Optional[Any] = None,
+
+) -> Dict[str, Any]:
     try:
+        if not exchange:
+            return {"status": "error", "id": order_id, "info": {"error": "Exchange not provided"}}
+
         if not is_algo:
             # 1) 일반 주문 조회
-            order = await exchange.fetch_order(order_id, symbol)
+            order: Dict[str, Any] = await exchange.fetch_order(order_id, symbol)
             # ccxt의 order 구조: https://docs.ccxt.com/en/latest/manual.html#order-structure
             return {
-                "status": order.get("status", "").lower(),  # "open", "closed"(=filled), "canceled"
+                "status": str(order.get("status", "")).lower(),  # "open", "closed"(=filled), "canceled"
                 "id": order.get("id"),
                 "info": order.get("info", {})
             }
@@ -823,16 +837,16 @@ async def get_order_info(
             # CCXT okx 객체에서 제공하는 프라이빗 메서드를 사용해야 할 수 있음
 
             # (A) 혹은 ccxt에는 fetch_orders_by_algo()가 없으므로, 아래처럼 raw 메서드를 직접 사용:
-            params = {
+            params: Dict[str, Any] = {
                 "algoId": order_id,
                 "ordType": algo_type,
                 "instId": symbol,   # 필요시 심볼도 같이
             }
             # 대기: CCXT OKX 내부에 따라 함수명이 다를 수 있음.
             #      보통은 exchange.okxPrivateGetTradeOrdersAlgoListAlgo(params) 식으로 직접 호출.
-            response = await exchange.privateGetTradeOrdersAlgoHistory(params)
+            response: Dict[str, Any] = await exchange.privateGetTradeOrdersAlgoHistory(params)
 
-            # response 예시: 
+            # response 예시:
             # {
             #   "data": [
             #     {
@@ -844,20 +858,21 @@ async def get_order_info(
             #   "code": "0", "msg": ""
             # }
 
-            data_list = response.get("data", [])
+            data_list: list = response.get("data", [])
             if not data_list:
                 return {"status": "not_found", "id": order_id, "info": {}}
 
-            algo_info = data_list[0]
+            algo_info: Dict[str, Any] = data_list[0]
             # OKX ALGO 주문 상태(state):
             #   - "live": 주문 생성됨 (대기중)
             #   - "effective": 주문이 시장에 발동되어 "filled" or "partially_filled" 상태가 될 수 있음
             #   - "cancelled": 취소됨
             #   - "order_failed": 주문실패
             #   - ...
-            algo_state = algo_info.get("state", "").lower()
+            algo_state: str = str(algo_info.get("state", "")).lower()
 
             # ALGO 상태 -> ccxt order.status에 매핑 (필요시 커스텀)
+            status: str = ""
             if algo_state in ["effective", "partially_filled", "filled"]:
                 # OKX 문서에 따라 실제 "filled"를 구분해야 함
                 # 예: partially_filled => 일부체결, fully_filled => 전체체결

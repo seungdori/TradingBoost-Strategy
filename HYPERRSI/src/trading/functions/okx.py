@@ -64,7 +64,7 @@ def safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-async def handle_exchange_error(e: Exception):
+async def handle_exchange_error(e: Exception) -> None:
     """
     거래소 관련 작업에서 공통으로 사용할 에러 핸들러.
     발생한 예외 유형에 따라 HTTPException을 발생시킵니다.
@@ -113,7 +113,7 @@ async def fetch_algo_order_by_id(
                 (x for x in pending_resp.get("data", []) if x.get("algoId") == order_id), None
             )
             if found:
-                return found
+                return dict(found)
 
         # 히스토리 조회
         history_resp = await exchange.privateGetTradeOrdersAlgoHistory(params=params)
@@ -122,7 +122,7 @@ async def fetch_algo_order_by_id(
                 (x for x in history_resp.get("data", []) if x.get("algoId") == order_id), None
             )
             if found:
-                return found
+                return dict(found)
     except Exception as e:
         traceback.print_exc()
         if "Not authenticated" in str(e):
@@ -182,8 +182,8 @@ def parse_algo_order_to_order_response(algo_order: dict, algo_type: str) -> Orde
     }
     status = status_map.get(algo_order.get("state", "").lower(), OrderStatus.PENDING)
 
-    created_at = int(algo_order.get("cTime")) if str(algo_order.get("cTime", "")).isdigit() else None
-    updated_at = int(algo_order.get("uTime")) if str(algo_order.get("uTime", "")).isdigit() else None
+    created_at = int(str(algo_order.get("cTime"))) if str(algo_order.get("cTime", "")).isdigit() else None
+    updated_at = int(str(algo_order.get("uTime"))) if str(algo_order.get("uTime", "")).isdigit() else None
 
     pnl = safe_decimal(algo_order.get("pnl", "0"))
 
@@ -217,20 +217,33 @@ def parse_order_response(order_data: dict) -> OrderResponse:
     Returns:
         OrderResponse 모델 인스턴스
     """
+    timestamp_value = order_data.get("timestamp")
+    created_at_value = int(timestamp_value) if timestamp_value else None
+
+    price_value = safe_float(order_data["price"]) if order_data.get("price") else None
+    avg_price_value = safe_float(order_data["average"]) if order_data.get("average") else None
+
+    filled = safe_float(order_data.get("filled", 0.0))
+    amount = safe_float(order_data["amount"])
+    remaining = amount - filled if amount and filled else 0.0
+
     return OrderResponse(
         order_id=order_data["id"],
+        client_order_id=order_data.get("clientOrderId"),
         symbol=order_data["symbol"],
         side=order_data["side"],
         type=order_data["type"],
-        amount=safe_float(order_data["amount"]),
-        filled_amount=safe_float(order_data.get("filled", 0.0)),
-        price=safe_float(order_data["price"]) if order_data.get("price") else None,
-        average_price=safe_float(order_data["average"]) if order_data.get("average") else None,
+        amount=amount,
+        filled_amount=filled,
+        remaining_amount=remaining,
+        price=Decimal(str(price_value)) if price_value is not None else None,
+        average_price=Decimal(str(avg_price_value)) if avg_price_value is not None else None,
         status=order_data["status"],
-        timestamp=dt.datetime.fromtimestamp(order_data["timestamp"] / 1000)
-        if order_data.get("timestamp")
-        else dt.datetime.now(),
+        created_at=created_at_value,
+        updated_at=None,
         pnl=safe_float(order_data.get("info", {}).get("pnl")),
+        order_type=order_data.get("info", {}).get("ordType"),
+        posSide=order_data.get("info", {}).get("posSide"),
     )
 
 
@@ -238,8 +251,8 @@ def parse_order_response(order_data: dict) -> OrderResponse:
 # 주문 취소 관련 함수들
 # ======================================================
 async def cancel_algo_orders_for_symbol_and_side(
-    exchange, symbol: str, pos_side: str
-):
+    exchange: Any, symbol: str, pos_side: str
+) -> None:
     """
     Hedge 모드에서 특정 심볼 및 posSide에 해당하는 알고 주문들을 취소합니다.
     """
@@ -281,24 +294,24 @@ async def cancel_algo_orders_for_symbol_and_side(
         )
 
 
-async def set_position_mode(exchange, hedged: bool = True):
+async def set_position_mode(exchange: Any, hedged: bool = True) -> None:
     """
     포지션 모드 설정
-    
+
     Args:
         exchange: CCXT exchange 인스턴스
         hedged (bool): True면 헷지모드, False면 단방향 모드
     """
     try:
-        return await exchange.set_position_mode(hedged)
+        await exchange.set_position_mode(hedged)
     except Exception as e:
         logger.error(f"포지션 모드 설정 실패: {str(e)}")
         raise
 
 
 async def cancel_algo_orders_for_symbol(
-    exchange, symbol: str, pos_side: Optional[str] = None
-):
+    exchange: Any, symbol: str, pos_side: Optional[str] = None
+) -> None:
     """
     특정 심볼에 대한 알고 주문 취소 함수.
     pos_side가 주어지면 해당 pos_side의 주문만 취소합니다.
@@ -344,8 +357,8 @@ async def cancel_algo_orders_for_symbol(
 
 
 async def cancel_reduce_only_orders_for_symbol(
-    exchange, symbol: str, pos_side: Optional[str] = None
-):
+    exchange: Any, symbol: str, pos_side: Optional[str] = None
+) -> None:
     """
     특정 심볼에 대한 reduceOnly 주문 취소 함수.
     pos_side가 주어지면 해당 pos_side의 주문만 취소합니다.
@@ -399,7 +412,7 @@ async def get_user_api_keys(user_id: str) -> Dict[str, str]:
         api_keys = await redis_client.hgetall(f"user:{user_id}:api:keys")
         if not api_keys:
             raise HTTPException(status_code=404, detail="API keys not found in Redis")
-        return api_keys
+        return dict(api_keys)
     except Exception as e:
         logger.error(f"4API 키 조회 실패: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching API keys: {str(e)}")
@@ -426,10 +439,10 @@ async def create_exchange_client(user_id: str) -> ccxt.okx:
 
 async def cancel_all_orders(
     client: Optional[ccxt.okx] = None, user_id: Optional[str] = None, symbol: Optional[str] = None, algo_type: Optional[str] = "trigger"
-):
+) -> None:
     """
     모든 주문(일반 주문 + 알고 주문)을 취소하는 유틸리티 함수입니다.
-    
+
     Args:
         client: 기존 ccxt.okx 인스턴스 (없으면 user_id로 새 인스턴스 생성)
         user_id: 사용자 ID (client가 None인 경우 필수)

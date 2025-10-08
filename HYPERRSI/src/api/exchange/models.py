@@ -46,10 +46,10 @@ __all__ = [
 class Balance(BaseModel):
    currency: str
    total: Decimal = Field(..., description="전체 잔고")
-   free: Decimal = Field(..., description="사용 가능한 잔고") 
+   free: Decimal = Field(..., description="사용 가능한 잔고")
    used: Decimal = Field(..., description="사용중인 잔고")
-   equity: Decimal = Field(0, description="순자산")
-   floating_pnl: Decimal = Field(0, description="미실현 손익")
+   equity: Decimal = Field(default=Decimal("0"), description="순자산")
+   floating_pnl: Decimal = Field(default=Decimal("0"), description="미실현 손익")
 
    class Config:
        arbitrary_types_allowed = True
@@ -61,7 +61,7 @@ class Position(BaseModel):
     mark_price: Decimal = Field(..., description="청산 기준 가격")
     liquidation_price: Optional[Decimal] = Field(None, description="청산 가격")
     unrealized_pnl: Decimal = Field(..., description="미실현 손익")
-    realized_pnl: Decimal = Field(0, description="실현 손익")
+    realized_pnl: Decimal = Field(default=Decimal("0"), description="실현 손익")
     leverage: float = Field(..., description="레버리지")
     margin_type: str = Field("cross", description="마진 타입 (cross/isolated)")
     maintenance_margin: Optional[Decimal] = Field(None, description="유지 증거금")

@@ -4,8 +4,10 @@ from aiogram import types, Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import Message
 
 from shared.logging import get_logger
+from typing import Optional, Dict, Any
 import json
 import aiohttp
 from HYPERRSI.src.core.config import settings
@@ -31,8 +33,10 @@ except AttributeError:
 API_BASE_URL = "/api"
 
 allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267"]
-def is_allowed_user(user_id):
+def is_allowed_user(user_id: Optional[str]) -> bool:
     """허용된 사용자인지 확인"""
+    if user_id is None:
+        return False
     return str(user_id) in allowed_uid
 
 # -----------------
@@ -53,15 +57,15 @@ class DualSideSettingsState(StatesGroup):
     # 추가: 양방향 포지션 익절 시 메인 포지션 종료 여부
     waiting_for_close_main_position = State()
 
-async def get_okx_uid_from_telegram_id(telegram_id: str) -> str:
+async def get_okx_uid_from_telegram_id(telegram_id: str) -> Optional[str]:
     """
     텔레그램 ID를 OKX UID로 변환하는 함수
-    
+
     Args:
         telegram_id: 텔레그램 ID
-        
+
     Returns:
-        str: OKX UID
+        Optional[str]: OKX UID or None
     """
     try:
         # 텔레그램 ID로 OKX UID 조회
@@ -94,18 +98,19 @@ async def get_identifier(user_id: str) -> str:
     return str(user_id)
 
 # API 요청 헬퍼 함수
-async def get_dual_side_settings_api(user_id: str) -> dict:
+async def get_dual_side_settings_api(user_id: str) -> Dict[str, Any]:
     """API를 통해 양방향 매매 설정을 조회합니다."""
     # user_id를 OKX UID로 변환
     okx_uid = await get_identifier(str(user_id))
-    
+
     async with aiohttp.ClientSession() as session:
         url = f"{API_BASE_URL}/settings/{okx_uid}/dual_side"
         try:
             async with session.get(url) as response:
                 if response.status == 200:
-                    data = await response.json()
-                    return data["settings"]
+                    data: Dict[str, Any] = await response.json()
+                    settings: Dict[str, Any] = data["settings"]
+                    return settings
                 else:
                     error_text = await response.text()
                     logger.error(f"API 요청 실패 ({response.status}): {error_text}")
@@ -140,16 +145,16 @@ async def update_dual_side_settings_api(user_id: str, settings: dict) -> bool:
             return False
 
 # 백업 함수 - API 실패 시 직접 Redis 접근
-async def get_dual_side_settings_fallback(user_id: str) -> dict:
+async def get_dual_side_settings_fallback(user_id: str) -> Dict[str, Any]:
     """Redis에서 직접 양방향 매매 설정을 조회합니다."""
     # user_id를 OKX UID로 변환
     okx_uid = await get_identifier(str(user_id))
-    
+
     settings_key = f"user:{okx_uid}:dual_side"
     settings = await redis_client.hgetall(settings_key)
-    
+
     # 문자열 값을 적절한 타입으로 변환
-    parsed_settings = {}
+    parsed_settings: Dict[str, Any] = {}
     for key, value in settings.items():
         if value.lower() in ('true', 'false'):
             parsed_settings[key] = value.lower() == 'true'
@@ -161,7 +166,7 @@ async def get_dual_side_settings_fallback(user_id: str) -> dict:
                     parsed_settings[key] = int(value)
             except ValueError:
                 parsed_settings[key] = value
-    
+
     return parsed_settings
 
 async def update_dual_side_settings_fallback(user_id: str, settings: dict) -> None:
@@ -187,8 +192,10 @@ async def update_dual_side_settings_fallback(user_id: str, settings: dict) -> No
 # =========================
 
 @router.message(Command("dual_settings"))
-async def dual_side_settings_command(message: types.Message):
+async def dual_side_settings_command(message: types.Message) -> None:
     """듀얼 사이드 매매(헷지) 설정 메뉴"""
+    if message.from_user is None:
+        return
     telegram_id = message.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
@@ -212,12 +219,16 @@ async def dual_side_settings_command(message: types.Message):
 # "현재 설정 확인" 버튼 핸들러
 # -------------------------------
 @router.callback_query(F.data == "dual_show_current")
-async def handle_show_current(callback: types.CallbackQuery):
+async def handle_show_current(callback: types.CallbackQuery) -> None:
     """현재 설정 정보를 다시 보여주는 콜백."""
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
-    
+
     settings = await get_dual_side_settings_api(user_id)
     text, kb = await get_current_dual_settings_info(user_id, settings)
     await callback.message.edit_text(text, reply_markup=kb)
@@ -228,22 +239,26 @@ async def handle_show_current(callback: types.CallbackQuery):
 # [토글] 양방향 전체 ON/OFF
 # =========================
 @router.callback_query(F.data == "dual_toggle")
-async def handle_dual_toggle(callback: types.CallbackQuery):
+async def handle_dual_toggle(callback: types.CallbackQuery) -> None:
     try:
+        if callback.from_user is None or callback.message is None:
+            return
+        if not isinstance(callback.message, Message):
+            return
         telegram_id = callback.from_user.id
         # 텔레그램 ID를 OKX UID로 변환
         user_id = await get_identifier(str(telegram_id))
-        
+
         # API로 현재 설정 가져오기
         settings = await get_dual_side_settings_api(user_id)
         is_enabled = settings.get('use_dual_side_entry', False)
-        
+
         # 상태 변경
         settings['use_dual_side_entry'] = not is_enabled
-        
+
         # API로 업데이트
         await update_dual_side_settings_api(user_id, settings)
-        
+
         status_msg = "비활성화" if is_enabled else "활성화"
         await callback.answer()
         await callback.message.edit_text(
@@ -259,7 +274,11 @@ async def handle_dual_toggle(callback: types.CallbackQuery):
 # [1] DCA 트리거 설정
 # =========================
 @router.callback_query(F.data == "dual_set_trigger")
-async def handle_trigger_setting(callback: types.CallbackQuery, state: FSMContext):
+async def handle_trigger_setting(callback: types.CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     await callback.answer()
     await callback.message.edit_text(
         "📊 양방향 트리거 (진입 회차) 설정\n"
@@ -273,23 +292,25 @@ async def handle_trigger_setting(callback: types.CallbackQuery, state: FSMContex
     await state.set_state(DualSideSettingsState.waiting_for_trigger)
 
 @router.message(DualSideSettingsState.waiting_for_trigger)
-async def process_trigger_value(message: types.Message, state: FSMContext):
+async def process_trigger_value(message: types.Message, state: FSMContext) -> None:
     try:
+        if message.from_user is None or message.text is None:
+            return
         value = int(message.text)
         if not (1 <= value <= 10):
             await message.reply("❌ 1~10 사이 숫자를 입력해주세요.")
             return
-        
+
         telegram_id = message.from_user.id
         # 텔레그램 ID를 OKX UID로 변환
         user_id = await get_identifier(str(telegram_id))
-        
+
         # API로 현재 설정 가져오기
         settings = await get_dual_side_settings_api(user_id)
-        
+
         # 설정 업데이트
         settings['dual_side_entry_trigger'] = value
-        
+
         # API로 설정 저장
         await update_dual_side_settings_api(user_id, settings)
 
@@ -306,7 +327,11 @@ async def process_trigger_value(message: types.Message, state: FSMContext):
 # [2] 진입 비율 (Ratio) 설정
 # =========================
 @router.callback_query(F.data == "dual_set_ratio")
-async def handle_ratio_setting(callback: types.CallbackQuery):
+async def handle_ratio_setting(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     await callback.answer()
     keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -323,7 +348,11 @@ async def handle_ratio_setting(callback: types.CallbackQuery):
     )
 
 @router.callback_query(F.data.startswith("ratio_type_"))
-async def handle_ratio_type_selection(callback: types.CallbackQuery, state: FSMContext):
+async def handle_ratio_type_selection(callback: types.CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     ratio_type = callback.data.replace("ratio_type_", "")  # percent_of_position or fixed_amount
     await state.update_data(selected_ratio_type=ratio_type)
 
@@ -349,8 +378,10 @@ async def handle_ratio_type_selection(callback: types.CallbackQuery, state: FSMC
     await state.set_state(DualSideSettingsState.waiting_for_ratio_value)
 
 @router.message(DualSideSettingsState.waiting_for_ratio_value)
-async def process_ratio_value(message: types.Message, state: FSMContext):
+async def process_ratio_value(message: types.Message, state: FSMContext) -> None:
     try:
+        if message.from_user is None or message.text is None:
+            return
         value = float(message.text)
         data = await state.get_data()
         ratio_type = data.get('selected_ratio_type', 'percent_of_position')
@@ -389,7 +420,11 @@ async def process_ratio_value(message: types.Message, state: FSMContext):
 # [3] TP 설정 (existing_position or percent)
 # =========================
 @router.callback_query(F.data == "dual_set_tp")
-async def handle_tp_setting(callback: types.CallbackQuery):
+async def handle_tp_setting(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     await callback.answer()
     
     keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
@@ -415,12 +450,14 @@ async def handle_tp_setting(callback: types.CallbackQuery):
     )
 
 @router.callback_query(F.data.startswith("tp_type_"))
-async def handle_tp_type_selection(callback: types.CallbackQuery, state: FSMContext):
+async def handle_tp_type_selection(callback: types.CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     tp_type = callback.data.replace("tp_type_", "")  # existing_position or percent
     await state.update_data(selected_tp_type=tp_type)
 
-    
-        
     if tp_type == "existing_position":
         # 양방향 포지션 익절 시 메인 포지션 종료 여부 묻기
         await ask_close_main_position(callback, state)
@@ -441,13 +478,17 @@ async def handle_tp_type_selection(callback: types.CallbackQuery, state: FSMCont
         await state.set_state(DualSideSettingsState.waiting_for_tp_value)
 
 # 추가: 양방향 포지션 익절 시 메인 포지션 종료 여부를 묻는 함수
-async def ask_close_main_position(callback: types.CallbackQuery, state: FSMContext):
+async def ask_close_main_position(callback: types.CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     await callback.answer()
-    
+
     # 선택한 TP 타입을 저장
     data = await state.get_data()
     tp_type = data.get('selected_tp_type')
-    
+
     # 양방향 포지션 익절 시 메인 포지션 종료 여부를 묻는 키보드
     keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -456,18 +497,22 @@ async def ask_close_main_position(callback: types.CallbackQuery, state: FSMConte
         ],
         [types.InlineKeyboardButton(text="뒤로", callback_data="back_to_dual_menu")]
     ])
-    
+
     await callback.message.edit_text(
         "❓ 양방향 포지션을 익절 시, 메인 포지션도 같이 종료하시겠습니까?",
         reply_markup=keyboard
     )
-    
+
     # 다음 상태로 진행
     await state.set_state(DualSideSettingsState.waiting_for_close_main_position)
 
 # 추가: 양방향 포지션 익절 시 메인 포지션 종료 여부 응답 처리
 @router.callback_query(F.data.startswith("close_main_"))
-async def handle_close_main_position(callback: types.CallbackQuery, state: FSMContext):
+async def handle_close_main_position(callback: types.CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
@@ -502,8 +547,10 @@ async def handle_close_main_position(callback: types.CallbackQuery, state: FSMCo
     await state.clear()
 
 @router.message(DualSideSettingsState.waiting_for_tp_value)
-async def process_tp_value(message: types.Message, state: FSMContext):
+async def process_tp_value(message: types.Message, state: FSMContext) -> None:
     try:
+        if message.from_user is None or message.text is None:
+            return
         value = float(message.text)
         if value <= 0:
             await message.reply("❌ 0보다 큰 값을 입력해주세요.")
@@ -541,7 +588,11 @@ async def process_tp_value(message: types.Message, state: FSMContext):
 
 # 추가: 퍼센트 기준 TP에서 메인 포지션 종료 여부 처리
 @router.callback_query(F.data.startswith("close_main_percent_"))
-async def handle_close_main_percent(callback: types.CallbackQuery, state: FSMContext):
+async def handle_close_main_percent(callback: types.CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
@@ -580,7 +631,11 @@ async def handle_close_main_percent(callback: types.CallbackQuery, state: FSMCon
 # STOP LOSS SETTING
 #==============================================
 @router.callback_query(F.data == "dual_set_sl")
-async def handle_sl_setting(callback: types.CallbackQuery):
+async def handle_sl_setting(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     """SL 설정 메뉴"""
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
@@ -621,7 +676,11 @@ async def handle_sl_setting(callback: types.CallbackQuery):
     )
 
 @router.callback_query(F.data == "sl_toggle")
-async def handle_sl_toggle(callback: types.CallbackQuery):
+async def handle_sl_toggle(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     """손절 On/Off 토글 처리"""
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
@@ -648,7 +707,11 @@ async def handle_sl_toggle(callback: types.CallbackQuery):
 
 
 @router.callback_query(F.data == "sl_type_existing_position")
-async def handle_sl_existing_position(callback: types.CallbackQuery, state: FSMContext):
+async def handle_sl_existing_position(callback: types.CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     """
     이전에는 여기서 곧바로 '첫 번째 TP'를 사용했지만,
     지금은 '몇 번째 TP를 사용할지'를 물어보는 과정을 추가.
@@ -674,8 +737,12 @@ async def handle_sl_existing_position(callback: types.CallbackQuery, state: FSMC
 
 
 @router.callback_query(F.data.startswith("sl_type_existing_pos_select_"))
-async def handle_sl_existing_select_n(callback: types.CallbackQuery):
+async def handle_sl_existing_select_n(callback: types.CallbackQuery) -> None:
     """1차/2차/3차 등 버튼 눌렀을 때"""
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
@@ -702,7 +769,11 @@ async def handle_sl_existing_select_n(callback: types.CallbackQuery):
 
 # 퍼센트 기준 SL 설정
 @router.callback_query(F.data == "sl_type_percent")
-async def handle_sl_percent(callback: types.CallbackQuery, state: FSMContext):
+async def handle_sl_percent(callback: types.CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     """퍼센트 기준 SL 설정"""
     await callback.answer()
     await callback.message.edit_text(
@@ -717,9 +788,11 @@ async def handle_sl_percent(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(DualSideSettingsState.waiting_for_sl_value)
 
 @router.message(DualSideSettingsState.waiting_for_sl_value)
-async def process_sl_value(message: types.Message, state: FSMContext):
+async def process_sl_value(message: types.Message, state: FSMContext) -> None:
     """SL 퍼센트 값 처리"""
     try:
+        if message.from_user is None or message.text is None:
+            return
         value = float(message.text)
         if value <= 0:
             await message.reply("❌ 0보다 큰 값을 입력해주세요.")
@@ -753,7 +826,11 @@ async def process_sl_value(message: types.Message, state: FSMContext):
 
 
 @router.callback_query(F.data == "dual_set_tp_sl_after_all_dca")
-async def handle_tp_sl_after_all_dca(callback: types.CallbackQuery):
+async def handle_tp_sl_after_all_dca(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     """최종 진입 후 TP/SL 설정 토글"""
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
@@ -782,7 +859,11 @@ async def handle_tp_sl_after_all_dca(callback: types.CallbackQuery):
 # [마무리 or 뒤로가기]
 # =========================
 @router.callback_query(F.data == "dual_settings_done")
-async def handle_settings_done(callback: types.CallbackQuery):
+async def handle_settings_done(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     await callback.answer()
     await callback.message.edit_text(
         "✅ 양방향 매매 설정이 완료되었습니다.\n"
@@ -790,7 +871,11 @@ async def handle_settings_done(callback: types.CallbackQuery):
     )
 
 @router.callback_query(F.data == "back_to_dual_menu")
-async def back_to_main_menu(callback: types.CallbackQuery):
+async def back_to_main_menu(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
@@ -851,7 +936,7 @@ async def get_main_menu_keyboard(user_id: str) -> types.InlineKeyboardMarkup:
 # =========================
 # 현재 설정 정보를 문자열로 만드는 함수
 # =========================
-async def get_current_dual_settings_info(user_id: str, settings: dict = None) -> tuple[str, types.InlineKeyboardMarkup]:
+async def get_current_dual_settings_info(user_id: str, settings: Dict[str, Any] | None = None) -> tuple[str, types.InlineKeyboardMarkup]:
     """현재 양방향 매매 설정 정보를 표시합니다."""
     if settings is None:
         settings = await get_dual_side_settings_api(user_id)
@@ -964,7 +1049,11 @@ async def initialize_dual_side_settings_fallback(user_id: str) -> None:
 # "파라미딩 제한 설정" 버튼 핸들러
 # -------------------------------
 @router.callback_query(F.data == "dual_set_pyramiding_limit")
-async def handle_pyramiding_limit_setting(callback: types.CallbackQuery, state: FSMContext):
+async def handle_pyramiding_limit_setting(callback: types.CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     await callback.answer()
     await callback.message.edit_text(
         "📊 양방향 매매 피라미딩 제한 설정\n"
@@ -979,8 +1068,10 @@ async def handle_pyramiding_limit_setting(callback: types.CallbackQuery, state: 
     await state.set_state(DualSideSettingsState.waiting_for_pyramiding_limit)
 
 @router.message(DualSideSettingsState.waiting_for_pyramiding_limit)
-async def process_pyramiding_limit_value(message: types.Message, state: FSMContext):
+async def process_pyramiding_limit_value(message: types.Message, state: FSMContext) -> None:
     try:
+        if message.from_user is None or message.text is None:
+            return
         value = int(message.text)
         if not (1 <= value <= 10):
             await message.reply("❌ 1~10 사이 숫자를 입력해주세요.")
@@ -1013,7 +1104,11 @@ async def process_pyramiding_limit_value(message: types.Message, state: FSMConte
 #===============================================================
 
 @router.callback_query(F.data == "dual_set_trend_close")
-async def handle_trend_close_setting(callback: types.CallbackQuery):
+async def handle_trend_close_setting(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     await callback.answer()
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
@@ -1073,7 +1168,11 @@ async def handle_trend_close_setting(callback: types.CallbackQuery):
         await callback.message.reply(f"트렌드 클로즈 설정 불러오기 중 오류 발생: {e}")
 
 @router.callback_query(F.data == "trend_close_enable")
-async def handle_trend_close_enable(callback: types.CallbackQuery):
+async def handle_trend_close_enable(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     await callback.answer(text="활성화 처리 중...")
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
@@ -1101,7 +1200,11 @@ async def handle_trend_close_enable(callback: types.CallbackQuery):
         await callback.message.reply(f"트렌드 클로즈 활성화 중 오류 발생: {e}")
 
 @router.callback_query(F.data == "trend_close_disable")
-async def handle_trend_close_disable(callback: types.CallbackQuery):
+async def handle_trend_close_disable(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     await callback.answer(text="비활성화 처리 중...")
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
@@ -1129,7 +1232,11 @@ async def handle_trend_close_disable(callback: types.CallbackQuery):
         await callback.message.reply(f"트렌드 클로즈 비활성화 중 오류 발생: {e}")
 
 @router.callback_query(F.data == "do_not_close_dual_position")
-async def handle_do_not_close_dual_position(callback: types.CallbackQuery):
+async def handle_do_not_close_dual_position(callback: types.CallbackQuery) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
     """양방향 익절을 사용하지 않는 설정 처리"""
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환

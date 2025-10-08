@@ -7,10 +7,10 @@ and exception handling.
 """
 
 from sqlalchemy import inspect
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import sessionmaker
 from contextlib import asynccontextmanager
-from typing import List, Optional, Any, Dict, AsyncGenerator
+from typing import List, Optional, Any, Dict, AsyncGenerator, cast
 from .database_dir.base import Base
 import json
 import redis.asyncio as redis
@@ -47,7 +47,7 @@ class DatabaseEngine:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)
                 # PostgreSQL connection pool settings
-                engine_kwargs = {
+                engine_kwargs: Dict[str, Any] = {
                     "echo": False,
                     "future": True,
                 }
@@ -77,7 +77,7 @@ class DatabaseEngine:
 db_engine = DatabaseEngine()
 engine = db_engine.engine
 
-AsyncSessionLocal = sessionmaker(
+AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
     expire_on_commit=False,
@@ -157,11 +157,11 @@ async def close_db():
 
 class RedisClient:
     """shared RedisConnectionManager를 사용하는 래퍼 클래스 (하위 호환성)"""
-    _instance = None
-    _manager = None
+    _instance: Optional["RedisClient"] = None
+    _manager: RedisConnectionManager
     _lock = Lock()
 
-    def __new__(cls):
+    def __new__(cls) -> "RedisClient":
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)
@@ -175,15 +175,15 @@ class RedisClient:
                 logger.info(f"RedisClient 초기화 완료 (shared.database.RedisConnectionManager 사용)")
             return cls._instance
 
-    async def get_client(self):
+    async def get_client(self) -> redis.Redis:
         """decode_responses=True 클라이언트 반환"""
         return await self._manager.get_connection_async(decode_responses=True)
 
-    async def get_binary_client(self):
+    async def get_binary_client(self) -> redis.Redis:
         """decode_responses=False 클라이언트 반환 (바이너리)"""
         return await self._manager.get_connection_async(decode_responses=False)
 
-    async def ping(self):
+    async def ping(self) -> bool:
         """Redis 서버 연결 상태 확인"""
         try:
             return await self._manager.ping()
@@ -192,7 +192,7 @@ class RedisClient:
             await self.reconnect()
             return False
 
-    async def reconnect(self, force=False):
+    async def reconnect(self, force: bool = False) -> None:
         """Redis 연결 재시도"""
         try:
             await self._manager.reconnect()
@@ -200,7 +200,7 @@ class RedisClient:
         except Exception as e:
             logger.error(f"Redis 재연결 실패: {str(e)}")
 
-    async def close(self):
+    async def close(self) -> None:
         """클라이언트 연결 종료"""
         try:
             await self._manager.close()
@@ -406,55 +406,61 @@ class Cache:
         
 class TradingCache:
     """트레이딩 관련 캐시 관리"""
-    _instance = None
-    _cache = None
+    _instance: Optional["TradingCache"] = None
+    _cache: Cache
     _lock = Lock()
 
-    def __new__(cls):
+    def __new__(cls) -> "TradingCache":
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)
-                cls._cache = Cache()
+                cls._instance._cache = Cache()
             return cls._instance
 
-    async def bulk_get_positions(self, user_ids: List[str], symbol: str) -> Dict[str, Dict]:
-        keys = [f"position:{user_id}:{symbol}" for user_id in user_ids]
-        pipeline = self._cache._redis.pipeline()
-        for key in keys:
-            pipeline.get(key)
-        
-        results = await pipeline.execute()
-        return {
-            user_id: json.loads(result) if result else None
-            for user_id, result in zip(user_ids, results)
-        }
+    async def bulk_get_positions(self, user_ids: List[str], symbol: str) -> Dict[str, Optional[Dict[Any, Any]]]:
+        """벌크 포지션 조회 - Redis 직접 접근 대신 Cache.get() 사용"""
+        result: Dict[str, Optional[Dict[Any, Any]]] = {}
+        for user_id in user_ids:
+            key = f"position:{user_id}:{symbol}"
+            position_data = await self._cache.get(key)
+            if position_data and isinstance(position_data, dict):
+                result[user_id] = cast(Dict[Any, Any], position_data)
+            else:
+                result[user_id] = None
+        return result
 
-    async def set_position(self, user_id: str, symbol: str, data: Dict) -> bool:
+    async def set_position(self, user_id: str, symbol: str, data: Dict[Any, Any]) -> bool:
         key = f"position:{user_id}:{symbol}"
         return await self._cache.set(key, data, expire=300)
 
-    async def get_position(self, user_id: str, symbol: str) -> Optional[Dict]:
+    async def get_position(self, user_id: str, symbol: str) -> Optional[Dict[Any, Any]]:
         key = f"position:{user_id}:{symbol}"
-        return await self._cache.get(key)
+        result = await self._cache.get(key)
+        if result and isinstance(result, dict):
+            return cast(Dict[Any, Any], result)
+        return None
 
-    async def set_order(self, order_id: str, data: Dict) -> bool:
+    async def set_order(self, order_id: str, data: Dict[Any, Any]) -> bool:
         key = f"order:{order_id}"
         return await self._cache.set(key, data, expire=3600)
 
-    async def get_order(self, order_id: str) -> Optional[Dict]:
+    async def get_order(self, order_id: str) -> Optional[Dict[Any, Any]]:
         key = f"order:{order_id}"
-        return await self._cache.get(key)
+        result = await self._cache.get(key)
+        if result and isinstance(result, dict):
+            return cast(Dict[Any, Any], result)
+        return None
 
-    async def cleanup(self):
+    async def cleanup(self) -> None:
         """트레이딩 캐시 리소스 정리"""
-        if self._cache:
-            await self._cache.cleanup()
+        await self._cache.cleanup()
+
     @classmethod
     async def remove_position(cls, user_id: str, symbol: str, side: str) -> bool:
         """포지션 정보 삭제"""
         key = f"user:{user_id}:position:{symbol}:{side}"
         try:
-            if not hasattr(cls, '_cache'):
+            if not hasattr(cls, '_cache') or cls._cache is None:
                 cls._cache = Cache()
             return await cls._cache.delete(key)
         except Exception as e:

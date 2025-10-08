@@ -13,9 +13,10 @@ import ssl
 import time
 from datetime import datetime, UTC
 import threading
+from typing import Any
 
 import ccxt
-import pytz
+import pytz  # type: ignore[import-untyped]
 import redis
 import websockets
 
@@ -78,7 +79,7 @@ exchange = ccxt.okx({
 })
 
 # 마지막 연결 끊김 시간 저장
-last_disconnect_time = {}
+last_disconnect_time: dict[str, float] = {}
 
 # 인디케이터 계산 간격 설정 (초 단위)
 INDICATOR_CALC_INTERVAL = 5  # 5초마다만 인디케이터 재계산
@@ -104,8 +105,8 @@ def convert_symbol_format(symbol: str, to_okx_ws: bool = True) -> str:
 class OKXMultiTimeframeWebSocket:
     def __init__(self):
         self.ws_url = "wss://ws.okx.com:8443/ws/v5/business"
-        self.last_save = {}  # 마지막 저장 시간 추적
-        self.last_indicator_calc = {}  # 마지막 인디케이터 계산 시간
+        self.last_save: dict[str, float] = {}  # 마지막 저장 시간 추적
+        self.last_indicator_calc: dict[str, float] = {}  # 마지막 인디케이터 계산 시간
         self.should_run = True 
         self.save_interval = 5  # 5초마다 저장
         self.ws = None
@@ -128,7 +129,7 @@ class OKXMultiTimeframeWebSocket:
         # 웹소켓 연결 끊김 시간 저장
         self.disconnect_times = {}
         # 마지막 상태 로깅 시간
-        self.last_status_log = 0
+        self.last_status_log: float = 0.0
         
         # 초기화 로깅
         logger.info(f"Initializing OKXMultiTimeframeWebSocket for symbols: {SYMBOLS}")
@@ -141,18 +142,18 @@ class OKXMultiTimeframeWebSocket:
                 self.last_candle_timestamp[key] = 0
                 self.last_indicator_calc[key] = 0
 
-        self.last_data_received = {}  # 각 심볼/타임프레임별 마지막 데이터 수신 시간
+        self.last_data_received: dict[str, float] = {}  # 각 심볼/타임프레임별 마지막 데이터 수신 시간
         self.data_timeout = 300  # 데이터 수신 타임아웃 (초) - 5분
-        
+
         # 초기화
         for symbol in SYMBOLS:
             for tf_str in self.timeframes.values():
                 key = f"{symbol}:{tf_str}"
-                self.last_data_received[key] = 0
+                self.last_data_received[key] = 0.0
 
         self.shutdown_requested = False  # 종료 요청 플래그 추가
         
-    async def connect(self):
+    async def connect(self) -> None:
         try:
             logger.debug(f"Connecting to OKX WebSocket at {self.ws_url}...")
             ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -184,7 +185,7 @@ class OKXMultiTimeframeWebSocket:
             self.connected = False
             await self.handle_disconnect()
             
-    async def log_status(self):
+    async def log_status(self) -> None:
         """5분마다 구독 상태를 로깅"""
         while self.connected:
             try:
@@ -203,7 +204,7 @@ class OKXMultiTimeframeWebSocket:
             except Exception as e:
                 logger.error(f"Error in status logging: {e}", exc_info=True)
 
-    async def handle_message(self, message):
+    async def handle_message(self, message: str) -> None:
         try:
             data = json.loads(message)
             if "data" not in data:
@@ -296,7 +297,7 @@ class OKXMultiTimeframeWebSocket:
         except Exception as e:
             logger.error(f"Error handling message: {e}", exc_info=True)
     
-    async def fill_candle_gap(self, symbol, tf_str, from_ts, to_ts):
+    async def fill_candle_gap(self, symbol: str, tf_str: str, from_ts: int, to_ts: int) -> None:
         """새로 감지된 캔들 갭을 즉시 채우는 함수"""
         try:
             #logger.debug(f"캔들 갭 즉시 채우기 시작: {symbol} {tf_str} - {datetime.fromtimestamp(from_ts)} ~ {datetime.fromtimestamp(to_ts)}")
@@ -395,7 +396,7 @@ class OKXMultiTimeframeWebSocket:
         except Exception as e:
             logger.error(f"캔들 갭 채우기 중 오류: {symbol} {tf_str} - {e}", exc_info=True)
     
-    def update_candle_data(self, symbol, tf_str, candle, is_new_candle):
+    def update_candle_data(self, symbol: str, tf_str: str, candle: dict[str, Any], is_new_candle: bool) -> None:
         """캔들 데이터를 Redis에 저장하고 인디케이터 계산"""
         try:
             #logger.debug(f"캔들 데이터 업데이트 시작: {symbol} {tf_str}")
@@ -497,7 +498,7 @@ class OKXMultiTimeframeWebSocket:
         except Exception as e:
             logger.error(f"Error updating candle data: {e}", exc_info=True)
     
-    def update_last_candle_indicators(self, symbol, tf_str, candles):
+    def update_last_candle_indicators(self, symbol: str, tf_str: str, candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """기존 인디케이터 데이터를 가져와서 마지막 캔들의 인디케이터만 업데이트"""
         try:
             # 인디케이터가 포함된 기존 캔들 데이터 가져오기
@@ -507,7 +508,7 @@ class OKXMultiTimeframeWebSocket:
             if not existing_list:
                 logger.debug(f"기존 인디케이터 데이터 없음, 전체 계산 시작: {symbol} {tf_str}")
                 # 기존 데이터가 없으면 전체 계산
-                return compute_all_indicators(candles, rsi_period=14, atr_period=14)
+                return compute_all_indicators(candles, rsi_period=14, atr_period=14)  # type: ignore[no-any-return]
             
             # 기존 데이터 로드
             candle_map = {}
@@ -530,7 +531,7 @@ class OKXMultiTimeframeWebSocket:
             if len(candles) < calc_window:
                 logger.debug(f"부분 계산에 필요한 데이터 부족, 전체 계산 시작: {symbol} {tf_str}")
                 # 데이터가 부족하면 전체 계산
-                return compute_all_indicators(candles, rsi_period=14, atr_period=14)
+                return compute_all_indicators(candles, rsi_period=14, atr_period=14)  # type: ignore[no-any-return]
             
             # 마지막 캔들과 이전 캔들 추출
             recent_candles = candles[-calc_window:]
@@ -562,9 +563,9 @@ class OKXMultiTimeframeWebSocket:
             logger.error(f"Error updating last candle indicators: {e}", exc_info=True)
             # 오류 발생 시 전체 재계산
             logger.debug(f"인디케이터 업데이트 중 오류, 전체 계산 시도: {symbol} {tf_str}")
-            return compute_all_indicators(candles, rsi_period=14, atr_period=14)
+            return compute_all_indicators(candles, rsi_period=14, atr_period=14)  # type: ignore[no-any-return]
     
-    def save_candles_with_indicators(self, symbol, tf_str, candles_with_ind):
+    def save_candles_with_indicators(self, symbol: str, tf_str: str, candles_with_ind: list[dict[str, Any]]) -> None:
         """인디케이터가 포함된 캔들 데이터를 Redis에 저장"""
         try:
             key = f"candles_with_indicators:{symbol}:{tf_str}"
@@ -602,11 +603,12 @@ class OKXMultiTimeframeWebSocket:
         except Exception as e:
             logger.error(f"Error saving candles with indicators: {e}", exc_info=True)
 
-    async def heartbeat(self):
+    async def heartbeat(self) -> None:
         """정기적으로 ping 을 보내어 연결 유지."""
         while self.connected:
             try:
-                await self.ws.send("ping")
+                if self.ws:
+                    await self.ws.send("ping")
                 logger.debug("Ping sent to server")
                 await asyncio.sleep(20)  # 20초 간격
             except:
@@ -615,14 +617,16 @@ class OKXMultiTimeframeWebSocket:
                 await self.handle_disconnect()
                 break
                 
-    async def receive_messages(self):
+    async def receive_messages(self) -> None:
         """메시지 수신 루프."""
         #logger.debug("시작: 메시지 수신 루프")
         message_count = 0
         last_log_time = time.time()
-        
+
         while self.connected:
             try:
+                if not self.ws:
+                    break
                 message = await self.ws.recv()
                 message_count += 1
                 
@@ -651,7 +655,7 @@ class OKXMultiTimeframeWebSocket:
                 await self.handle_disconnect()
                 break
     
-    async def handle_disconnect(self):
+    async def handle_disconnect(self) -> None:
         """예기치 않은 연결 종료 처리"""
         logger.warning("WebSocket disconnected unexpectedly")
         self.connected = False
@@ -672,7 +676,7 @@ class OKXMultiTimeframeWebSocket:
         except Exception as e:
             logger.error(f"Error updating Redis status: {e}", exc_info=True)
                 
-    async def cleanup(self):
+    async def cleanup(self) -> None:
         """웹소켓 연결 정리"""
         try:
             if self.ws:
@@ -695,7 +699,7 @@ class OKXMultiTimeframeWebSocket:
             self.connected = False
             self.ws = None
     
-    async def fill_data_gaps(self):
+    async def fill_data_gaps(self) -> None:
         """연결이 끊긴 동안의 데이터 갭을 채우는 함수"""
         try:
             logger.debug("데이터 갭 확인 시작...")
@@ -749,7 +753,7 @@ class OKXMultiTimeframeWebSocket:
         except Exception as e:
             logger.error(f"Error filling data gaps: {e}", exc_info=True)
     
-    async def fetch_candles_for_gap(self, symbol, tf_str, from_ts, to_ts, max_candles=200):
+    async def fetch_candles_for_gap(self, symbol: str, tf_str: str, from_ts: int, to_ts: float, max_candles: int = 200) -> list[dict[str, Any]]:
         """특정 기간의 캔들 데이터를 가져오는 함수"""
         try:
             logger.debug(f"캔들 갭 데이터 요청: {symbol} {tf_str} - {datetime.fromtimestamp(from_ts)} 부터 {datetime.fromtimestamp(to_ts)}까지")
@@ -818,7 +822,7 @@ class OKXMultiTimeframeWebSocket:
             logger.error(f"Error fetching candles for gap: {e}", exc_info=True)
             return []
 
-    async def check_data_health(self):
+    async def check_data_health(self) -> None:
         """각 종목별 데이터 수신 상태 확인"""
         while self.connected:
             try:
@@ -860,7 +864,7 @@ class OKXMultiTimeframeWebSocket:
             except Exception as e:
                 logger.error(f"데이터 상태 확인 중 오류: {e}", exc_info=True)
                 
-    async def resubscribe_symbol(self, symbol, tf_str):
+    async def resubscribe_symbol(self, symbol: str, tf_str: str) -> None:
         """특정 종목/타임프레임만 재구독"""
         try:
             # 해당 타임프레임에 맞는 채널 찾기
@@ -892,15 +896,16 @@ class OKXMultiTimeframeWebSocket:
             }
             
             logger.debug(f"{symbol} {tf_str} 구독 갱신 중...")
-            await self.ws.send(json.dumps(unsubscribe_message))
-            await asyncio.sleep(1)  # 잠시 대기
-            await self.ws.send(json.dumps(subscribe_message))
+            if self.ws:
+                await self.ws.send(json.dumps(unsubscribe_message))
+                await asyncio.sleep(1)  # 잠시 대기
+                await self.ws.send(json.dumps(subscribe_message))
             logger.debug(f"{symbol} {tf_str} 재구독 요청 완료")
             
         except Exception as e:
             logger.error(f"재구독 중 오류: {e}", exc_info=True)
 
-    async def run(self):
+    async def run(self) -> None:
         """메인 실행 루프"""
         reconnect_attempts = 0
         try:
@@ -911,7 +916,7 @@ class OKXMultiTimeframeWebSocket:
                         logger.debug(f"WebSocket 연결 시도 #{reconnect_attempts}...")
                         await self.connect()
                         if self.connected:
-                            reconnect_attempts = 0
+                            reconnect_attempts = 0  # type: ignore[unreachable]
                             logger.debug("WebSocket 연결 성공, 데이터 갭 채우기 시작...")
                             # 연결되었으면 데이터 갭 채우기
                             await self.fill_data_gaps()
@@ -944,7 +949,7 @@ class OKXMultiTimeframeWebSocket:
                 logger.debug("웹소켓 연결 종료됨")
             self.connected = False
 
-    async def request_shutdown(self):
+    async def request_shutdown(self) -> None:
         """안전한 종료를 위한 메서드"""
         logger.debug("웹소켓 안전 종료 요청...")
         self.should_run = False
@@ -954,6 +959,10 @@ class OKXMultiTimeframeWebSocket:
                 logger.debug("웹소켓 연결 종료 완료")
             except Exception as e:
                 logger.error(f"웹소켓 종료 중 오류: {e}")
+
+# 전역 변수 선언 (타입 힌트 추가) - OKXMultiTimeframeWebSocket 클래스 정의 후에 선언
+current_ws_client: OKXMultiTimeframeWebSocket | None = None
+current_loop: asyncio.AbstractEventLoop | None = None
 
 # ============================================================================
 # 캔들 데이터 처리 함수 (from tasks.py)
@@ -965,7 +974,7 @@ def align_timestamp(ts_ms: int, timeframe: int) -> int:
     ms_per_minute = 60 * 1000
     return (ts_ms // (minutes * ms_per_minute)) * (minutes * ms_per_minute)
 
-def get_exchange_candles_full(symbol: str, timeframe: int, desired_count=3000):
+def get_exchange_candles_full(symbol: str, timeframe: int, desired_count: int = 3000) -> list[dict[str, Any]]:
     """거래소에서 캔들 데이터 불러오기 (초기 로드용)"""
     tf_str = TF_MAP.get(timeframe, "1m")
     key = f"candles:{symbol}:{tf_str}"
@@ -1113,7 +1122,7 @@ def get_exchange_candles_full(symbol: str, timeframe: int, desired_count=3000):
     
     return results
 
-def save_candles_to_redis(symbol: str, timeframe: int, new_candles: list):
+def save_candles_to_redis(symbol: str, timeframe: int, new_candles: list[dict[str, Any]]) -> None:
     """캔들 데이터를 Redis에 저장"""
     tf_str = TF_MAP.get(timeframe, "1m")
     key = f"candles:{symbol}:{tf_str}"
@@ -1162,7 +1171,7 @@ def save_candles_to_redis(symbol: str, timeframe: int, new_candles: list):
     
     #logger.debug(f"캔들 데이터 Redis 저장 완료: {key} - 총 {len(final_list)}개 캔들")
 
-def save_candles_with_indicators_to_redis(symbol: str, timeframe: int, candles_with_ind: list):
+def save_candles_with_indicators_to_redis(symbol: str, timeframe: int, candles_with_ind: list[dict[str, Any]]) -> None:
     """인디케이터가 포함된 캔들 데이터를 Redis에 저장"""
     tf_str = TF_MAP.get(timeframe, "1m")
     key = f"candles_with_indicators:{symbol}:{tf_str}"
@@ -1211,7 +1220,7 @@ def save_candles_with_indicators_to_redis(symbol: str, timeframe: int, candles_w
     
     logger.debug(f"인디케이터 포함 캔들 Redis 저장 완료: {key} - 총 {len(sorted_ts)}개 캔들")
 
-def fetch_and_process_all_candles():
+def fetch_and_process_all_candles() -> None:
     """모든 심볼과 타임프레임에 대해 캔들 데이터를 가져와 처리하는 함수 (초기 로드용)"""
     lock_key = "lock:fetch_all_candles"
     lock = redis_client.lock(lock_key, timeout=300)  # 초기 로드는 시간이 오래 걸릴 수 있으므로 타임아웃 증가
@@ -1284,7 +1293,7 @@ def fetch_and_process_all_candles():
 # 메인 함수: 웹소켓 태스크만 실행 (초기 로드 이후 웹소켓만 사용)
 # ============================================================================
 
-async def websocket_task():
+async def websocket_task() -> None:
     """웹소켓 태스크"""
     logger.debug("웹소켓 태스크 시작...")
     ws_client = OKXMultiTimeframeWebSocket()
@@ -1304,17 +1313,17 @@ async def websocket_task():
     logger.debug("웹소켓 클라이언트 실행 중...")
     await ws_client.run()
 
-def start_websocket_task():
+def start_websocket_task() -> None:
     """웹소켓 태스크를 비동기로 실행"""
+    global current_ws_client, current_loop
     logger.debug("웹소켓 비동기 태스크 시작...")
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
+
     # 웹소켓 클라이언트 인스턴스 생성
     ws_client = OKXMultiTimeframeWebSocket()
-    
+
     # 전역 변수에 저장 (메인 스레드에서 접근 가능하도록)
-    global current_ws_client, current_loop
     current_ws_client = ws_client
     current_loop = loop
     
@@ -1353,12 +1362,12 @@ def start_websocket_task():
         except Exception as e:
             logger.error(f"비동기 루프 정리 중 오류: {e}")
 
-def main():
+def main() -> None:
     """초기 데이터 로드 후 웹소켓만으로 데이터 유지"""
+    global current_ws_client, current_loop
     try:
         logger.debug("=== 통합 데이터 수집기 시작 ===")
-        # 전역 변수 추가
-        global current_ws_client, current_loop
+        # 전역 변수 초기화
         current_ws_client = None
         current_loop = None
         
@@ -1388,8 +1397,8 @@ def main():
                         logger.error(f"웹소켓 스레드 죽음, 재시작 중... (재시작 횟수: {restart_count})")
                         
                         # 이전 스레드 정리 시도
-                        if current_ws_client and current_loop:
-                            try:
+                        if current_ws_client and current_loop:  # type: ignore[unreachable]
+                            try:  # type: ignore[unreachable]
                                 asyncio.run_coroutine_threadsafe(
                                     current_ws_client.request_shutdown(),
                                     current_loop
@@ -1409,7 +1418,7 @@ def main():
             shutdown_event.set()
             # 현재 웹소켓 클라이언트 종료 요청
             if current_ws_client:
-                try:
+                try:  # type: ignore[unreachable]
                     asyncio.run_coroutine_threadsafe(
                         current_ws_client.request_shutdown(),
                         asyncio.get_event_loop()

@@ -1,14 +1,19 @@
 from decimal import Decimal
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
 from enum import Enum
-from HYPERRSI.src.api.exchange.models import OrderType, OrderSide, Position
+from HYPERRSI.src.api.exchange.models import OrderType, OrderSide, Position, PositionSide
+
+if TYPE_CHECKING:
+    from typing import Any as ExchangeClient
+else:
+    ExchangeClient = Any
 
 class EntryType(str, Enum):
     LONG = "long"
     SHORT = "short"
 
 class Strategy:
-    def __init__(self, symbol: str, exchange_client):
+    def __init__(self, symbol: str, exchange_client: ExchangeClient) -> None:
         self.symbol = symbol
         self.exchange = exchange_client
         self.positions: Dict[str, Position] = {}
@@ -46,11 +51,32 @@ class Strategy:
             )
             
             if order.status == "filled":
+                entry_price = order.average_price or order.price or Decimal("0")
+                position_side = PositionSide.LONG if direction == EntryType.LONG else PositionSide.SHORT
                 self.positions[id] = Position(
                     symbol=self.symbol,
-                    side=direction,
+                    side=position_side,
                     size=amount,
-                    entry_price=order.average_price or order.price
+                    entry_price=entry_price,
+                    mark_price=entry_price,  # Initially same as entry price
+                    unrealized_pnl=Decimal("0"),  # No PnL at entry
+                    leverage=1.0,  # Default leverage
+                    liquidation_price=None,
+                    margin_type="cross",
+                    maintenance_margin=None,
+                    margin_ratio=None,
+                    sl_price=None,
+                    sl_order_id=None,
+                    sl_contracts_amount=None,
+                    tp_prices=[],
+                    tp_state=None,
+                    get_tp1=None,
+                    get_tp2=None,
+                    get_tp3=None,
+                    sl_data=None,
+                    tp_data=None,
+                    tp_contracts_amounts=None,
+                    last_update_time=None
                 )
                 return True
                 
@@ -82,7 +108,7 @@ class Strategy:
                 continue
                 
             position = self.positions[pos_id]
-            side = OrderSide.SELL if position.side == EntryType.LONG else OrderSide.BUY
+            side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
             
             try:
                 order = await self.exchange.create_order(
