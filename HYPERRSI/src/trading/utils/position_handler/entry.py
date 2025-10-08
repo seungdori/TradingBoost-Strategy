@@ -18,7 +18,7 @@ from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.trading.stats import record_trade_entry
 from HYPERRSI.src.trading.error_message import map_exchange_error
 from HYPERRSI.src.trading.position_manager import PositionStateManager
-from HYPERRSI.src.services.get_current_price import get_current_price
+from HYPERRSI.src.trading.services.get_current_price import get_current_price
 from HYPERRSI.src.api.routes.position import open_position_endpoint, OpenPositionRequest
 from HYPERRSI.src.trading.utils.message_builder import create_position_message
 from HYPERRSI.src.trading.utils.trading_utils import init_user_position_data

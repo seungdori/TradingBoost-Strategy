@@ -23,10 +23,10 @@ echo "📊 실행 중인 Celery 프로세스 확인 중..."
 # macOS와 Linux 모두 호환되도록 프로세스 찾기
 if $IS_MACOS; then
     # 자기 자신(현재 스크립트)과 grep 명령어 제외
-    celery_pids=$(ps aux | grep -E '[c]elery|[s]rc.core.celery_task' | grep -v "bash.*stop_celery_worker.sh" | awk '{print $2}')
+    celery_pids=$(ps aux | grep -E '[c]elery|[H]YPERRSI.src.core.celery_task' | grep -v "bash.*stop_celery_worker.sh" | awk '{print $2}')
 else
     # 자기 자신(현재 스크립트) 제외
-    celery_pids=$(pgrep -f "celery\|src.core.celery_task" | grep -v "$SELF_PID")
+    celery_pids=$(pgrep -f "celery\|HYPERRSI.src.core.celery_task" | grep -v "$SELF_PID")
 fi
 
 if [ -z "$celery_pids" ]; then
@@ -36,16 +36,16 @@ fi
 
 echo "🔍 다음 Celery 프로세스들이 실행 중입니다:"
 if $IS_MACOS; then
-    ps aux | grep -E 'celery|src.core.celery_task' | grep -v "grep" | grep -v "bash.*stop_celery_worker.sh"
+    ps aux | grep -E 'celery|HYPERRSI.src.core.celery_task' | grep -v "grep" | grep -v "bash.*stop_celery_worker.sh"
 else
-    ps aux | grep -E 'celery|src.core.celery_task' | grep -v "grep" | grep -v "$SELF_PID"
+    ps aux | grep -E 'celery|HYPERRSI.src.core.celery_task' | grep -v "grep" | grep -v "$SELF_PID"
 fi
 
 # 단계 2: 정상 종료 시도 (SIGTERM)
 echo "🔄 Celery 프로세스 정상 종료 시도 중... (SIGTERM)"
 
 # 여러 프로세스 패턴을 확인하여 종료
-for pattern in "celery worker" "celery beat" "src.core.celery_task"; do
+for pattern in "celery worker" "celery beat" "HYPERRSI.src.core.celery_task"; do
     echo "🔍 '$pattern' 패턴의 프로세스 종료 중..."
     if $IS_MACOS; then
         ps aux | grep "$pattern" | grep -v "grep" | grep -v "bash.*stop_celery_worker.sh" | awk '{print $2}' | xargs kill -15 2>/dev/null || true
@@ -60,9 +60,9 @@ sleep 5
 
 # 단계 3: 남아있는 프로세스 확인 (자기 자신 제외)
 if $IS_MACOS; then
-    remaining_pids=$(ps aux | grep -E '[c]elery|[s]rc.core.celery_task' | grep -v "bash.*stop_celery_worker.sh" | awk '{print $2}')
+    remaining_pids=$(ps aux | grep -E '[c]elery|[H]YPERRSI.src.core.celery_task' | grep -v "bash.*stop_celery_worker.sh" | awk '{print $2}')
 else
-    remaining_pids=$(pgrep -f "celery\|src.core.celery_task" | grep -v "$SELF_PID")
+    remaining_pids=$(pgrep -f "celery\|HYPERRSI.src.core.celery_task" | grep -v "$SELF_PID")
 fi
 
 if [ -z "$remaining_pids" ]; then
@@ -79,9 +79,9 @@ if [ -z "$remaining_pids" ]; then
 else
     echo "⚠️ 일부 Celery 프로세스가 아직 실행 중입니다. 강제 종료를 시도합니다."
     if $IS_MACOS; then
-        ps aux | grep -E 'celery|src.core.celery_task' | grep -v "grep" | grep -v "bash.*stop_celery_worker.sh"
+        ps aux | grep -E 'celery|HYPERRSI.src.core.celery_task' | grep -v "grep" | grep -v "bash.*stop_celery_worker.sh"
     else
-        ps aux | grep -E 'celery|src.core.celery_task' | grep -v "grep" | grep -v "$SELF_PID"
+        ps aux | grep -E 'celery|HYPERRSI.src.core.celery_task' | grep -v "grep" | grep -v "$SELF_PID"
     fi
 fi
 
@@ -89,7 +89,7 @@ fi
 echo "🔄 Celery 프로세스 강제 종료 시도 중... (SIGKILL)"
 
 # 여러 프로세스 패턴을 확인하여 강제 종료
-for pattern in "celery worker" "celery beat" "src.core.celery_task"; do
+for pattern in "celery worker" "celery beat" "HYPERRSI.src.core.celery_task"; do
     echo "🔍 '$pattern' 패턴의 프로세스 강제 종료 중..."
     if $IS_MACOS; then
         ps aux | grep "$pattern" | grep -v "grep" | grep -v "bash.*stop_celery_worker.sh" | awk '{print $2}' | xargs kill -9 2>/dev/null || true
@@ -104,9 +104,9 @@ sleep 3
 
 # 단계 5: 최종 확인 (자기 자신 제외)
 if $IS_MACOS; then
-    final_pids=$(ps aux | grep -E '[c]elery|[s]rc.core.celery_task' | grep -v "bash.*stop_celery_worker.sh" | awk '{print $2}')
+    final_pids=$(ps aux | grep -E '[c]elery|[H]YPERRSI.src.core.celery_task' | grep -v "bash.*stop_celery_worker.sh" | awk '{print $2}')
 else
-    final_pids=$(pgrep -f "celery\|src.core.celery_task" | grep -v "$SELF_PID")
+    final_pids=$(pgrep -f "celery\|HYPERRSI.src.core.celery_task" | grep -v "$SELF_PID")
 fi
 
 if [ -z "$final_pids" ]; then
@@ -116,9 +116,9 @@ else
     echo "💡 다음 명령어를 사용해보세요: sudo $SCRIPT_PATH"
     echo "남아있는 프로세스:"
     if $IS_MACOS; then
-        ps aux | grep -E 'celery|src.core.celery_task' | grep -v "grep" | grep -v "bash.*stop_celery_worker.sh"
+        ps aux | grep -E 'celery|HYPERRSI.src.core.celery_task' | grep -v "grep" | grep -v "bash.*stop_celery_worker.sh"
     else
-        ps aux | grep -E 'celery|src.core.celery_task' | grep -v "grep" | grep -v "$SELF_PID"
+        ps aux | grep -E 'celery|HYPERRSI.src.core.celery_task' | grep -v "grep" | grep -v "$SELF_PID"
     fi
     
     # 관리자 권한으로 다시 시도 제안

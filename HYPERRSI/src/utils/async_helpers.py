@@ -7,7 +7,7 @@ and automatic task cancellation.
 
 import asyncio
 import time
-from typing import TypeVar, Callable, Any, Optional, Dict, List
+from typing import TypeVar, Callable, Any, Optional, Dict, List, AsyncIterator
 from contextlib import asynccontextmanager
 from shared.logging import get_logger
 
@@ -59,7 +59,7 @@ class TaskGroupHelper:
             async with asyncio.timeout(timeout):
                 async with asyncio.TaskGroup() as tg:
                     # Create all tasks
-                    task_handles = {}
+                    task_handles: dict[str, asyncio.Task[Any]] = {}
                     for name, coro in tasks.items():
                         task_handles[name] = tg.create_task(coro, name=name)
 
@@ -156,7 +156,7 @@ class TaskGroupHelper:
 
     @staticmethod
     @asynccontextmanager
-    async def measure_time(operation_name: str):
+    async def measure_time(operation_name: str) -> AsyncIterator[None]:
         """
         Context manager to measure async operation time
 
@@ -280,7 +280,7 @@ class CacheHelper:
             self._access_counts[key] = self._access_counts.get(key, 0) + 1
             return self._cache[key]
 
-    async def set(self, key: str, value: Any, ttl: Optional[float] = None):
+    async def set(self, key: str, value: Any, ttl: Optional[float] = None) -> None:
         """Set value in cache with optional TTL"""
         async with self._lock:
             # Evict if cache is full
@@ -291,21 +291,21 @@ class CacheHelper:
             self._cache_times[key] = time.time()
             self._access_counts[key] = 1
 
-    async def _evict(self, key: str):
+    async def _evict(self, key: str) -> None:
         """Evict single key"""
         self._cache.pop(key, None)
         self._cache_times.pop(key, None)
         self._access_counts.pop(key, None)
 
-    async def _evict_lfu(self):
+    async def _evict_lfu(self) -> None:
         """Evict least frequently used item"""
         if not self._access_counts:
             return
 
-        lfu_key = min(self._access_counts, key=self._access_counts.get)
+        lfu_key = min(self._access_counts, key=lambda k: self._access_counts.get(k, 0))
         await self._evict(lfu_key)
 
-    async def clear(self):
+    async def clear(self) -> None:
         """Clear entire cache"""
         async with self._lock:
             self._cache.clear()

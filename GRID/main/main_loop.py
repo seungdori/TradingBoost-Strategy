@@ -28,7 +28,7 @@ from GRID.strategies.grid import place_grid_orders, ws_client, monitor_positions
 from GRID.main import periodic_analysis
 import random
 from GRID.strategies import grid
-from HYPERRSI import telegram_message
+from GRID import telegram_message
 from GRID.routes.trading_route import ConnectionManager
 
 manager = ConnectionManager()

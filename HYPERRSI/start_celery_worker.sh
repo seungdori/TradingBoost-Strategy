@@ -31,10 +31,10 @@ if [ -f "stop_celery_worker.sh" ]; then
 else
     # 프로세스 직접 종료
     if $IS_MACOS; then
-        ps aux | grep -E '[c]elery|[s]rc.core.celery_task' | awk '{print $2}' | xargs kill -9 2>/dev/null || true
+        ps aux | grep -E '[c]elery|[H]YPERRSI.src.core.celery_task' | awk '{print $2}' | xargs kill -9 2>/dev/null || true
     else
         pkill -9 -f "celery" || true
-        pkill -9 -f "src.core.celery_task" || true
+        pkill -9 -f "HYPERRSI.src.core.celery_task" || true
     fi
     sleep 2
 fi
@@ -77,19 +77,19 @@ echo -e "${GREEN}🚀 Celery 워커 시작 중...${NC}"
 
 for i in $(seq 1 $worker_count); do
     echo -e "${YELLOW}🔄 워커 $i/$worker_count 시작 중...${NC}"
-    celery -A src.core.celery_task worker --loglevel=info --concurrency=2 -n worker${i}@%h --purge >> "$worker_log" 2>&1 &
-    
+    celery -A HYPERRSI.src.core.celery_task worker --loglevel=info --concurrency=2 -n worker${i}@%h --purge >> "$worker_log" 2>&1 &
+
     # 프로세스 ID 저장
     worker_pid=$!
     echo "worker${i}_pid=$worker_pid" >> .celery_pids
-    
+
     echo -e "${GREEN}✅ 워커 $i 시작됨 (PID: $worker_pid)${NC}"
     sleep 1
 done
 
 # Celery Beat 시작 (스케줄링된 작업이 필요한 경우)
 echo -e "${GREEN}🚀 Celery beat 시작 중...${NC}"
-celery -A src.core.celery_task beat --loglevel=info >> "$beat_log" 2>&1 &
+celery -A HYPERRSI.src.core.celery_task beat --loglevel=info >> "$beat_log" 2>&1 &
 beat_pid=$!
 echo "beat_pid=$beat_pid" >> .celery_pids
 echo -e "${GREEN}✅ Beat 시작됨 (PID: $beat_pid)${NC}"

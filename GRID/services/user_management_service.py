@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, Union
 
 from GRID.trading.shared_state import user_keys
 from GRID.routes.logs_route import add_log_endpoint as add_user_log
-from HYPERRSI import telegram_message
+from GRID import telegram_message
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)

@@ -24,7 +24,7 @@ def process_upbit_balance(balance: Dict[str, Any], symbol: str) -> float:
         base_currency = symbol.split('-')[1]
         free_balance = balance['free'].get(base_currency, 0.0)
         logger.debug(f'{symbol} balance: {free_balance}')
-        return free_balance
+        return float(free_balance) if free_balance else 0.0
     except Exception as e:
         logger.error(f"Error processing Upbit balance: {e}")
         return 0.0

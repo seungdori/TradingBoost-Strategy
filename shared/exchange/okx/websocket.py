@@ -10,6 +10,7 @@ import hashlib
 import time
 from typing import Any, Callable, Dict, Optional
 import websockets
+from websockets.legacy.client import WebSocketClientProtocol
 
 from shared.exchange.okx.constants import WSS_PUBLIC_URL, WSS_PRIVATE_URL
 from shared.logging import get_logger
@@ -82,7 +83,7 @@ class OKXWebsocket:
         task = asyncio.create_task(handler())
         self.connections[f"{channel}:{symbol}"] = task
 
-    async def _authenticate(self, ws) -> None:
+    async def _authenticate(self, ws: WebSocketClientProtocol) -> None:
         """
         비공개 채널 인증
 
@@ -110,7 +111,8 @@ class OKXWebsocket:
         }
 
         await ws.send(json.dumps(login_data))
-        login_response = await ws.recv()
+        login_response_raw = await ws.recv()
+        login_response = login_response_raw.decode() if isinstance(login_response_raw, bytes) else login_response_raw
         logger.info(f"Login response: {login_response}")
 
     async def disconnect(self, channel: str, symbol: str) -> None:
@@ -141,7 +143,7 @@ async def get_position_via_websocket(
     passphrase: str,
     symbol: str,
     cache_key: str,
-    redis_client
+    redis_client: Any
 ) -> float:
     """
     WebSocket을 통한 포지션 조회 (GRID 호환성)
@@ -181,7 +183,8 @@ async def get_position_via_websocket(
             }]
         }
         await websocket.send(json.dumps(login_data))
-        login_response = await websocket.recv()
+        login_response_raw = await websocket.recv()
+        login_response = login_response_raw.decode() if isinstance(login_response_raw, bytes) else login_response_raw
         logger.info(f"Login response: {login_response}")
 
         # 포지션 채널 구독
@@ -193,7 +196,8 @@ async def get_position_via_websocket(
             }]
         }
         await websocket.send(json.dumps(subscribe_data))
-        subscription_response = await websocket.recv()
+        subscription_response_raw = await websocket.recv()
+        subscription_response = subscription_response_raw.decode() if isinstance(subscription_response_raw, bytes) else subscription_response_raw
         logger.info(f"Subscription response: {subscription_response}")
 
         # 포지션 데이터 수신

@@ -172,7 +172,7 @@ async def get_list_from_db(
             }
         )
 
-        return result
+        return list(result) if result else []
 
     except ValidationException:
         raise

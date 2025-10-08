@@ -143,12 +143,12 @@ TradingBoost-Strategy/
 2. **Start Celery Worker**
    ```bash
    cd HYPERRSI
-   celery -A src.core.celery_task worker --loglevel=INFO --concurrency=8 --purge
+   celery -A HYPERRSI.src.core.celery_task worker --loglevel=INFO --concurrency=8 --purge
    ```
 
 3. **Start Celery Beat** (for scheduled tasks)
    ```bash
-   celery -A src.core.celery_task beat --loglevel=WARNING
+   celery -A HYPERRSI.src.core.celery_task beat --loglevel=WARNING
    ```
 
 4. **Start FastAPI Server**
@@ -159,7 +159,7 @@ TradingBoost-Strategy/
 
 5. **Optional: Start Celery Flower** (monitoring)
    ```bash
-   celery -A src.core.celery_task flower --port=5555
+   celery -A HYPERRSI.src.core.celery_task flower --port=5555
    # Access at http://localhost:5555
    ```
 
@@ -352,7 +352,7 @@ Logs are organized by type:
 
 Access Flower UI for task monitoring:
 ```bash
-celery -A src.core.celery_task flower --port=5555
+celery -A HYPERRSI.src.core.celery_task flower --port=5555
 ```
 Visit: http://localhost:5555
 
@@ -417,10 +417,10 @@ python -c "from shared.config import settings; print(settings)"
 **Celery Worker Not Starting**
 ```bash
 # Clear Celery tasks
-celery -A src.core.celery_task purge
+celery -A HYPERRSI.src.core.celery_task purge
 
 # Check Redis connectivity
-celery -A src.core.celery_task inspect ping
+celery -A HYPERRSI.src.core.celery_task inspect ping
 ```
 
 **Database Migration Issues**

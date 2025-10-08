@@ -29,7 +29,7 @@ from GRID.strategies import strategy
 from GRID.trading.shared_state import user_keys
 from GRID.utils.price import get_corrected_rounded_price
 from GRID.utils.redis_helpers import reset_order_placed, get_order_placed
-from HYPERRSI import telegram_message
+from GRID import telegram_message
 from shared.utils import retry_async
 
 logger = logging.getLogger(__name__)

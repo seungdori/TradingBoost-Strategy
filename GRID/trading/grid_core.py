@@ -41,7 +41,7 @@ from GRID.trading.get_minimum_qty import round_to_qty, get_lot_sizes, get_perpet
 from GRID.trading import instance_manager as instance
 from GRID.trading.shared_state import cancel_state, user_keys
 from GRID.strategies import strategy
-from HYPERRSI import telegram_message
+from GRID import telegram_message
 from shared.constants.error import TradingErrorName
 from shared.dtos.bot_state import BotStateDto, BotStateKeyDto, BotStateError
 from shared.utils import retry_async

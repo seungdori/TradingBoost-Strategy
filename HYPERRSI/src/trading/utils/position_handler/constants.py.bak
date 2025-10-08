@@ -1,0 +1,136 @@
+"""
+Position Handler Constants
+
+This module defines all Redis key patterns and configuration constants
+used throughout the position handler package.
+"""
+
+# ============================================================================
+# Redis Key Patterns
+# ============================================================================
+# Format strings use Python f-string style placeholders
+
+# Margin and Blocking
+MARGIN_BLOCK_KEY = "margin_block:{user_id}:{symbol}"
+
+# Position Management
+POSITION_KEY = "user:{user_id}:position:{symbol}:{side}"
+MAIN_POSITION_DIRECTION_KEY = "user:{user_id}:position:{symbol}:main_position_direction"
+MIN_SUSTAIN_CONTRACT_SIZE_KEY = "user:{user_id}:position:{symbol}:min_sustain_contract_size"
+
+# DCA (Dollar Cost Averaging) / Pyramiding
+DCA_COUNT_KEY = "user:{user_id}:position:{symbol}:{side}:dca_count"
+DCA_LEVELS_KEY = "user:{user_id}:position:{symbol}:{side}:dca_levels"
+
+# Take Profit
+TP_DATA_KEY = "user:{user_id}:position:{symbol}:{side}:tp_data"
+
+# Cooldown and Locking
+COOLDOWN_KEY = "user:{user_id}:cooldown:{symbol}:{side}"
+POSITION_LOCK_KEY = "user:{user_id}:position_lock:{symbol}:{side}:{timeframe}"
+
+# Entry Management
+ENTRY_FAIL_COUNT_KEY = "user:{user_id}:entry_fail_count"
+TREND_SIGNAL_ALERT_KEY = "user:{user_id}:trend_signal_alert"
+
+# Dual Side Trading
+DUAL_SIDE_COUNT_KEY = "user:{user_id}:{symbol}:dual_side_count"
+
+# Candle Data
+CANDLES_WITH_INDICATORS_KEY = "candles_with_indicators:{symbol}:{timeframe}"
+
+# ============================================================================
+# Configuration Constants
+# ============================================================================
+
+# Entry Failure Management
+MAX_ENTRY_FAILURES = 5  # Maximum consecutive entry failures before stopping
+
+# Alert Expiry
+TREND_ALERT_EXPIRY_SECONDS = 7200  # 2 hours in seconds
+
+# Position Lock Expiry (calculated dynamically based on timeframe)
+# See core.calculate_next_candle_time() for timeframe-specific calculations
+
+# Minimum Contract Sizes
+MIN_CONTRACTS_RATIO_FULL_TP = 0.01  # 1% of initial when TP ratios sum to 1 or 100
+MIN_CONTRACTS_RATIO_PARTIAL_TP = 0.0001  # 0.01% for partial TP
+MIN_CONTRACTS_ABSOLUTE = 0.02  # Absolute minimum contracts
+
+# ============================================================================
+# Message Templates
+# ============================================================================
+
+# Entry Messages
+ENTRY_MESSAGE_TEMPLATE_LONG = """
+🔼 *롱 포지션 진입*
+
+📊 종목: {symbol}
+💰 진입가: ${entry_price}
+📈 계약수: {contracts}
+💵 투자금: ${investment}
+🎯 익절가: {tp_prices}
+📊 ATR: {atr}
+
+"""
+
+ENTRY_MESSAGE_TEMPLATE_SHORT = """
+🔻 *숏 포지션 진입*
+
+📊 종목: {symbol}
+💰 진입가: ${entry_price}
+📈 계약수: {contracts}
+💵 투자금: ${investment}
+🎯 익절가: {tp_prices}
+📊 ATR: {atr}
+
+"""
+
+# DCA Messages
+DCA_MESSAGE_TEMPLATE = """
+= *DCA Entry #{dca_count}*
+
+📊 종목: {symbol}
+💰 현재가: ${current_price}
+➕ 추가 계약수: {added_contracts}
+📊 평균 진입가: ${avg_price}
+📈 총 계약수: {total_contracts}
+🎯 익절가: {tp_prices}
+== Next DCA Level: {next_dca}
+
+"""
+
+# Exit Messages
+EXIT_MESSAGE_TEMPLATE = """
+= *Position Closed*
+
+📊 종목: {symbol}
+💰 청산가: ${exit_price}
+💵 손익: {pnl}
+📝 사유: {reason}
+
+"""
+
+# Error Messages
+ERROR_INSUFFICIENT_MARGIN = "마진이 부족합니다"
+ERROR_POSITION_LOCKED = "Position is locked for this timeframe"
+ERROR_TREND_REVERSAL = "Trend reversal detected - position closed"
+ERROR_MAX_FAILURES_REACHED = "Maximum entry failures reached"
+
+# ============================================================================
+# Trading Direction Constants
+# ============================================================================
+
+DIRECTION_LONG_SHORT = "q"
+DIRECTION_LONG = "q"
+DIRECTION_SHORT = ""
+
+# ============================================================================
+# Trend State Constants
+# ============================================================================
+
+TREND_STATE_STRONG_DOWNTREND = -2
+TREND_STATE_DOWNTREND = -1
+TREND_STATE_NEUTRAL = 0
+TREND_STATE_UPTREND = 1
+TREND_STATE_STRONG_UPTREND = 2

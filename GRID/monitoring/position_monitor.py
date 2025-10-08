@@ -32,7 +32,7 @@ from GRID.routes.logs_route import add_log_endpoint as add_user_log
 from GRID.strategies import strategy
 from GRID.trading.instance_manager import get_exchange_instance
 from GRID.trading.shared_state import cancel_state, user_keys
-from HYPERRSI import telegram_message
+from GRID import telegram_message
 from shared.utils import retry_async
 
 # ==================== Core 모듈 ====================

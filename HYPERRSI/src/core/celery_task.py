@@ -5,14 +5,14 @@ configure_pythonpath()
 
 #실행 명령어
 
-#celery -A src.core.celery_task worker --loglevel=INFO --concurrency=8
+#celery -A HYPERRSI.src.core.celery_task worker --loglevel=INFO --concurrency=8
 
-#celery -A src.core.celery_task worker --loglevel=WARNING --concurrency=8
+#celery -A HYPERRSI.src.core.celery_task worker --loglevel=WARNING --concurrency=8
 
 
 #비트 사용할 필요 없음.
-#celery -A src.core.celery_task beat --loglevel=WARNING
-#celery -A src.core.celery_task flower --port=5555
+#celery -A HYPERRSI.src.core.celery_task beat --loglevel=WARNING
+#celery -A HYPERRSI.src.core.celery_task flower --port=5555
 
 import os
 from celery import Celery
@@ -25,6 +25,17 @@ from celery.utils.log import get_task_logger
 task_logger = get_task_logger('trading_tasks.check_and_execute_trading')
 task_logger.setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+
+# Initialize Redis clients immediately for Celery context
+# This must happen before importing any modules that use redis_client
+try:
+    from HYPERRSI.src.core.database import init_global_redis_clients
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(init_global_redis_clients())
+    logger.info("Celery module: Redis clients initialized at module level")
+except Exception as e:
+    logger.warning(f"Could not initialize Redis at module level: {e}. Will retry in worker_process_init.")
 
 # 시그널 핸들러 함수 추가
 def signal_handler(signum, frame):
@@ -52,7 +63,7 @@ def signal_handler(signum, frame):
 def init_worker():
     """
     Celery 워커 초기화 함수
-    
+
     이 함수는 각 워커 프로세스가 시작될 때 호출됩니다.
     비동기 이벤트 루프 관련 설정을 초기화합니다.
     """
@@ -60,7 +71,7 @@ def init_worker():
         # 시그널 핸들러 등록
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
-        
+
         # 기존 이벤트 루프 확인 및 정리
         try:
             loop = asyncio.get_event_loop()
@@ -75,7 +86,15 @@ def init_worker():
             logger.info("이벤트 루프가 없어 새로 생성합니다.")
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-        
+
+        # Initialize Redis clients for Celery worker
+        try:
+            from HYPERRSI.src.core.database import init_global_redis_clients
+            loop.run_until_complete(init_global_redis_clients())
+            logger.info("Celery worker: Redis clients initialized")
+        except Exception as redis_error:
+            logger.error(f"Failed to initialize Redis clients in Celery worker: {redis_error}")
+
         logger.debug("Celery 워커 초기화 완료: 이벤트 루프 설정됨")
     except Exception as e:
         logger.error(f"Celery 워커 초기화 중 오류 발생: {str(e)}")
@@ -83,8 +102,20 @@ def init_worker():
 # 워커 프로세스 초기화 시그널 연결
 @worker_process_init.connect
 def setup_worker_process(**kwargs):
-    """워커 프로세스 초기화 시 시그널 핸들러 설정"""
-    logger.info("워커 프로세스 초기화: 시그널 핸들러 설정")
+    """워커 프로세스 초기화 시 Redis 및 시그널 핸들러 설정"""
+    logger.info("워커 프로세스 초기화: Redis 및 시그널 핸들러 설정")
+
+    # Redis 초기화 (모듈 import 전에 수행)
+    try:
+        import asyncio
+        from HYPERRSI.src.core.database import init_global_redis_clients
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(init_global_redis_clients())
+        logger.info("Celery worker process: Redis clients initialized")
+    except Exception as redis_error:
+        logger.error(f"Failed to initialize Redis in worker process: {redis_error}")
+
+    # 시그널 핸들러 설정
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
@@ -120,8 +151,8 @@ celery_app = Celery(
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
     include=[
-        'src.tasks.trading_tasks',  # 트레이딩 태스크
-        'src.tasks.grid_trading_tasks',  # Grid 트레이딩 태스크 추가
+        'HYPERRSI.src.tasks.trading_tasks',  # 트레이딩 태스크
+        'HYPERRSI.src.tasks.grid_trading_tasks',  # Grid 트레이딩 태스크 추가
     ]
 )
 celery_app.conf.update(

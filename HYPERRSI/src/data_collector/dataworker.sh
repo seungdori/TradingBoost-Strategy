@@ -2,14 +2,14 @@
 echo '#!/bin/bash
 cd /root/HyperRSI
 source .venv/bin/activate
-celery -A src.data_collector.tasks worker -l info
+celery -A HYPERRSI.src.data_collector.tasks worker -l info
 ' > start_worker.sh
 
 # Beat 스크립트
 echo '#!/bin/bash
 cd /root/HyperRSI
 source .venv/bin/activate
-celery -A src.data_collector.tasks beat -l warning
+celery -A HYPERRSI.src.data_collector.tasks beat -l warning
 ' > start_beat.sh
 
 # 실행 권한 부여

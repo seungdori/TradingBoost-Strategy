@@ -5,7 +5,7 @@ from redis import Redis
 from datetime import datetime, timedelta, timezone, date
 import traceback
 from decimal import Decimal
-from HYPERRSI import telegram_message
+from GRID import telegram_message
 import asyncio
 import logging
 import redis.asyncio as aioredis
@@ -213,7 +213,7 @@ async def create_exchange_instance(exchange_name, user_id):
         error_message = str(e)
         if "API" in error_message:
             print("API key issue detected. Terminating process.")
-            from grid_process import stop_grid_main_process
+            from GRID.strategies.grid_process import stop_grid_main_process
             await stop_grid_main_process(exchange_name, user_id)
             return
         print(f"Error getting exchange instance for{user_id}13,  {exchange_name}: {error_message}")
@@ -502,7 +502,7 @@ async def restart_logic(redis, exchange_name, user_id):
     if request_body_str is None:
         return
     else:
-        from routes.feature_route import restart_single_user
+        from GRID.routes.feature_route import restart_single_user
         await restart_single_user(exchange_name, user_id, request_body_str)
         
 #================================================================================================

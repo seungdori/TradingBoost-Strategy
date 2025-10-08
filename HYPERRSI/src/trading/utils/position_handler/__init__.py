@@ -27,7 +27,7 @@ from HYPERRSI.src.trading.trading_service import TradingService
 from HYPERRSI.src.trading.models import Position, get_timeframe
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.trading.position_manager import PositionStateManager
-from HYPERRSI.src.services.get_current_price import get_current_price
+from HYPERRSI.src.trading.services.get_current_price import get_current_price
 from shared.logging import get_logger
 
 # Import public API functions from modules

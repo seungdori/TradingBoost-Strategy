@@ -30,7 +30,7 @@ except ImportError:
     from decimal import Decimal
     from typing import Optional, List
 
-    class Position(BaseModel):
+    class Position(BaseModel):  # type: ignore[no-redef]
         symbol: str
         side: PositionSide
         size: Decimal

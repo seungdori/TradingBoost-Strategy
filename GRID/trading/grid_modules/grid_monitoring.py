@@ -28,7 +28,7 @@ from GRID.services.order_service import (
 from GRID.strategies import strategy
 from GRID.trading.shared_state import user_keys
 from GRID.utils.price import get_corrected_rounded_price
-from HYPERRSI import telegram_message
+from GRID import telegram_message
 from shared.utils import retry_async
 from shared.utils.exchange_precision import adjust_price_precision
 

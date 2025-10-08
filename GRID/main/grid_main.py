@@ -21,7 +21,7 @@ import requests
 # ==================== 프로젝트 모듈 ====================
 from GRID.database import redis_database
 from GRID.routes.logs_route import add_log_endpoint as add_user_log
-from HYPERRSI import telegram_message
+from GRID import telegram_message
 from shared.utils import retry_async
 
 # ==================== Core 모듈 ====================
@@ -238,7 +238,7 @@ async def main(exchange_name, direction, enter_symbol_count, enter_symbol_amount
         print(traceback.format_exc())
         raise e
     finally:
-        from grid_process import stop_grid_main_process
+        from GRID.strategies.grid_process import stop_grid_main_process
         message = f"{user_id} : 매매가 종료되었습니다.\n모든 트레이딩이 종료되었습니다"
         await stop_grid_main_process(exchange_name, user_id)
         await telegram_message.send_telegram_message(f"{user_id} : 매매가 종료되었습니다", exchange_name, user_id)

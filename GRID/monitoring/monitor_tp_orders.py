@@ -1,6 +1,6 @@
 from GRID.routes.trading_route import ConnectionManager
 from GRID.trading.shared_state import user_keys 
-from HYPERRSI import telegram_message
+from GRID import telegram_message
 import asyncio
 from GRID.trading.instance import get_exchange_instance
 import ccxt.pro as ccxtpro

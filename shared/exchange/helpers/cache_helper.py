@@ -3,7 +3,7 @@
 거래소 데이터의 Redis 캐싱을 위한 공통 함수
 """
 import json
-from typing import Any, Optional
+from typing import Any, Optional, Callable, Awaitable
 from redis.asyncio import Redis
 from shared.logging import get_logger
 
@@ -93,7 +93,7 @@ async def invalidate_cache(
 async def get_or_fetch(
     redis_client: Redis,
     cache_key: str,
-    fetch_func,
+    fetch_func: Callable[[], Awaitable[Any]],
     ttl: int = 300
 ) -> Optional[Any]:
     """

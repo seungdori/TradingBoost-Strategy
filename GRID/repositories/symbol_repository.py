@@ -88,7 +88,7 @@ async def clear_blacklist(user_id: Union[int, str], exchange_name: str) -> int:
             "removed": removed
         }
     )
-    return removed
+    return int(removed) if removed else 0
 
 
 async def clear_whitelist(user_id: Union[int, str], exchange_name: str) -> int:
@@ -107,7 +107,7 @@ async def clear_whitelist(user_id: Union[int, str], exchange_name: str) -> int:
             "removed": removed
         }
     )
-    return removed
+    return int(removed) if removed else 0
 
 
 async def add_symbols(
@@ -196,4 +196,4 @@ async def remove_symbols(
             "count": removed
         }
     )
-    return removed
+    return int(removed) if removed else 0

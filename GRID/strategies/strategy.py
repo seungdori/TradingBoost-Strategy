@@ -8,7 +8,7 @@ from GRID.trading import instance
 from GRID.api.apilist import telegram_store
 from GRID.trading.get_minimum_qty import round_to_qty, split_contracts, get_perpetual_instruments, get_lot_sizes
 import logging
-from HYPERRSI import telegram_message
+from GRID import telegram_message
 from queue import Queue
 from datetime import datetime, timedelta
 import pytz  # type: ignore[import-untyped]
