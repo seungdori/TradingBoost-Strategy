@@ -4,11 +4,13 @@ Connection Pool Monitoring for TradingBoost-Strategy
 Provides monitoring and health checking for database and Redis connection pools.
 """
 
-from typing import Protocol, Any
+import time
 from dataclasses import dataclass
 from datetime import datetime
-import time
+from typing import Any, Protocol
+
 from sqlalchemy.ext.asyncio import AsyncEngine
+
 from shared.logging import get_logger
 
 logger = get_logger(__name__)

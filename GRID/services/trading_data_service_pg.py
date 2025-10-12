@@ -5,7 +5,8 @@ Provides backward-compatible interface for trading data operations using Postgre
 Replaces GRID.database.database and GRID.infra.database SQLite implementation.
 """
 
-from typing import Optional, Any
+from typing import Any, Optional
+
 import pandas as pd
 
 from GRID.infra.database_pg import get_grid_db

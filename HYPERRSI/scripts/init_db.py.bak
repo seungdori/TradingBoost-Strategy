@@ -14,9 +14,13 @@ project_root = Path(__file__).parent.parent.parent.resolve()
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from HYPERRSI.src.core.database import init_db, engine
+from HYPERRSI.src.core.database import engine, init_db
 from HYPERRSI.src.core.models.database import (  # Import models to register them
-    UserModel, ExchangeKeysModel, UserPreferencesModel, UserStateModel, TickSizeModel
+    ExchangeKeysModel,
+    TickSizeModel,
+    UserModel,
+    UserPreferencesModel,
+    UserStateModel,
 )
 from shared.logging import get_logger
 

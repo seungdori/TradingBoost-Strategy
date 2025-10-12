@@ -6,7 +6,8 @@ task cleanup, and graceful cancellation support.
 """
 
 import asyncio
-from typing import Set, Optional, Coroutine
+from typing import Coroutine, Optional, Set
+
 from shared.logging import get_logger
 
 logger = get_logger(__name__)

@@ -8,45 +8,69 @@ import asyncio
 import atexit
 import gc
 import os
-import psutil
 import signal
 import sys
 import time
 import traceback
 from datetime import datetime
 from typing import Any, Dict, List
-from shared.logging import get_logger, log_order
+
+import psutil
+
+from HYPERRSI.src.api.dependencies import get_exchange_context
+from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
+from HYPERRSI.src.api.routes.order.order import close_position
 from HYPERRSI.src.core.database import check_redis_connection, reconnect_redis
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
-from HYPERRSI.src.api.dependencies import get_exchange_context
-from HYPERRSI.src.api.routes.order.order import close_position
-from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
-from .redis_manager import get_all_running_users, get_user_monitor_orders, perform_memory_cleanup, check_redis_connection_task
-from .order_monitor import check_order_status, update_order_status, check_missing_orders, check_recent_filled_orders, should_check_tp_order, should_check_sl_order
-from .position_validator import check_position_exists, verify_and_handle_position_closure, check_position_change, check_and_cleanup_orders, cancel_algo_orders_for_no_position_sides
-from .trailing_stop_handler import check_trailing_stop, get_active_trailing_stops, clear_trailing_stop
+from shared.database.redis_helper import get_redis_client
+from shared.logging import get_logger, log_order
+
 from .break_even_handler import process_break_even_settings
+from .order_monitor import (
+    check_missing_orders,
+    check_order_status,
+    check_recent_filled_orders,
+    should_check_sl_order,
+    should_check_tp_order,
+    update_order_status,
+)
+from .position_validator import (
+    cancel_algo_orders_for_no_position_sides,
+    check_and_cleanup_orders,
+    check_position_change,
+    check_position_exists,
+    verify_and_handle_position_closure,
+)
+from .redis_manager import (
+    check_redis_connection_task,
+    get_all_running_users,
+    get_user_monitor_orders,
+    perform_memory_cleanup,
+)
 from .telegram_service import get_identifier, send_telegram_message
+from .trailing_stop_handler import (
+    check_trailing_stop,
+    clear_trailing_stop,
+    get_active_trailing_stops,
+)
 from .utils import (
-    MONITOR_INTERVAL, ORDER_CHECK_INTERVAL, MAX_MEMORY_MB, MAX_RESTART_ATTEMPTS, MEMORY_CLEANUP_INTERVAL,
-    should_log, get_actual_order_type, add_recent_symbol
+    MAX_MEMORY_MB,
+    MAX_RESTART_ATTEMPTS,
+    MEMORY_CLEANUP_INTERVAL,
+    MONITOR_INTERVAL,
+    ORDER_CHECK_INTERVAL,
+    add_recent_symbol,
+    get_actual_order_type,
+    should_log,
 )
 
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 
 
@@ -111,13 +135,13 @@ async def monitor_orders_loop():
                     await reconnect_redis()
                     
                 running_users = await get_all_running_users()
-                last_active_users_num_logging = await _get_redis_client().get(f"last_active_users_num_logging")
+                last_active_users_num_logging = await get_redis_client().get(f"last_active_users_num_logging")
                 if len(running_users) > 0 and last_active_users_num_logging is None:
                     logger.info(f"[활성 사용자 수: {len(running_users)}]")
-                    await _get_redis_client().set(f"last_active_users_num_logging", current_time)
+                    await get_redis_client().set(f"last_active_users_num_logging", current_time)
                 elif len(running_users) > 0 and last_active_users_num_logging is not None and abs(current_time - float(last_active_users_num_logging)) >= 60:
                     logger.info(f"[활성 사용자 수: {len(running_users)}]")
-                    await _get_redis_client().set(f"last_active_users_num_logging", current_time)
+                    await get_redis_client().set(f"last_active_users_num_logging", current_time)
             except Exception as users_error:
                 logger.error(f"running_users 조회 실패: {str(users_error)}")
                 logger.error(f"에러 타입: {type(users_error).__name__}, 상세 내용: {traceback.format_exc()}")
@@ -279,7 +303,7 @@ async def monitor_orders_loop():
                         # 심볼별 주문 수 변화 감지
                         current_order_count = len(orders)
                         order_count_key = f"order_count:{user_id}:{symbol}"
-                        previous_count = await _get_redis_client().get(order_count_key)
+                        previous_count = await get_redis_client().get(order_count_key)
                         
                         force_check_all_orders = False
                         if previous_count:
@@ -295,7 +319,7 @@ async def monitor_orders_loop():
                                 asyncio.create_task(check_recent_filled_orders(str(user_id), symbol))
                         
                         # 현재 주문 수 저장
-                        await _get_redis_client().set(order_count_key, current_order_count, ex=600)  # 10분 TTL
+                        await get_redis_client().set(order_count_key, current_order_count, ex=600)  # 10분 TTL
                         
                         position_sides = set(order_data.get("position_side", "") for order_data in orders)
                         try:
@@ -327,7 +351,7 @@ async def monitor_orders_loop():
                                 trailing_sides = set()
                                 for direction in ["long", "short"]:
                                     ts_key = f"trailing:user:{user_id}:{symbol}:{direction}"
-                                    if await _get_redis_client().exists(ts_key):
+                                    if await get_redis_client().exists(ts_key):
                                         trailing_sides.add(direction)
                                 
                                 # 주문 정렬 (TP 주문은 tp1 → tp2 → tp3 순서로)
@@ -362,7 +386,7 @@ async def monitor_orders_loop():
                                     
                                     # 주문 상태 변화 감지를 위한 이전 상태 확인
                                     status_key = f"order_status:{order_id}"
-                                    previous_status = await _get_redis_client().get(status_key)
+                                    previous_status = await get_redis_client().get(status_key)
                                     
                                     # 상태가 변경된 경우 강제 체크
                                     status_changed = previous_status and previous_status != current_status
@@ -370,7 +394,7 @@ async def monitor_orders_loop():
                                         logger.info(f"주문 상태 변화 감지: {order_id}, {previous_status} -> {current_status}, 강제 체크")
                                     
                                     # 현재 상태를 Redis에 저장 (다음 비교용)
-                                    await _get_redis_client().set(status_key, current_status, ex=3600)  # 1시간 TTL
+                                    await get_redis_client().set(status_key, current_status, ex=3600)  # 1시간 TTL
                                     
                                     # 트레일링 스탑이 활성화된 방향의 TP 주문은 스킵 (SL만 확인)
                                     if position_side in trailing_sides and order_type.startswith("tp"):
@@ -482,14 +506,14 @@ async def monitor_orders_loop():
                                                         position_key = f"user:{user_id}:position:{symbol}:{position_side}"
                                                         
                                                         # TP 중복 처리 방지 체크
-                                                        tp_already_processed = await _get_redis_client().hget(position_key, f"get_tp{tp_index}")
+                                                        tp_already_processed = await get_redis_client().hget(position_key, f"get_tp{tp_index}")
                                                         
                                                         if tp_already_processed == "true":
                                                             logger.info(f"TP{tp_index} 이미 처리됨, 중복 처리 방지: {user_id} {symbol} {position_side}")
                                                             continue
                                                         
                                                         #get TP 업데이트
-                                                        await _get_redis_client().hset(position_key, f"get_tp{tp_index}", "true")
+                                                        await get_redis_client().hset(position_key, f"get_tp{tp_index}", "true")
                                                         
                                                         # TP 주문 체결 로깅
                                                         price = float(order_data.get("price", "0"))
@@ -831,7 +855,7 @@ if __name__ == "__main__":
     """
     import atexit
     import signal
-    
+
     # 종료 핸들러 등록
     atexit.register(exit_handler)
     
@@ -847,8 +871,9 @@ if __name__ == "__main__":
     
     # 필수 라이브러리 가져오기
     import sys
+
     import psutil
-    
+
     # 프로세스 우선순위 설정 (선택적)
     try:
         import os
@@ -862,6 +887,7 @@ if __name__ == "__main__":
     try:
         if sys.platform != 'win32':  # Unix/Linux/Mac
             import resource
+
             # 메모리 제한 설정
             rsrc = resource.RLIMIT_AS
             soft, hard = resource.getrlimit(rsrc)

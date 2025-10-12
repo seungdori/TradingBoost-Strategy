@@ -1,15 +1,22 @@
-import aiohttp
 import asyncio
+import concurrent.futures
+import glob
 import json
+import os
+import random
+import traceback
+from functools import partial
+from typing import Any, List, Optional
+
+import aiohttp
 import pandas as pd
 import redis
-from shared.utils import path_helper
-import glob
-import os
-import traceback   
-from GRID.trading import redis_connection_manager
+import redis.asyncio as aioredis
+
+from GRID import telegram_message
 from GRID.database import redis_database
 from GRID.database.redis_database import RedisConnectionManager
+from GRID.main import periodic_analysis
 from GRID.repositories.symbol_repository import (
     add_symbols,
     clear_blacklist,
@@ -17,19 +24,17 @@ from GRID.repositories.symbol_repository import (
     get_ban_list_from_db,
     get_white_list_from_db,
 )
-import redis.asyncio as aioredis
-import concurrent.futures
-from shared.dtos.trading import WinrateDto
-from typing import List, Optional, Any
-from functools import partial
-from shared.utils import retry_async
-from GRID.strategies import strategy
-from GRID.strategies.grid import place_grid_orders, ws_client, monitor_positions, monitor_custom_stop
-from GRID.main import periodic_analysis
-import random
-from GRID.strategies import grid
-from GRID import telegram_message
 from GRID.routes.trading_route import ConnectionManager
+from GRID.strategies import grid, strategy
+from GRID.strategies.grid import (
+    monitor_custom_stop,
+    monitor_positions,
+    place_grid_orders,
+    ws_client,
+)
+from GRID.trading import redis_connection_manager
+from shared.dtos.trading import WinrateDto
+from shared.utils import path_helper, retry_async
 
 manager = ConnectionManager()
 

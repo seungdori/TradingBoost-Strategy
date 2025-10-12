@@ -4,11 +4,11 @@
 """
 # shared에서 공통 모델 import
 from shared.dtos.bot_state import (
-    BotStateError,
     BotStateDto,
+    BotStateError,
     BotStateKeyDto,
     BotStatus,
-    ErrorSeverity
+    ErrorSeverity,
 )
 
 # 하위 호환성을 위한 재export

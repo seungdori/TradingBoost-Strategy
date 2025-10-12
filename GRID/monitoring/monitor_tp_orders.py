@@ -1,14 +1,15 @@
-from GRID.routes.trading_route import ConnectionManager
-from GRID.trading.shared_state import user_keys 
-from GRID import telegram_message
 import asyncio
-from GRID.trading.instance import get_exchange_instance
-import ccxt.pro as ccxtpro
-import ccxt
-from datetime import datetime, timedelta, timezone, date
 import random
-from shared.utils import retry_async
+from datetime import date, datetime, timedelta, timezone
 
+import ccxt
+import ccxt.pro as ccxtpro
+
+from GRID import telegram_message
+from GRID.routes.trading_route import ConnectionManager
+from GRID.trading.instance import get_exchange_instance
+from GRID.trading.shared_state import user_keys
+from shared.utils import retry_async
 
 MAX_RETRIES = 3
 RETRY_DELAY = 2  # 재시도 사이의 대기 시간(초)

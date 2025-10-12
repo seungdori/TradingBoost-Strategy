@@ -1,11 +1,13 @@
 import asyncio
 import json
+import os
+import ssl
+
+import certifi
 import redis.asyncio as redis
 import websockets
-import os
-import certifi
-import ssl
-from HYPERRSI.src.config import OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE
+
+from HYPERRSI.src.config import OKX_API_KEY, OKX_PASSPHRASE, OKX_SECRET_KEY
 
 REDIS_URL = "redis://localhost"
 OKX_WS_URL = "wss://ws.okx.com:8443/ws/v5/private"
@@ -20,9 +22,9 @@ async def authenticate(ws):
     # OKX Websocket 인증
     timestamp = str(int(asyncio.get_event_loop().time()))
     sign_str = timestamp + 'GET' + '/users/self/verify'
-    import hmac
     import base64
     import hashlib
+    import hmac
 
     signature = base64.b64encode(hmac.new(SECRET_KEY.encode(), sign_str.encode(), hashlib.sha256).digest()).decode()
 

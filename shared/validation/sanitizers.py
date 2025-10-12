@@ -9,10 +9,10 @@ Provides comprehensive input validation and sanitization for:
 """
 
 import re
-from typing import Any
 from decimal import Decimal, InvalidOperation
-from shared.errors import ValidationException, InvalidSymbolException
+from typing import Any
 
+from shared.errors import InvalidSymbolException, ValidationException
 
 # ============================================================================
 # Symbol Validation

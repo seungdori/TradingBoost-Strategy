@@ -1,23 +1,17 @@
-from aiogram import types, Router, F
+import logging
+
+from aiogram import F, Router, types
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import any_state
 
-import logging
 from HYPERRSI.src.bot.states.states import RegisterStates
 from shared.constants.message import CANCEL_MESSAGES
+from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger
 
 router = Router()
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 @router.callback_query(F.data.endswith(":cancel"))
 async def handle_global_cancel(callback: types.CallbackQuery, state: FSMContext):

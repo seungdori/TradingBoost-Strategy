@@ -1,17 +1,16 @@
 #src/api/routes/order_backend_client.py
+from typing import Dict, List, Optional
+
 import aiohttp
-from typing import Dict, Optional, List
-from shared.logging import get_logger
-from HYPERRSI.src.config import settings
 from fastapi import HTTPException
+
+from HYPERRSI.src.config import settings
+from shared.database.redis_helper import get_redis_client
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 
 # Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
 
 class OrderBackendClient:
     """ORDER_BACKEND를 통한 주문 처리 클라이언트 (라우트용)"""

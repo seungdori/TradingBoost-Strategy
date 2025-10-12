@@ -11,26 +11,34 @@ import random
 import time
 import traceback
 from datetime import datetime
-from typing import Dict, Any, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 
-from GRID.services.balance_service import get_position_size
-from GRID.services.order_service import okay_to_place_order, fetch_order_with_retry, create_short_orders
 from GRID.database.redis_database import update_take_profit_orders_info
+from GRID.routes.logs_route import add_log_endpoint as add_user_log
+from GRID.services.balance_service import get_position_size
+from GRID.services.order_service import (
+    create_short_orders,
+    fetch_order_with_retry,
+    okay_to_place_order,
+)
 from GRID.strategies import strategy
-from shared.utils.exchange_precision import adjust_price_precision
-from GRID.utils.price import get_corrected_rounded_price, get_order_price_unit_upbit, round_to_upbit_tick_size
+from GRID.trading.grid_modules.grid_monitoring import check_order_status
+from GRID.utils.price import (
+    get_corrected_rounded_price,
+    get_order_price_unit_upbit,
+    round_to_upbit_tick_size,
+)
 from GRID.utils.redis_helpers import (
+    add_placed_price,
     get_order_placed,
-    set_order_placed,
     is_order_placed,
     is_price_placed,
-    add_placed_price,
+    set_order_placed,
 )
-from GRID.routes.logs_route import add_log_endpoint as add_user_log
 from shared.utils import retry_async
-from GRID.trading.grid_modules.grid_monitoring import check_order_status
+from shared.utils.exchange_precision import adjust_price_precision
 
 logger = logging.getLogger(__name__)
 

@@ -1,14 +1,14 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Path
-from fastapi.responses import HTMLResponse
 import asyncio
 import json
 
+from fastapi import FastAPI, Path, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
 from fastapi.security import OAuth2PasswordBearer
+from position_monitor import OKXWebsocketClient
+
+from HYPERRSI.src.api.dependencies import get_user_api_keys
 from HYPERRSI.src.core.database import redis_client
 from shared.logging import get_logger
-from HYPERRSI.src.api.dependencies import get_user_api_keys
-
-from position_monitor import OKXWebsocketClient
 
 logger = get_logger(__name__)
 

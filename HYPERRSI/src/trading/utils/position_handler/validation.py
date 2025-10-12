@@ -5,18 +5,19 @@ This module provides all pre-entry validation checks including margin blocks,
 cooldowns, position locks, and trend conditions.
 """
 
-from typing import Tuple, Optional
+from typing import Optional, Tuple
+
 from HYPERRSI.src.trading.models import Position, get_timeframe
-from HYPERRSI.src.trading.utils.position_handler.core import get_redis_client
 from HYPERRSI.src.trading.utils.position_handler.constants import (
-    MARGIN_BLOCK_KEY,
     COOLDOWN_KEY,
-    POSITION_LOCK_KEY,
     ENTRY_FAIL_COUNT_KEY,
+    MARGIN_BLOCK_KEY,
     MAX_ENTRY_FAILURES,
+    POSITION_LOCK_KEY,
     TREND_STATE_STRONG_DOWNTREND,
     TREND_STATE_STRONG_UPTREND,
 )
+from HYPERRSI.src.trading.utils.position_handler.core import get_redis_client
 from shared.logging import get_logger
 
 logger = get_logger(__name__)

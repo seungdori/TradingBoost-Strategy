@@ -5,9 +5,9 @@
 from datetime import datetime, timedelta
 from typing import Any
 
+from shared.exchange.helpers.wallet_helper import extract_binance_wallet_info
 from shared.exchange_apis import exchange_store
 from shared.helpers.cache_helper import cache_expired
-from shared.exchange.helpers.wallet_helper import extract_binance_wallet_info
 
 CACHE_TIME_SECONDS = 25
 

@@ -6,13 +6,13 @@ Replaces GRID.database.user_database SQLite implementation.
 """
 
 import json
-from typing import Any, Dict, List, Optional
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from GRID.infra.database_pg import get_grid_db
-from GRID.repositories.user_repository_pg import UserRepositoryPG
 from GRID.repositories.job_repository_pg import JobRepositoryPG
 from GRID.repositories.symbol_list_repository_pg import SymbolListRepositoryPG
+from GRID.repositories.user_repository_pg import UserRepositoryPG
 from shared.logging import get_logger
 
 logger = get_logger(__name__)

@@ -1,12 +1,18 @@
 import asyncio
-import logging
 import json
+import logging
+
+from GRID.database.redis_database import (
+    get_job_status,
+    get_user_keys,
+    save_job_id,
+    update_job_status,
+    update_user_info,
+    update_user_running_status,
+)
 from GRID.jobs.celery_app import app
 from GRID.strategies import grid
-from GRID.database.redis_database import (
-    update_job_status, update_user_running_status, save_job_id, get_job_status, 
-    get_user_keys, update_user_info
-)
+
 
 @app.task(bind=True, name='grid_trading.run_grid_trading')
 def run_grid_trading(self, exchange_name, enter_strategy, enter_symbol_count, enter_symbol_amount_list,

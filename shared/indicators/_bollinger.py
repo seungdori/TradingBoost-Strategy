@@ -2,8 +2,9 @@
 Bollinger Bands indicator
 """
 import math
-import numpy as np
 from collections import deque
+
+import numpy as np
 
 
 def calc_stddev(series: list[float], length: int) -> list[float]:

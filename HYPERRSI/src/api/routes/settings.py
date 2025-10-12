@@ -1,21 +1,19 @@
-from fastapi import APIRouter, Body, HTTPException, Depends
-from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional, List
-
-from shared.constants.default_settings import DEFAULT_PARAMS_SETTINGS, SETTINGS_CONSTRAINTS, DEFAULT_DUAL_SIDE_ENTRY_SETTINGS
-from HYPERRSI.src.services.redis_service import RedisService, ApiKeyService
-from HYPERRSI.src.services.timescale_service import TimescaleUserService
 import json
 import logging
 import os
+from typing import Any, Dict, List, Optional
 
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
+from fastapi import APIRouter, Body, Depends, HTTPException
+from pydantic import BaseModel, Field
 
-# redis_client = _get_redis_client()  # Removed - causes import-time error
+from HYPERRSI.src.services.redis_service import ApiKeyService, RedisService
+from HYPERRSI.src.services.timescale_service import TimescaleUserService
+from shared.constants.default_settings import (
+    DEFAULT_DUAL_SIDE_ENTRY_SETTINGS,
+    DEFAULT_PARAMS_SETTINGS,
+    SETTINGS_CONSTRAINTS,
+)
+from shared.database.redis_helper import get_redis_client
 
 router = APIRouter(prefix="/settings", tags=["User Settings"])
 redis_service = RedisService()
@@ -91,21 +89,137 @@ def validate_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     return validated_settings
 
 
-@router.get("/{user_id}",
+@router.get(
+    "/{user_id}",
     response_model=SettingsResponse,
-    summary="사용자 설정 조회",
-    description="등록된 사용자의 설정을 조회합니다.",
+    summary="사용자 트레이딩 설정 조회",
+    description="""
+# 사용자 트레이딩 설정 조회
+
+사용자의 트레이딩 전략 설정을 조회합니다. 설정이 없는 경우 자동으로 기본 설정을 생성하고 반환합니다.
+
+## 경로 파라미터
+
+- **user_id** (string, required): 사용자 식별자
+  - OKX UID (18자리) 또는 텔레그램 ID
+  - 예시: "518796558012178692", "1709556958"
+
+## 동작 방식
+
+1. **사용자 확인**: Redis에서 API 키 존재 여부 확인
+2. **자동 생성**: API 키가 없으면 TimescaleDB에서 조회하여 자동 생성
+3. **설정 조회**: Redis에서 사용자 설정 조회
+4. **기본값 반환**: 설정이 없으면 기본 설정 생성 및 저장
+5. **응답 반환**: 사용자 ID와 설정 정보 반환
+
+## 반환 데이터 구조
+
+- **user_id** (string): 사용자 식별자
+- **settings** (object): 트레이딩 설정
+  - **leverage** (integer): 레버리지 배율 (1-125)
+  - **direction** (string): 거래 방향 ("롱", "숏", "롱숏")
+  - **entry_multiplier** (float): 진입 배율 (0.1-10.0)
+  - **use_cooldown** (boolean): 쿨다운 사용 여부
+  - **tp1_value** (float): 1차 익절 목표 (%)
+  - **tp2_value** (float): 2차 익절 목표 (%)
+  - **tp3_value** (float): 3차 익절 목표 (%)
+  - **sl_value** (float): 손절 목표 (%)
+  - **use_dual_side_entry** (boolean): 양방향 진입 사용 여부
+
+## 사용 시나리오
+
+- ⚙️ **설정 로드**: 앱 시작 시 사용자 설정 불러오기
+- 🔧 **초기화**: 신규 사용자의 기본 설정 자동 생성
+- 📊 **설정 확인**: 현재 전략 파라미터 확인
+- 🔄 **동기화**: 다중 디바이스 간 설정 동기화
+
+## 예시 URL
+
+```
+GET /settings/518796558012178692
+GET /settings/1709556958
+```
+""",
     responses={
         200: {
-            "description": "사용자 설정 조회 성공",
-            "model": SettingsResponse
+            "description": "✅ 사용자 설정 조회 성공",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "existing_user": {
+                            "summary": "기존 사용자 설정",
+                            "value": {
+                                "user_id": "518796558012178692",
+                                "settings": {
+                                    "leverage": 10,
+                                    "direction": "롱숏",
+                                    "entry_multiplier": 1.0,
+                                    "use_cooldown": True,
+                                    "tp1_value": 2.0,
+                                    "tp2_value": 3.0,
+                                    "tp3_value": 4.0,
+                                    "sl_value": 1.5,
+                                    "use_dual_side_entry": False
+                                }
+                            }
+                        },
+                        "new_user_default": {
+                            "summary": "신규 사용자 (기본 설정)",
+                            "value": {
+                                "user_id": "1709556958",
+                                "settings": {
+                                    "leverage": 10,
+                                    "direction": "롱숏",
+                                    "entry_multiplier": 1.0,
+                                    "use_cooldown": True,
+                                    "tp1_value": 1.0,
+                                    "tp2_value": 2.0,
+                                    "tp3_value": 3.0,
+                                    "sl_value": 1.0,
+                                    "use_dual_side_entry": False
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         },
-        404: {"description": "사용자를 찾을 수 없음"}
-    })
+        400: {
+            "description": "❌ 잘못된 요청",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "general_error": {
+                            "summary": "설정 조회 오류",
+                            "value": {
+                                "detail": "사용자 설정 조회 중 오류 발생: Database connection failed"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "🔍 사용자를 찾을 수 없음",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "user_not_found": {
+                            "summary": "사용자 없음",
+                            "value": {
+                                "detail": "User not found"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def get_settings(user_id: str):
     try:
         # 사용자 존재 여부 확인
-        api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
         
         if not api_keys:
             # 사용자가 없는 경우, TimescaleDB에서 정보 가져오기
@@ -121,7 +235,7 @@ async def get_settings(user_id: str):
                 )
                 
                 # 생성 후 API 키 다시 조회
-                api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
             else:
                 # TimescaleDB에도 사용자 정보가 없는 경우 기본값으로 생성
                 default_api_key = "default_api_key"
@@ -137,7 +251,7 @@ async def get_settings(user_id: str):
                 )
                 
                 # 생성 후 API 키 다시 조회
-                api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
             
         # 설정 정보 조회
         settings = await redis_service.get_user_settings(str(user_id))
@@ -160,18 +274,99 @@ async def get_settings(user_id: str):
         )
 
 
-@router.put("/{user_id}",
+@router.put(
+    "/{user_id}",
     response_model=SettingsResponse,
-    summary="사용자 설정 업데이트",
-    description="사용자 설정을 업데이트합니다.",
+    summary="사용자 트레이딩 설정 업데이트",
+    description="""
+# 사용자 트레이딩 설정 업데이트
+
+사용자의 트레이딩 전략 설정을 업데이트합니다. 부분 업데이트를 지원하며, 제공된 필드만 변경됩니다.
+
+## 경로 파라미터
+
+- **user_id** (string, required): 사용자 식별자
+
+## 요청 본문
+
+- **settings** (object, required): 업데이트할 설정
+  - **leverage** (integer, optional): 레버리지 배율 (1-125)
+  - **direction** (string, optional): 거래 방향 ("롱", "숏", "롱숏")
+  - **entry_multiplier** (float, optional): 진입 배율 (0.1-10.0)
+  - **tp1_value** (float, optional): 1차 익절 목표 (%)
+  - **use_cooldown** (boolean, optional): 쿨다운 사용 여부
+
+## 동작 방식
+
+1. **사용자 확인**: API 키 존재 여부 확인
+2. **기존 설정 로드**: 현재 설정 불러오기 또는 기본값 사용
+3. **설정 병합**: 기존 설정 + 새 설정 병합
+4. **유효성 검증**: 설정 제약 조건 확인
+5. **저장**: Redis에 업데이트된 설정 저장
+6. **응답 반환**: 업데이트된 전체 설정 반환
+
+## 제약 조건
+
+- **leverage**: 1-125
+- **entry_multiplier**: 0.1-10.0
+- **tp1_value, tp2_value, tp3_value**: 0.1-100.0
+- **sl_value**: 0.1-100.0
+
+## 사용 시나리오
+
+- ⚙️ **전략 조정**: 레버리지, 익절/손절 값 변경
+- 🎯 **위험 관리**: 손절 비율 업데이트
+- 📊 **성과 최적화**: 진입 배율 조정
+
+## 예시 URL
+
+```
+PUT /settings/518796558012178692
+```
+""",
     responses={
         200: {
-            "description": "사용자 설정 업데이트 성공",
-            "model": SettingsResponse
+            "description": "✅ 설정 업데이트 성공",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "leverage_update": {
+                            "summary": "레버리지 변경",
+                            "value": {
+                                "user_id": "518796558012178692",
+                                "settings": {
+                                    "leverage": 20,
+                                    "direction": "롱숏",
+                                    "entry_multiplier": 1.0,
+                                    "use_cooldown": True,
+                                    "tp1_value": 2.0
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         },
-        400: {"description": "유효하지 않은 설정값"},
-        404: {"description": "사용자를 찾을 수 없음"}
-    })
+        400: {
+            "description": "❌ 유효하지 않은 설정값",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "invalid_range": {
+                            "summary": "값 범위 오류",
+                            "value": {
+                                "detail": "leverage 값은 1에서 125 사이여야 합니다."
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "🔍 사용자를 찾을 수 없음"
+        }
+    }
+)
 async def update_settings(
     user_id: str,
     request: SettingsUpdateRequest = Body(
@@ -181,7 +376,7 @@ async def update_settings(
 ):
     try:
         # 사용자 존재 여부 확인
-        api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
         if not api_keys:
             # 사용자가 없는 경우, TimescaleDB에서 정보 가져오기
             timescale_api_keys = await get_api_keys_from_timescale(user_id)
@@ -196,7 +391,7 @@ async def update_settings(
                 )
                 
                 # 생성 후 API 키 다시 조회
-                api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
             else:
                 # TimescaleDB에도 사용자 정보가 없는 경우 기본값으로 생성
                 default_api_key = "default_api_key"
@@ -212,7 +407,7 @@ async def update_settings(
                 )
                 
                 # 생성 후 API 키 다시 조회
-                api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
         
         # 기존 설정 가져오기
         current_settings = await redis_service.get_user_settings(str(user_id))
@@ -242,21 +437,89 @@ async def update_settings(
         )
 
 
-@router.post("/{user_id}/reset",
+@router.post(
+    "/{user_id}/reset",
     response_model=SettingsResponse,
-    summary="사용자 설정 초기화",
-    description="사용자 설정을 기본값으로 초기화합니다.",
+    summary="사용자 트레이딩 설정 초기화",
+    description="""
+# 사용자 트레이딩 설정 초기화
+
+사용자의 트레이딩 전략 설정을 기본값으로 초기화합니다.
+
+## 경로 파라미터
+
+- **user_id** (string, required): 사용자 식별자
+
+## 동작 방식
+
+1. **사용자 확인**: API 키 존재 여부 확인
+2. **기본 설정 로드**: 시스템 기본 설정 가져오기
+3. **저장**: Redis에 기본 설정 저장
+4. **응답 반환**: 초기화된 설정 반환
+
+## 기본 설정 값
+
+- **leverage**: 10
+- **direction**: "롱숏"
+- **entry_multiplier**: 1.0
+- **use_cooldown**: True
+- **tp1_value**: 1.0
+- **tp2_value**: 2.0
+- **tp3_value**: 3.0
+- **sl_value**: 1.0
+- **use_dual_side_entry**: False
+
+## 사용 시나리오
+
+- 🔄 **설정 복구**: 잘못된 설정 변경 후 원상복구
+- 🆕 **새 시작**: 전략 재설정을 위한 초기화
+- 🛡️ **안전 모드**: 보수적인 기본 설정으로 전환
+
+## 예시 URL
+
+```
+POST /settings/518796558012178692/reset
+```
+""",
     responses={
         200: {
-            "description": "사용자 설정 초기화 성공",
-            "model": SettingsResponse
+            "description": "✅ 설정 초기화 성공",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "reset_success": {
+                            "summary": "설정 초기화 완료",
+                            "value": {
+                                "user_id": "518796558012178692",
+                                "settings": {
+                                    "leverage": 10,
+                                    "direction": "롱숏",
+                                    "entry_multiplier": 1.0,
+                                    "use_cooldown": True,
+                                    "tp1_value": 1.0,
+                                    "tp2_value": 2.0,
+                                    "tp3_value": 3.0,
+                                    "sl_value": 1.0,
+                                    "use_dual_side_entry": False
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         },
-        404: {"description": "사용자를 찾을 수 없음"}
-    })
+        400: {
+            "description": "❌ 초기화 오류"
+        },
+        404: {
+            "description": "🔍 사용자를 찾을 수 없음"
+        }
+    }
+)
 async def reset_settings(user_id: str):
     try:
         # 사용자 존재 여부 확인
-        api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
         if not api_keys:
             # 사용자가 없는 경우, TimescaleDB에서 정보 가져오기
             timescale_api_keys = await get_api_keys_from_timescale(user_id)
@@ -271,7 +534,7 @@ async def reset_settings(user_id: str):
                 )
                 
                 # 생성 후 API 키 다시 조회
-                api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
             else:
                 # TimescaleDB에도 사용자 정보가 없는 경우 기본값으로 생성
                 default_api_key = "default_api_key"
@@ -287,7 +550,7 @@ async def reset_settings(user_id: str):
                 )
                 
                 # 생성 후 API 키 다시 조회
-                api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
         
         # 기본 설정으로 초기화
         default_settings = DEFAULT_PARAMS_SETTINGS.copy()
@@ -347,12 +610,12 @@ async def get_dual_side_settings(user_id: str) -> Dict[str, Any]:
     """양방향 매매 설정을 조회합니다."""
     # Redis에서 dual_side 해시 조회
     settings_key = f"user:{user_id}:dual_side"
-    settings = await _get_redis_client().hgetall(settings_key)
+    settings = await get_redis_client().hgetall(settings_key)
     
     if not settings:
         # 기본 설정
         settings = {k: str(v) if isinstance(v, bool) else str(v) for k, v in DEFAULT_DUAL_SIDE_ENTRY_SETTINGS.items()}
-        await _get_redis_client().hset(settings_key, mapping=settings)
+        await get_redis_client().hset(settings_key, mapping=settings)
     
     # 문자열 값을 적절한 타입으로 변환
     parsed_settings = {}
@@ -379,7 +642,7 @@ async def save_dual_side_settings(user_id: str, settings: Dict[str, Any]) -> Non
     settings_key = f"user:{user_id}:dual_side"
     # bool 값을 문자열로 변환
     settings_to_save = {k: str(v).lower() if isinstance(v, bool) else str(v) for k, v in settings.items()}
-    await _get_redis_client().hset(settings_key, mapping=settings_to_save)
+    await get_redis_client().hset(settings_key, mapping=settings_to_save)
 
 
 @router.get("/{user_id}/dual_side",
@@ -396,7 +659,7 @@ async def save_dual_side_settings(user_id: str, settings: Dict[str, Any]) -> Non
 async def get_dual_settings(user_id: str):
     try:
         # 사용자 존재 여부 확인
-        api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
         if not api_keys:
             # 사용자가 없는 경우, TimescaleDB에서 정보 가져오기
             timescale_api_keys = await get_api_keys_from_timescale(user_id)
@@ -411,7 +674,7 @@ async def get_dual_settings(user_id: str):
                 )
                 
                 # 생성 후 API 키 다시 조회
-                api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
             else:
                 # TimescaleDB에도 사용자 정보가 없는 경우 기본값으로 생성
                 default_api_key = "default_api_key"
@@ -427,7 +690,7 @@ async def get_dual_settings(user_id: str):
                 )
                 
                 # 생성 후 API 키 다시 조회
-                api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
             
         # 양방향 매매 설정 조회
         settings = await get_dual_side_settings(str(user_id))
@@ -466,7 +729,7 @@ async def update_dual_settings(
 ):
     try:
         # 사용자 존재 여부 확인
-        api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
         if not api_keys:
             # 사용자가 없는 경우, TimescaleDB에서 정보 가져오기
             timescale_api_keys = await get_api_keys_from_timescale(user_id)
@@ -481,7 +744,7 @@ async def update_dual_settings(
                 )
                 
                 # 생성 후 API 키 다시 조회
-                api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
             else:
                 # TimescaleDB에도 사용자 정보가 없는 경우 기본값으로 생성
                 default_api_key = "default_api_key"
@@ -497,7 +760,7 @@ async def update_dual_settings(
                 )
                 
                 # 생성 후 API 키 다시 조회
-                api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
         
         # 기존 설정 가져오기
         current_settings = await get_dual_side_settings(str(user_id))
@@ -543,7 +806,7 @@ async def update_dual_settings(
 async def reset_dual_settings(user_id: str):
     try:
         # 사용자 존재 여부 확인
-        api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
         if not api_keys:
             # 사용자가 없는 경우, TimescaleDB에서 정보 가져오기
             timescale_api_keys = await get_api_keys_from_timescale(user_id)
@@ -558,7 +821,7 @@ async def reset_dual_settings(user_id: str):
                 )
                 
                 # 생성 후 API 키 다시 조회
-                api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
             else:
                 # TimescaleDB에도 사용자 정보가 없는 경우 기본값으로 생성
                 default_api_key = "default_api_key"
@@ -574,7 +837,7 @@ async def reset_dual_settings(user_id: str):
                 )
                 
                 # 생성 후 API 키 다시 조회
-                api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
         
         # 기본 설정으로 초기화
         default_settings = {k: v for k, v in DEFAULT_DUAL_SIDE_ENTRY_SETTINGS.items()}
@@ -861,7 +1124,7 @@ async def debug_api_keys(user_id: str):
     try:
         logger.info(f"===== API 키 디버깅 시작: user_id={user_id} =====")
 
-        redis_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+        redis_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
 
         def mask_key(key: Optional[str]) -> Optional[str]:
             if not key:
@@ -953,7 +1216,7 @@ async def api_key_logging_guide():
 
 async def initialize_exchange(self, user_id: str, symbol: str):
     # ... 기존 코드 ...
-    api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+    api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
     
     # API 키 로깅 (마스킹 처리)
     api_key = api_keys.get('api_key', '')
@@ -1025,7 +1288,7 @@ async def fetch_with_retry(self, exchange, symbol, max_retries=3):
 async def check_api_keys(self, user_id: str):
     # Redis에서 API 키 조회
     try:
-        api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
         
         if not api_keys:
             logger.error(f"사용자 {user_id}의 API 키가 존재하지 않습니다.")

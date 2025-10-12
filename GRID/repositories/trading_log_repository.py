@@ -6,9 +6,8 @@ Manages trading message queue operations with structured logging.
 
 from typing import List
 
-from shared.logging import get_logger
-
 from GRID.strategies import strategy
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

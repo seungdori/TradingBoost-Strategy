@@ -2,11 +2,12 @@
 
 거래소 API에서 공통으로 사용되는 주문, 포지션 관련 모델들
 """
+from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Optional, List, Dict
+from typing import Dict, List, Optional
+
 from pydantic import BaseModel, Field
-from datetime import datetime
 
 
 class OrderType(str, Enum):

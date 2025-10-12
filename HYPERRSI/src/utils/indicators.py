@@ -1,14 +1,11 @@
 import numpy as np
 from core.logger import get_logger
 
+from shared.database.redis_helper import get_redis_client
 
 logger = get_logger(__name__)
 
 # Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
 
 def calc_rsi(prices: np.ndarray, period: int = 14) -> np.ndarray:
     """

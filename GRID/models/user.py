@@ -7,17 +7,19 @@ and related entities.
 
 from datetime import datetime
 from typing import Optional
+
 from sqlalchemy import (
-    Integer,
-    String,
-    Float,
     Boolean,
     DateTime,
-    Text,
+    Float,
     ForeignKey,
+    Integer,
+    String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from GRID.models.base import Base
 
 

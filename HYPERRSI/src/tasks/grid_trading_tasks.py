@@ -2,23 +2,16 @@
 Grid 트레이딩 전략을 Celery 태스크로 구현한 모듈
 이전 RQ 기반 워커 관리자에서 Celery로 마이그레이션됨
 """
+import asyncio
+import json
 import logging
 import os
+from datetime import datetime
 from urllib.parse import quote_plus
+
 from HYPERRSI.src.core.celery_task import celery_app
 from HYPERRSI.src.core.config import settings
-
-import json
-from datetime import datetime
-import asyncio
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
+from shared.database.redis_helper import get_redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -45,24 +38,24 @@ def get_redis_url():
 async def set_grid_trading_status(user_id: str, status: str):
     """사용자의 Grid 트레이딩 상태 설정"""
     key = REDIS_KEY_GRID_STATUS.format(user_id=user_id)
-    await _get_redis_client().set(key, status)
+    await get_redis_client().set(key, status)
     logger.info(f"[{user_id}] Grid 트레이딩 상태를 '{status}'로 설정")
 
 async def get_grid_trading_status(user_id: str) -> str:
     """사용자의 Grid 트레이딩 상태 가져오기"""
     key = REDIS_KEY_GRID_STATUS.format(user_id=user_id)
-    status = await _get_redis_client().get(key)
+    status = await get_redis_client().get(key)
     return status or "stopped"
 
 async def update_grid_trading_info(user_id: str, info: dict):
     """Grid 트레이딩 정보 업데이트"""
     key = REDIS_KEY_GRID_INFO.format(user_id=user_id)
-    await _get_redis_client().set(key, json.dumps(info))
+    await get_redis_client().set(key, json.dumps(info))
 
 async def get_grid_trading_info(user_id: str) -> dict:
     """Grid 트레이딩 정보 가져오기"""
     key = REDIS_KEY_GRID_INFO.format(user_id=user_id)
-    info_str = await _get_redis_client().get(key)
+    info_str = await get_redis_client().get(key)
     if not info_str:
         return {}
     try:
@@ -91,7 +84,7 @@ def run_grid_trading(self, exchange_name, enter_strategy, enter_symbol_count,
         
         # Redis에 작업 ID 저장
         loop.run_until_complete(
-            _get_redis_client().set(
+            get_redis_client().set(
                 REDIS_KEY_GRID_JOB_ID.format(user_id=user_id),
                 self.request.id
             )
@@ -199,7 +192,7 @@ def cancel_grid_trading_job(user_id: str):
         
         # 작업 ID 확인
         job_id = loop.run_until_complete(
-            _get_redis_client().get(REDIS_KEY_GRID_JOB_ID.format(user_id=user_id))
+            get_redis_client().get(REDIS_KEY_GRID_JOB_ID.format(user_id=user_id))
         )
         
         if job_id:

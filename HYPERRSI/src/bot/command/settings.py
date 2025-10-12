@@ -1,45 +1,41 @@
 # src/bot/commands/settings.py
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+import json
+import traceback  # 상단에 추가
+from typing import Any, Dict, Optional
 
-from aiogram import types, Router, F
+from aiogram import F, Router, types
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import ErrorEvent
-from shared.logging import get_logger
+from aiogram.types import (
+    CallbackQuery,
+    ErrorEvent,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
+
+from HYPERRSI.src.bot.keyboards.settings_keyboard import get_settings_keyboard
+from HYPERRSI.src.bot.states.states import SettingStates
+from HYPERRSI.src.bot.utils import validator
+from HYPERRSI.src.services.redis_service import RedisService
 from shared.constants.default_settings import (
     DEFAULT_PARAMS_SETTINGS,
-    SETTINGS_CONSTRAINTS,
-    ENTRY_OPTIONS,
-    TP_SL_OPTIONS,
     DIRECTION_OPTIONS,
-    PYRAMIDING_TYPES,
-    ENTRY_CRITERION_OPTIONS,
-    TRAILING_STOP_TYPES,
     ENTRY_AMOUNT_OPTIONS,
-    ENTRY_AMOUNT_UNITS
+    ENTRY_AMOUNT_UNITS,
+    ENTRY_CRITERION_OPTIONS,
+    ENTRY_OPTIONS,
+    PYRAMIDING_TYPES,
+    SETTINGS_CONSTRAINTS,
+    TP_SL_OPTIONS,
+    TRAILING_STOP_TYPES,
 )
-import json
-from HYPERRSI.src.bot.states.states import SettingStates
-from HYPERRSI.src.services.redis_service import RedisService
-from HYPERRSI.src.bot.keyboards.settings_keyboard import get_settings_keyboard
-from HYPERRSI.src.bot.utils import validator
-import traceback  # 상단에 추가
-from aiogram.exceptions import TelegramBadRequest
-from typing import Optional, Dict, Any
-
-
+from shared.database.redis_helper import get_redis_client
+from shared.logging import get_logger
 
 router = Router()
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
-redis_service = RedisService()
 
 allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267"]
 
@@ -61,7 +57,7 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> Optional[str]:
     """
     try:
         # 텔레그램 ID로 OKX UID 조회
-        okx_uid = await _get_redis_client().get(f"user:{telegram_id}:okx_uid")
+        okx_uid = await get_redis_client().get(f"user:{telegram_id}:okx_uid")
         if okx_uid:
             return okx_uid.decode() if isinstance(okx_uid, bytes) else okx_uid
         return None
@@ -101,7 +97,7 @@ async def settings_command(message: types.Message) -> None:
     # 텔레그램 ID인지 OKX UID인지 확인
     user_id = await get_identifier(user_id)
 
-    okx_uid = await _get_redis_client().get(f"user:{user_id}:okx_uid")
+    okx_uid = await get_redis_client().get(f"user:{user_id}:okx_uid")
     if not is_allowed_user(okx_uid):
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
@@ -480,7 +476,7 @@ async def handle_sl_last_toggle(callback: types.CallbackQuery) -> None:
         settings_key = f"user:{user_id}:settings"
         
         # settings에서 현재 상태 가져오기
-        settings = await _get_redis_client().get(settings_key)
+        settings = await get_redis_client().get(settings_key)
         settings_dict = json.loads(settings) if settings else {}
         
         # 현재 상태 반전
@@ -488,7 +484,7 @@ async def handle_sl_last_toggle(callback: types.CallbackQuery) -> None:
         settings_dict['use_sl_on_last'] = not is_enabled
         
         # 새로운 설정 저장
-        await _get_redis_client().set(settings_key, json.dumps(settings_dict))
+        await get_redis_client().set(settings_key, json.dumps(settings_dict))
         
         status_msg = "미사용" if is_enabled else "사용"
         await callback.answer()

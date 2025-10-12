@@ -6,6 +6,7 @@ import asyncio
 import json
 import random
 import traceback
+
 from redis.asyncio import Redis
 
 from shared.exchange.helpers.balance_helper import process_upbit_balance

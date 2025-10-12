@@ -5,31 +5,28 @@
 # Re-export shared indicator functions for backward compatibility
 #===============================================================================
 
+# All indicator calculation functions
 # Core utility functions
 from shared.indicators import (
-    crossover,
-    crossunder,
-    rising,
-    falling,
-    dynamic_round
-)
-
-# All indicator calculation functions
-from shared.indicators import (
-    calc_sma,
+    calc_atr,
+    calc_bollinger_bands,
     calc_ema,
+    calc_jma,
     calc_rma,
+    calc_rsi,
+    calc_sma,
+    calc_stddev,
     calc_t3,
     calc_vidya,
-    calc_jma,
-    calc_atr,
-    calc_rsi,
-    calc_stddev,
-    calc_bollinger_bands,
-    get_ma,
+    compute_all_indicators,
     compute_trend_state,
+    crossover,
+    crossunder,
+    dynamic_round,
+    falling,
+    get_ma,
     rational_quadratic,
-    compute_all_indicators
+    rising,
 )
 
 # Explicitly declare what's exported for linters

@@ -7,9 +7,8 @@ Uses modern Python typing features:
 - Generic type improvements
 """
 
-from typing import TypedDict, Unpack, Optional, Literal, Protocol
 from datetime import datetime
-
+from typing import Literal, Optional, Protocol, TypedDict, Unpack
 
 # ============================================
 # Trading Types with TypedDict (PEP 692)

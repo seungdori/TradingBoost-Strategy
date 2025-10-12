@@ -5,9 +5,10 @@
 """
 
 import asyncio
-import sys
 import json
+import sys
 from pathlib import Path
+
 import aiosqlite
 
 # Add project root to path
@@ -16,7 +17,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from GRID.infra.database_pg import get_grid_db, init_grid_db
-from GRID.models.user import User, TelegramID, Job, Blacklist, Whitelist
+from GRID.models.user import Blacklist, Job, TelegramID, User, Whitelist
 from shared.logging import get_logger
 
 logger = get_logger(__name__)

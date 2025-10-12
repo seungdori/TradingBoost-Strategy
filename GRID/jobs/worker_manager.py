@@ -1,11 +1,13 @@
-import multiprocessing
-from rq import Queue, Worker
-from redis import Redis
-import time
 import logging
-import signal
+import multiprocessing
 import os
+import signal
+import time
 from urllib.parse import quote_plus
+
+from redis import Redis
+from rq import Queue, Worker
+
 from shared.config import settings
 
 REDIS_PASSWORD = settings.REDIS_PASSWORD

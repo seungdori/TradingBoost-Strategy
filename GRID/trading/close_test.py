@@ -1,7 +1,10 @@
-import ccxt
 import logging
 import time
-from shared.config import OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE  # 환경 변수에서 키 가져오기
+
+import ccxt
+
+from shared.config import OKX_API_KEY, OKX_PASSPHRASE, OKX_SECRET_KEY  # 환경 변수에서 키 가져오기
+
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 

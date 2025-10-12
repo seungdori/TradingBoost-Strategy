@@ -1,27 +1,26 @@
-import traceback
-import time
-import json
-import hmac
-import hashlib
-import base64
-import requests
 import asyncio
+import base64
+import hashlib
+import hmac
+import json
+import time
+import traceback
 from datetime import datetime, timezone
+
+import requests
+
 from HYPERRSI.src.api.dependencies import get_user_api_keys
+from shared.database.redis_helper import get_redis_client
 
 # Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
 
 # Don't initialize at module level - use lazy loading
-# redis_client = _get_redis_client()  # Removed - causes import-time error
+# redis_client = get_redis_client()  # Removed - causes import-time error
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 
 class TriggerCancelClient:
@@ -244,7 +243,7 @@ class TriggerCancelClient:
             
             for order in algo_orders:
                 monitor_key = f"monitor:user:{user_id}:{inst_id}:{order['algoId']}"
-                await _get_redis_client().delete(monitor_key)
+                await get_redis_client().delete(monitor_key)
 
 
             # Send cancellation request

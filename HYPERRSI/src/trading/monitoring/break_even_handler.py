@@ -8,30 +8,28 @@ import asyncio
 import json
 import traceback
 from datetime import datetime
+
+from HYPERRSI.src.api.routes.order import (
+    ClosePositionRequest,
+    close_position,
+    update_stop_loss_order,
+)
+from HYPERRSI.src.core.error_handler import log_error
+from HYPERRSI.src.trading.dual_side_entry import get_user_dual_side_settings
+from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger, log_order
 
-from HYPERRSI.src.api.routes.order import update_stop_loss_order, close_position, ClosePositionRequest
-from HYPERRSI.src.trading.dual_side_entry import get_user_dual_side_settings
-from HYPERRSI.src.core.error_handler import log_error
 from .telegram_service import get_identifier, send_telegram_message
-from .utils import is_true_value, get_user_settings
 from .trailing_stop_handler import activate_trailing_stop
+from .utils import get_user_settings, is_true_value
 
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 
 
@@ -76,7 +74,7 @@ async def move_sl_to_break_even(user_id: str, symbol: str, side: str, break_even
             from datetime import datetime
             now = datetime.now()
             breakeven_move_key = f"breakeven_move:notification:user:{okx_uid}:{symbol}:{side}:tp{tp_index}"
-            last_notification_time = await _get_redis_client().get(breakeven_move_key)
+            last_notification_time = await get_redis_client().get(breakeven_move_key)
             
             should_send_message = True
             if last_notification_time:
@@ -98,22 +96,22 @@ async def move_sl_to_break_even(user_id: str, symbol: str, side: str, break_even
 
                             if int(dual_side_sl_value) > tp_index:
                                 dual_side_key = f"user:{okx_uid}:{symbol}:dual_side_position"
-                                await _get_redis_client().hset(dual_side_key, "stop_loss", break_even_price)
+                                await get_redis_client().hset(dual_side_key, "stop_loss", break_even_price)
                                 telegram_message += f"🔒 양방향 포지션 SL 업데이트: {break_even_price:.2f}$\n"
                                 
                 except Exception as e:
                     await send_telegram_message(f"[{okx_uid}]양방향 포지션 SL 업데이트 오류: {str(e)}", okx_uid, debug=True)
                     
                 # 현재 시간 저장 (중복 알림 방지용)
-                await _get_redis_client().set(breakeven_move_key, str(int(now.timestamp())))
-                await _get_redis_client().expire(breakeven_move_key, 600)  # 10분 TTL 설정
+                await get_redis_client().set(breakeven_move_key, str(int(now.timestamp())))
+                await get_redis_client().expire(breakeven_move_key, 600)  # 10분 TTL 설정
                 
                 asyncio.create_task(send_telegram_message(
                     telegram_message,
                     okx_uid
                 ))
         position_key = f"user:{okx_uid}:position:{symbol}:{side}"
-        await _get_redis_client().hset(position_key, "sl_price", break_even_price)
+        await get_redis_client().hset(position_key, "sl_price", break_even_price)
         
         # 브레이크이븐 이동 로깅
         try:
@@ -132,7 +130,7 @@ async def move_sl_to_break_even(user_id: str, symbol: str, side: str, break_even
             
         # dual_side_position이 있는지 확인
         dual_side_key = f"user:{okx_uid}:{symbol}:dual_side_position"
-        dual_side_position_exists = await _get_redis_client().exists(dual_side_key)
+        dual_side_position_exists = await get_redis_client().exists(dual_side_key)
         
         if dual_side_position_exists:
             # dual_side_entry_tp_trigger_type 설정 확인
@@ -190,7 +188,7 @@ async def move_sl_to_break_even(user_id: str, symbol: str, side: str, break_even
                             await send_telegram_message(f"✅양방향 포지션 종료\n" +f"━━━━━━━━━━━━━━━━\n" +f"메인 포지션의 TP{tp_index} 체결로 양방향 포지션 종료\n" +f"• 방향: {opposite_side}\n" +f"━━━━━━━━━━━━━━━━\n",okx_uid)
                         
                         # dual_side_position 키 삭제
-                        await _get_redis_client().delete(dual_side_key)
+                        await get_redis_client().delete(dual_side_key)
                         
                     except Exception as e:
                         logger.error(f"dual_side_position 종료 실패: {str(e)}")
@@ -265,7 +263,7 @@ async def process_break_even_settings(user_id: str, symbol: str, order_type: str
                 dual_side_position_side = 'long'
                 
         position_key = f"user:{okx_uid}:position:{symbol}:{position_side}"
-        full_position_data = await _get_redis_client().hgetall(position_key)
+        full_position_data = await get_redis_client().hgetall(position_key)
         
         # 주문 가격 정보
         # Redis에서 진입가를 가져오되, 이미 position_data에서 진입가를 가져왔다면 그 값을 우선 사용
@@ -293,7 +291,7 @@ async def process_break_even_settings(user_id: str, symbol: str, order_type: str
                 logger.error(f"양방향 포지션 키 오류: {str(e)}")
                 dual_side_key =f"user:{user_id}:{symbol}:dual_side_position"
             
-            dual_side_position_exists = await _get_redis_client().exists(dual_side_key)
+            dual_side_position_exists = await get_redis_client().exists(dual_side_key)
 
             if dual_side_position_exists:
                 if dual_side_tp_type == 'existing_position':

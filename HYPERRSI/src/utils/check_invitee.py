@@ -1,17 +1,12 @@
-import aiohttp
-import hmac
-import hashlib
 import base64
+import hashlib
+import hmac
 from datetime import datetime
+
+import aiohttp
+
 from shared.config import get_settings
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
+from shared.database.redis_helper import get_redis_client
 
 # 관리자 API 키는 환경변수에서 로드
 settings = get_settings()
@@ -221,9 +216,9 @@ async def store_okx_uid(telegram_id, okx_uid):
         okx_uid: 사용자의 OKX UID
     """
     # telegram_id를 키로 사용하여 okx_uid 저장
-    await _get_redis_client().set(f"user:{telegram_id}:okx_uid", okx_uid)
+    await get_redis_client().set(f"user:{telegram_id}:okx_uid", okx_uid)
     # 역방향 매핑도 저장 (선택 사항)
-    await _get_redis_client().set(f"okx_uid_to_telegram:{okx_uid}", telegram_id)
+    await get_redis_client().set(f"okx_uid_to_telegram:{okx_uid}", telegram_id)
     
 async def get_okx_uid_from_telegram(telegram_id):
     """
@@ -236,7 +231,7 @@ async def get_okx_uid_from_telegram(telegram_id):
     Returns:
         str or None: 저장된 OKX UID 또는 None
     """
-    okx_uid = await _get_redis_client().get(f"user:{telegram_id}:okx_uid")
+    okx_uid = await get_redis_client().get(f"user:{telegram_id}:okx_uid")
     if okx_uid:
         if isinstance(okx_uid, bytes):
             return okx_uid.decode()
@@ -254,7 +249,7 @@ async def get_telegram_id_from_okx_uid(okx_uid):
     Returns:
         str or None: 저장된 텔레그램 ID 또는 None
     """
-    telegram_id = await _get_redis_client().get(f"okx_uid_to_telegram:{okx_uid}")
+    telegram_id = await get_redis_client().get(f"okx_uid_to_telegram:{okx_uid}")
     if telegram_id:
         if isinstance(telegram_id, bytes):
             return telegram_id.decode()

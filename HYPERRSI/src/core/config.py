@@ -6,7 +6,8 @@
 # This file exists for backward compatibility only.
 
 import warnings
-from shared.config import settings, get_settings
+
+from shared.config import get_settings, settings
 
 # Issue deprecation warning on import
 warnings.warn(

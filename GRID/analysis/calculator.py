@@ -2,24 +2,26 @@
 OHLCV calculation and analysis
 """
 import logging
-import pandas as pd
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from typing import Tuple, Optional, Dict, Any
+from typing import Any, Dict, Optional, Tuple
+
+import pandas as pd
+
+from GRID.analysis.grid_logic import calculate_grid_levels, execute_trading_logic
+from GRID.data import save_grid_results_to_redis
 
 # Import from GRID modules
 from GRID.indicators import (
     IndicatorState,
-    get_indicator_state,
-    save_indicator_state,
-    calculate_adx_incremental,
     atr_incremental,
+    calculate_adx_incremental,
     compute_mama_fama_incremental,
+    get_indicator_state,
     map_4h_adx_to_15m,
-    update_adx_state
+    save_indicator_state,
+    update_adx_state,
 )
-from GRID.analysis.grid_logic import calculate_grid_levels, execute_trading_logic
-from GRID.data import save_grid_results_to_redis
 from shared.indicators import calculate_adx
 
 
@@ -259,9 +261,10 @@ async def summarize_trading_results(exchange_name: str, direction: str) -> list:
         거래 결과 요약 리스트
     """
     try:
+        import redis
+
         from GRID.data import get_cache, set_cache
         from GRID.database.redis_database import RedisConnectionManager
-        import redis
         from shared.config import settings
 
         redis_client = redis.Redis(

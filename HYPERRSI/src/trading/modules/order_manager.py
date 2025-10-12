@@ -9,21 +9,20 @@ import json
 import traceback
 from datetime import datetime
 from typing import Optional
+
 import ccxt.async_support as ccxt
 
 from HYPERRSI.src.trading.cancel_trigger_okx import TriggerCancelClient
 from HYPERRSI.src.trading.models import OrderStatus
-from HYPERRSI.src.trading.services.order_utils import try_send_order, get_order_info as get_order_info_from_module
-from shared.utils import safe_float
+from HYPERRSI.src.trading.services.order_utils import get_order_info as get_order_info_from_module
+from HYPERRSI.src.trading.services.order_utils import try_send_order
+from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger
+from shared.utils import safe_float
 
 logger = get_logger(__name__)
 
 # Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
 
 
 class OrderManager:
@@ -121,7 +120,7 @@ class OrderManager:
 
     async def cancel_all_open_orders(self, exchange, symbol, user_id, side: str = None):
         """모든 미체결 주문 취소"""
-        redis_client = _get_redis_client()
+        redis_client = get_redis_client()
         try:
             # 먼저 미체결 주문들을 가져옵니다
             print(f"취소할 주문 조회: {symbol}, side: {side}")
@@ -164,10 +163,10 @@ class OrderManager:
 
                 # 리스트로 저장
                 for order in open_orders:
-                    await _get_redis_client().rpush(closed_orders_key, json.dumps(order))
+                    await get_redis_client().rpush(closed_orders_key, json.dumps(order))
 
                 # 열린 주문 목록 삭제
-                await _get_redis_client().delete(f"user:{user_id}:open_orders")
+                await get_redis_client().delete(f"user:{user_id}:open_orders")
 
                 return True
             else:
@@ -214,9 +213,9 @@ class OrderManager:
         - key: user:{user_id}:open_orders
         - value: JSON (OrderStatus)
         """
-        redis_client = _get_redis_client()
+        redis_client = get_redis_client()
         redis_key = f"user:{user_id}:open_orders"
-        existing = await _get_redis_client().get(f"open_orders:{user_id}:{order_state.order_id}")
+        existing = await get_redis_client().get(f"open_orders:{user_id}:{order_state.order_id}")
         if existing:
             return
         order_data = {
@@ -233,7 +232,7 @@ class OrderManager:
             "posSide": order_state.posSide
         }
         # 간단히 lpush
-        await _get_redis_client().lpush(redis_key, json.dumps(order_data))
+        await get_redis_client().lpush(redis_key, json.dumps(order_data))
 
     async def monitor_orders(self, user_id: str):
         """
@@ -241,11 +240,11 @@ class OrderManager:
         - 각 주문의 최신 상태(체결량, 가격, 상태)를 API로 확인
         - Redis 업데이트: open 주문과 closed 주문을 별도의 키로 관리
         """
-        redis_client = _get_redis_client()
+        redis_client = get_redis_client()
         open_key = f"user:{user_id}:open_orders"
         closed_key = f"user:{user_id}:closed_orders"  # 종료된 주문을 저장할 새로운 Redis 키
 
-        open_orders = await _get_redis_client().lrange(open_key, 0, -1)
+        open_orders = await get_redis_client().lrange(open_key, 0, -1)
 
         new_open_list = []   # 계속 open 상태인 주문들
         closed_list = []     # 종료(closed)된 주문들
@@ -314,14 +313,14 @@ class OrderManager:
                 new_open_list.append(data)
 
         # open_orders 키 업데이트: 기존 데이터를 삭제하고 새로 open 상태인 주문들만 추가
-        await _get_redis_client().delete(open_key)
+        await get_redis_client().delete(open_key)
         for item in new_open_list:
-            await _get_redis_client().rpush(open_key, item)
+            await get_redis_client().rpush(open_key, item)
 
         # closed_orders 키에 종료된 주문 추가 (기존 데이터와 합칠지, 새로 저장할지는 비즈니스 로직에 맞게 결정)
         if closed_list:
             for item in closed_list:
-                await _get_redis_client().rpush(closed_key, item)
+                await get_redis_client().rpush(closed_key, item)
             logger.info(f"[{user_id}] Closed orders moved to key: {closed_key}")
 
     async def close(self):

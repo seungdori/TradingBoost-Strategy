@@ -4,11 +4,10 @@ AI Search Repository - Migrated to New Infrastructure
 Manages AI search progress tracking with structured logging.
 """
 
-from shared.logging import get_logger
-from shared.errors import DatabaseException, ValidationException
-
 from GRID.dtos.ai_search import AiSearchProgress
 from GRID.infra.ai_search_progress import ai_search_progress_store
+from shared.errors import DatabaseException, ValidationException
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

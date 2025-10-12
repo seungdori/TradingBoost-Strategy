@@ -1,18 +1,21 @@
-from fastapi import APIRouter, Query, HTTPException, WebSocket, WebSocketDisconnect
-from GRID.dtos import user
-from GRID.version import __version__
-from GRID.routes.connection_manager import ConnectionManager, RedisMessageManager
-import os
-import redis.asyncio as aioredis
 import json
-from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional, Union, cast
+import os
 from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Union, cast
+
+import redis.asyncio as aioredis
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, Field
+
+from GRID.dtos import user
+from GRID.routes.connection_manager import ConnectionManager, RedisMessageManager
+from GRID.version import __version__
 
 router = APIRouter(prefix="/logs", tags=["logs"])
 manager = ConnectionManager()
 
 import logging
+
 from shared.config import settings
 
 REDIS_PASSWORD = settings.REDIS_PASSWORD
@@ -67,7 +70,152 @@ def convert_date_to_timestamp(date_str: str | None) -> float | None:
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 
 
-@router.get("/trading_volumes")
+@router.get(
+    "/trading_volumes",
+    summary="거래량 조회",
+    description="""
+# 거래량 조회
+
+사용자의 거래량 데이터를 기간별로 조회합니다.
+
+## 쿼리 파라미터
+
+- **user_id** (string, required): 사용자 ID
+- **symbol** (string, optional): 특정 심볼
+  - 미지정 시: 모든 활성 심볼의 거래량 조회
+  - 지정 시: 해당 심볼만 조회
+- **start_date** (string, optional): 시작 날짜
+  - 형식: YYYY-MM-DD (예: "2025-01-01")
+  - 기본값: 30일 전
+- **end_date** (string, optional): 종료 날짜
+  - 형식: YYYY-MM-DD (예: "2025-01-31")
+  - 기본값: 오늘
+- **exchange_name** (string, optional): 거래소 이름
+  - 기본값: okx
+
+## 반환 정보
+
+- **user_id** (string): 사용자 ID
+- **volumes** (object): 심볼별 거래량 데이터
+  - 키: 심볼 이름 (예: "BTC/USDT")
+  - 값: 날짜별 거래량 (object)
+    - 키: 날짜 (YYYY-MM-DD)
+    - 값: 거래량 (float)
+
+## 사용 시나리오
+
+- 📊 **거래 활동 분석**: 일별/주별/월별 거래량 추이 확인
+- 💰 **수수료 계산**: 거래량 기반 수수료 할인 조건 확인
+- 📈 **거래 패턴 파악**: 활발한 거래 시간대 분석
+- 📋 **리포트 생성**: 거래 활동 리포트 작성
+- 🎯 **전략 평가**: 거래 빈도 및 규모 검토
+
+## 예시 URL
+
+```
+GET /logs/trading_volumes?user_id=12345
+GET /logs/trading_volumes?user_id=12345&symbol=BTC/USDT
+GET /logs/trading_volumes?user_id=12345&start_date=2025-01-01&end_date=2025-01-31
+```
+""",
+    responses={
+        200: {
+            "description": "✅ 거래량 조회 성공",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "all_symbols": {
+                            "summary": "모든 심볼 거래량 조회",
+                            "value": {
+                                "user_id": "12345",
+                                "volumes": {
+                                    "BTC/USDT": {
+                                        "2025-01-10": 1.5,
+                                        "2025-01-11": 2.3,
+                                        "2025-01-12": 0.8
+                                    },
+                                    "ETH/USDT": {
+                                        "2025-01-10": 5.2,
+                                        "2025-01-11": 3.7
+                                    }
+                                }
+                            }
+                        },
+                        "single_symbol": {
+                            "summary": "특정 심볼 거래량 조회",
+                            "value": {
+                                "user_id": "12345",
+                                "symbol": "BTC/USDT",
+                                "volumes": {
+                                    "2025-01-10": 1.5,
+                                    "2025-01-11": 2.3,
+                                    "2025-01-12": 0.8
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "❌ 잘못된 요청",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "invalid_date_format": {
+                            "summary": "잘못된 날짜 형식",
+                            "value": {
+                                "detail": "Invalid date format. Use YYYY-MM-DD"
+                            }
+                        },
+                        "invalid_date_range": {
+                            "summary": "잘못된 날짜 범위",
+                            "value": {
+                                "detail": "Invalid date range"
+                            }
+                        },
+                        "invalid_user_id": {
+                            "summary": "잘못된 사용자 ID",
+                            "value": {
+                                "detail": "Invalid user_id format"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "🔍 사용자 없음",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "user_not_found": {
+                            "summary": "사용자를 찾을 수 없음",
+                            "value": {
+                                "detail": "User not found"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "💥 서버 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "redis_error": {
+                            "summary": "Redis 연결 실패",
+                            "value": {
+                                "detail": "Failed to connect to Redis"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def get_trading_volumes(
     user_id: str,
     symbol: str | None = None,
@@ -114,7 +262,175 @@ async def get_trading_volumes(
         volumes = await redis.zrangebyscore(user_symbol_key, start_ts, end_ts, withscores=True)
         return {"user_id": user_id, "symbol": symbol, "volumes": {k: v for k, v in volumes}}
 
-@router.get("/total_trading_volume")
+@router.get(
+    "/total_trading_volume",
+    summary="총 거래량 조회 (기간 합산)",
+    description="""
+# 총 거래량 조회 (기간 합산)
+
+특정 사용자의 특정 심볼 총 거래량을 기간별로 합산하여 조회합니다.
+
+## 쿼리 파라미터
+
+- **user_id** (string, required): 사용자 ID
+- **symbol** (string, required): 거래 심볼
+  - 형식: "BTC/USDT", "ETH/USDT" 등
+  - 거래소별 심볼 표기법 준수
+- **start_date** (string, optional): 시작 날짜
+  - 형식: YYYY-MM-DD (예: "2025-01-01")
+  - 기본값: 30일 전
+- **end_date** (string, optional): 종료 날짜
+  - 형식: YYYY-MM-DD (예: "2025-01-31")
+  - 기본값: 오늘
+- **exchange_name** (string, optional): 거래소 이름
+  - 기본값: okx
+
+## 반환 정보
+
+- **user_id** (string): 사용자 ID
+- **symbol** (string): 거래 심볼
+- **start_date** (string): 조회 시작 날짜
+- **end_date** (string): 조회 종료 날짜
+- **total_volume** (float): 기간 내 총 거래량 (합산)
+  - 단위: 거래 수량 (코인 개수)
+  - 매수/매도 거래량 모두 포함
+
+## 사용 시나리오
+
+- 📊 **월별 거래량 집계**: 월간 거래 활동 분석
+- 💰 **수수료 할인 조건 확인**: VIP 등급 조건 충족 여부 검증
+- 📈 **분기별 리포트**: 분기 실적 집계 및 리포트 생성
+- 🎯 **거래 목표 달성률**: 설정한 거래량 목표 대비 달성률 확인
+- 📋 **세무 신고 자료**: 거래량 기반 세무 신고 자료 준비
+
+## 예시 URL
+
+```
+GET /logs/total_trading_volume?user_id=12345&symbol=BTC/USDT
+GET /logs/total_trading_volume?user_id=12345&symbol=ETH/USDT&start_date=2025-01-01&end_date=2025-01-31
+GET /logs/total_trading_volume?user_id=12345&symbol=SOL/USDT&exchange_name=binance
+```
+""",
+    responses={
+        200: {
+            "description": "✅ 총 거래량 조회 성공",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "btc_monthly": {
+                            "summary": "BTC 월간 거래량",
+                            "value": {
+                                "user_id": "12345",
+                                "symbol": "BTC/USDT",
+                                "start_date": "2025-01-01",
+                                "end_date": "2025-01-31",
+                                "total_volume": 45.7
+                            }
+                        },
+                        "eth_weekly": {
+                            "summary": "ETH 주간 거래량",
+                            "value": {
+                                "user_id": "12345",
+                                "symbol": "ETH/USDT",
+                                "start_date": "2025-01-06",
+                                "end_date": "2025-01-12",
+                                "total_volume": 128.3
+                            }
+                        },
+                        "zero_volume": {
+                            "summary": "거래 없음",
+                            "value": {
+                                "user_id": "12345",
+                                "symbol": "BTC/USDT",
+                                "start_date": "2025-01-01",
+                                "end_date": "2025-01-31",
+                                "total_volume": 0.0
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "❌ 잘못된 요청 - 날짜 형식 또는 범위 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "invalid_date_range": {
+                            "summary": "잘못된 날짜 범위",
+                            "value": {
+                                "detail": "Invalid date range"
+                            }
+                        },
+                        "invalid_date_format": {
+                            "summary": "잘못된 날짜 형식",
+                            "value": {
+                                "detail": "Invalid date format. Use YYYY-MM-DD"
+                            }
+                        },
+                        "future_date": {
+                            "summary": "미래 날짜",
+                            "value": {
+                                "detail": "End date cannot be in the future"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "🔍 사용자 또는 심볼을 찾을 수 없음",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "user_not_found": {
+                            "summary": "사용자 없음",
+                            "value": {
+                                "detail": "User not found"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        422: {
+            "description": "🚫 유효성 검증 실패 - 필수 파라미터 누락",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "missing_symbol": {
+                            "summary": "심볼 누락",
+                            "value": {
+                                "detail": "Field required: symbol"
+                            }
+                        },
+                        "missing_user_id": {
+                            "summary": "사용자 ID 누락",
+                            "value": {
+                                "detail": "Field required: user_id"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "💥 서버 오류 - Redis 연결 실패",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "redis_error": {
+                            "summary": "Redis 연결 실패",
+                            "value": {
+                                "detail": "Failed to connect to Redis"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def get_total_trading_volume(
     user_id: str = Query(..., description="User ID"),
     symbol: str = Query(..., description="Trading symbol"),
@@ -149,7 +465,156 @@ async def get_total_trading_volume(
     }
 
 
-@router.get("/trading_pnl")
+@router.get(
+    "/trading_pnl",
+    summary="거래 손익 내역 조회 (일별 PnL)",
+    description="""
+# 거래 손익 내역 조회 (일별 PnL)
+
+사용자의 실현 손익(Profit and Loss) 데이터를 심볼별, 날짜별로 조회합니다.
+
+## 쿼리 파라미터
+
+- **user_id** (string, required): 사용자 ID
+- **symbol** (string, optional): 특정 심볼
+  - 미지정 시: 모든 활성 심볼의 손익 조회
+  - 지정 시: 해당 심볼만 조회
+  - 형식: "BTC/USDT", "ETH/USDT" 등
+- **start_date** (string, optional): 시작 날짜
+  - 형식: YYYY-MM-DD (예: "2025-01-01")
+  - 기본값: 30일 전
+- **end_date** (string, optional): 종료 날짜
+  - 형식: YYYY-MM-DD (예: "2025-01-31")
+  - 기본값: 오늘
+- **exchange_name** (string, optional): 거래소 이름
+  - 기본값: okx
+
+## 반환 정보
+
+- **user_id** (string): 사용자 ID
+- **pnl** (object): 심볼별 손익 데이터
+  - 키: 심볼 이름 (예: "BTC/USDT")
+  - 값: 날짜별 실현 손익 (object)
+    - 키: 날짜 (YYYY-MM-DD)
+    - 값: 실현 손익 (float, USDT 단위)
+    - 양수: 수익, 음수: 손실
+
+## 사용 시나리오
+
+- 💰 **수익률 분석**: 일별/주별/월별 수익 추이 분석
+- 📊 **거래 성과 평가**: 전략별 손익 비교 및 성과 측정
+- 📈 **포트폴리오 관리**: 심볼별 수익 기여도 분석
+- 💼 **세금 계산 자료**: 실현 손익 기반 양도소득세 계산
+- 🎯 **목표 달성 추적**: 수익 목표 대비 달성률 모니터링
+
+## 예시 URL
+
+```
+GET /logs/trading_pnl?user_id=12345
+GET /logs/trading_pnl?user_id=12345&symbol=BTC/USDT
+GET /logs/trading_pnl?user_id=12345&start_date=2025-01-01&end_date=2025-01-31
+GET /logs/trading_pnl?user_id=12345&symbol=ETH/USDT&exchange_name=binance
+```
+""",
+    responses={
+        200: {
+            "description": "✅ 손익 조회 성공",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "all_symbols_pnl": {
+                            "summary": "모든 심볼 손익",
+                            "value": {
+                                "user_id": "12345",
+                                "pnl": {
+                                    "BTC/USDT": {
+                                        "2025-01-10": 150.25,
+                                        "2025-01-11": -50.75,
+                                        "2025-01-12": 320.50
+                                    },
+                                    "ETH/USDT": {
+                                        "2025-01-10": 75.30,
+                                        "2025-01-11": 120.45
+                                    }
+                                }
+                            }
+                        },
+                        "single_symbol_pnl": {
+                            "summary": "특정 심볼 손익",
+                            "value": {
+                                "user_id": "12345",
+                                "symbol": "BTC/USDT",
+                                "pnl": {
+                                    "2025-01-10": 150.25,
+                                    "2025-01-11": -50.75,
+                                    "2025-01-12": 320.50
+                                }
+                            }
+                        },
+                        "no_trades": {
+                            "summary": "거래 없음",
+                            "value": {
+                                "user_id": "12345",
+                                "pnl": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "❌ 잘못된 요청 - 날짜 형식 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "invalid_date_format": {
+                            "summary": "잘못된 날짜 형식",
+                            "value": {
+                                "detail": "Invalid date format. Use YYYY-MM-DD"
+                            }
+                        },
+                        "invalid_date_range": {
+                            "summary": "잘못된 날짜 범위",
+                            "value": {
+                                "detail": "Invalid date range"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "🔍 사용자 없음",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "user_not_found": {
+                            "summary": "사용자를 찾을 수 없음",
+                            "value": {
+                                "detail": "User not found"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "💥 서버 오류 - Redis 연결 실패",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "redis_error": {
+                            "summary": "Redis 연결 실패",
+                            "value": {
+                                "detail": "Failed to connect to Redis"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def get_trading_pnl(
     user_id: str,
     symbol: str | None = None,
@@ -190,7 +655,170 @@ async def get_trading_pnl(
         return {"user_id": user_id, "symbol": symbol, "pnl": {k: v for k, v in pnl_data}}
     
     
-@router.get("/total_trading_pnl")
+@router.get(
+    "/total_trading_pnl",
+    summary="총 손익 조회 (기간 합산)",
+    description="""
+# 총 손익 조회 (기간 합산)
+
+특정 사용자의 특정 심볼 총 실현 손익을 기간별로 합산하여 조회합니다.
+
+## 쿼리 파라미터
+
+- **user_id** (string, required): 사용자 ID
+- **symbol** (string, required): 거래 심볼
+  - 형식: "BTC/USDT", "ETH/USDT" 등
+  - 거래소별 심볼 표기법 준수
+- **start_date** (string, optional): 시작 날짜
+  - 형식: YYYY-MM-DD (예: "2025-01-01")
+  - 기본값: 30일 전
+- **end_date** (string, optional): 종료 날짜
+  - 형식: YYYY-MM-DD (예: "2025-01-31")
+  - 기본값: 오늘
+- **exchange_name** (string, optional): 거래소 이름
+  - 기본값: okx
+
+## 반환 정보
+
+- **user_id** (string): 사용자 ID
+- **symbol** (string): 거래 심볼
+- **start_date** (string): 조회 시작 날짜
+- **end_date** (string): 조회 종료 날짜
+- **total_pnl** (float): 기간 내 총 실현 손익 (합산)
+  - 단위: USDT
+  - 양수: 총 수익, 음수: 총 손실
+  - 모든 일별 손익 합산 값
+
+## 사용 시나리오
+
+- 💰 **월별 수익 집계**: 월간 실현 손익 합산 및 성과 평가
+- 📊 **분기별 리포트**: 분기 실적 집계 및 투자 보고서 작성
+- 💼 **세무 신고 자료**: 양도소득세 계산을 위한 연간 실현 손익 집계
+- 🎯 **목표 달성 평가**: 수익 목표 대비 실제 실현 손익 비교
+- 📈 **전략 성과 분석**: 거래 전략별 수익률 및 효율성 평가
+
+## 예시 URL
+
+```
+GET /logs/total_trading_pnl?user_id=12345&symbol=BTC/USDT
+GET /logs/total_trading_pnl?user_id=12345&symbol=ETH/USDT&start_date=2025-01-01&end_date=2025-01-31
+GET /logs/total_trading_pnl?user_id=12345&symbol=SOL/USDT&exchange_name=binance
+```
+""",
+    responses={
+        200: {
+            "description": "✅ 총 손익 조회 성공",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "profit_month": {
+                            "summary": "월간 수익",
+                            "value": {
+                                "user_id": "12345",
+                                "symbol": "BTC/USDT",
+                                "start_date": "2025-01-01",
+                                "end_date": "2025-01-31",
+                                "total_pnl": 1250.50
+                            }
+                        },
+                        "loss_week": {
+                            "summary": "주간 손실",
+                            "value": {
+                                "user_id": "12345",
+                                "symbol": "ETH/USDT",
+                                "start_date": "2025-01-06",
+                                "end_date": "2025-01-12",
+                                "total_pnl": -320.75
+                            }
+                        },
+                        "breakeven": {
+                            "summary": "손익 없음",
+                            "value": {
+                                "user_id": "12345",
+                                "symbol": "BTC/USDT",
+                                "start_date": "2025-01-01",
+                                "end_date": "2025-01-31",
+                                "total_pnl": 0.0
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "❌ 잘못된 요청 - 날짜 형식 또는 범위 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "invalid_date_range": {
+                            "summary": "잘못된 날짜 범위",
+                            "value": {
+                                "detail": "Invalid date range"
+                            }
+                        },
+                        "invalid_date_format": {
+                            "summary": "잘못된 날짜 형식",
+                            "value": {
+                                "detail": "Invalid date format. Use YYYY-MM-DD"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "🔍 사용자 또는 심볼을 찾을 수 없음",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "user_not_found": {
+                            "summary": "사용자 없음",
+                            "value": {
+                                "detail": "User not found"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        422: {
+            "description": "🚫 유효성 검증 실패 - 필수 파라미터 누락",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "missing_symbol": {
+                            "summary": "심볼 누락",
+                            "value": {
+                                "detail": "Field required: symbol"
+                            }
+                        },
+                        "missing_user_id": {
+                            "summary": "사용자 ID 누락",
+                            "value": {
+                                "detail": "Field required: user_id"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "💥 서버 오류 - Redis 연결 실패",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "redis_error": {
+                            "summary": "Redis 연결 실패",
+                            "value": {
+                                "detail": "Failed to connect to Redis"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def get_total_trading_pnl(
     user_id: str,
     symbol: str,
@@ -224,9 +852,32 @@ async def get_total_trading_pnl(
         "total_pnl": total_pnl
     }
 
-# 웹소켓 연결 엔드포인트
-@router.websocket("/ws/{user_id}")
+@router.websocket(
+    "/ws/{user_id}",
+)
 async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
+    """
+    실시간 로그 메시지를 위한 WebSocket 연결 엔드포인트
+
+    **파라미터:**
+    - `user_id`: 사용자 ID
+
+    **동작 방식:**
+    1. WebSocket 연결 수립
+    2. 실시간 메시지 송수신
+    3. 연결 해제 시 정리
+
+    **사용 시나리오:**
+    - 실시간 거래 로그 모니터링
+    - 시스템 알림 수신
+    - 봇 상태 업데이트
+
+    **연결 예시:**
+    ```javascript
+    const ws = new WebSocket('ws://localhost:8012/logs/ws/12345');
+    ws.onmessage = (event) => console.log(event.data);
+    ```
+    """
     print('⚡️⚡️😈 : ', user_id)
     user_id_int = int(user_id)
     await manager.connect(websocket, user_id_int)
@@ -241,14 +892,64 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
         logging.error(f"🚨 [ERROR] WebSocket error for user {user_id}: {str(e)}")
         await manager.disconnect(websocket, user_id_int)
 
-# FastAPI 라우터에서 메시지 전송을 위한 엔드포인트 예시
-@router.post("/send/{user_id}")
+@router.post(
+    "/send/{user_id}",
+    summary="사용자에게 메시지 전송",
+    description="""
+특정 사용자에게 WebSocket을 통해 메시지를 전송합니다.
+
+**파라미터:**
+- `user_id`: 메시지를 받을 사용자 ID
+- `message`: 전송할 메시지 내용
+
+**사용 시나리오:**
+- 시스템 알림 발송
+- 거래 체결 알림
+- 에러 메시지 전달
+""",
+    responses={
+        200: {
+            "description": "메시지 전송 성공",
+            "content": {
+                "application/json": {
+                    "example": {"status": "success"}
+                }
+            }
+        }
+    }
+)
 async def send_message_to_user(user_id: int, message: str) -> dict[str, str]:
     await manager.send_message_to_user(user_id, message)
     return {"status": "success"}
 
-# 브로드캐스트 메시지 전송을 위한 엔드포인트 예시
-@router.post("/broadcast")
+@router.post(
+    "/broadcast",
+    summary="모든 사용자에게 메시지 브로드캐스트",
+    description="""
+연결된 모든 사용자에게 메시지를 동시에 전송합니다.
+
+**파라미터:**
+- `message`: 브로드캐스트할 메시지 내용
+
+**사용 시나리오:**
+- 시스템 점검 공지
+- 긴급 알림
+- 전체 사용자 공지사항
+
+**주의사항:**
+- 연결된 모든 사용자에게 전송되므로 신중하게 사용하세요
+""",
+    responses={
+        200: {
+            "description": "브로드캐스트 성공",
+            "content": {
+                "application/json": {
+                    "example": {"status": "success"}
+                }
+            }
+        }
+    }
+)
 async def broadcast_message(message: str) -> dict[str, str]:
     # Note: broadcast method needs to be implemented in ConnectionManager
     # For now, we'll send to all connected users

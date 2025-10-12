@@ -1,20 +1,21 @@
 # Auto-configure PYTHONPATH for monorepo structure
 from shared.utils.path_config import configure_pythonpath
+
 configure_pythonpath()
 
-import uvicorn
 import argparse
 import multiprocessing
-import sys
-import platform
 import os
+import platform
 import signal
+import sys
 
+import uvicorn
 from starlette.middleware.cors import CORSMiddleware
 
-from GRID.strategies.grid_process import setup_redis
-from GRID.jobs.worker_manager import setup_workers, stop_workers
 from GRID.api.app import app  # FastAPI 앱 임포트
+from GRID.jobs.worker_manager import setup_workers, stop_workers
+from GRID.strategies.grid_process import setup_redis
 
 
 def configure_cors():

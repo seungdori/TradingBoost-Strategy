@@ -3,7 +3,8 @@
 GRID와 HYPERRSI에서 공통으로 사용되는 포지션 데이터 처리 로직
 """
 import json
-from typing import Any, List, Dict, Optional
+from typing import Any, Dict, List, Optional
+
 from shared.logging import get_logger
 
 logger = get_logger(__name__)

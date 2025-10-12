@@ -4,12 +4,12 @@
 """
 from shared.exchange.okx.constants import (
     BASE_URL,
-    V5_API,
-    WSS_PUBLIC_URL,
-    WSS_PRIVATE_URL,
-    INST_TYPE,
     ENDPOINTS,
-    ERROR_CODES
+    ERROR_CODES,
+    INST_TYPE,
+    V5_API,
+    WSS_PRIVATE_URL,
+    WSS_PUBLIC_URL,
 )
 
 __all__ = [

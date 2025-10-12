@@ -6,35 +6,27 @@ TP(익절)와 SL(손절) 주문 생성 및 관리
 """
 
 import json
-import time
 import logging
+import time
 import traceback
 from datetime import datetime, timedelta
 from typing import Optional
 
-
+from HYPERRSI.src.trading.error_message import map_exchange_error
 from HYPERRSI.src.trading.models import Position
 from HYPERRSI.src.trading.modules.trading_utils import get_decimal_places
 from HYPERRSI.telegram_message import send_telegram_message
-from HYPERRSI.src.trading.error_message import map_exchange_error
-from shared.utils import get_minimum_qty, safe_float
+from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger
+from shared.utils import get_minimum_qty, safe_float
 
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 
 
@@ -79,7 +71,7 @@ class TPSLOrderCreator:
             #print(f"[DEBUG] _create_tp_sl_orders 호출됨 | user_id: {user_id}, symbol: {symbol}, side: {side}")
             #print(f"[DEBUG] 초기 입력 position_size: {position_size}")
 
-            settings_str = await _get_redis_client().get(f"user:{user_id}:settings")
+            settings_str = await get_redis_client().get(f"user:{user_id}:settings")
             if not settings_str:
                 logger.error(f"Settings not found for user {user_id}")
                 await send_telegram_message(message=(    "⚠️ TP/SL 주문 생성 실패\n"    "━━━━━━━━━━━━━━━\n"    "사용자 설정을 찾을 수 없습니다."),okx_uid=user_id)
@@ -102,7 +94,7 @@ class TPSLOrderCreator:
             # 1) 먼저 Redis에 저장된 기존 포지션/주문 정보를 가져옵니다.
             position_key = f"user:{user_id}:position:{symbol}:{side}"
 
-            existing_data = await _get_redis_client().hgetall(position_key)
+            existing_data = await get_redis_client().hgetall(position_key)
             # 자세한 내용 확인용 디버그 출력
             #print(f"[DEBUG] 기존 Redis 포지션 데이터: {existing_data}")
 
@@ -133,8 +125,11 @@ class TPSLOrderCreator:
                                     logger.debug(f"[DCA] TP 주문 삭제 전 최종 확인: {tp_order_id}")
                                     
                                     try:
-                                        from HYPERRSI.src.trading.monitoring import check_order_status, update_order_status
-                                        
+                                        from HYPERRSI.src.trading.monitoring import (
+                                            check_order_status,
+                                            update_order_status,
+                                        )
+
                                         # 삭제 직전 실제 상태 확인
                                         final_status = await check_order_status(
                                             user_id=user_id,
@@ -187,7 +182,7 @@ class TPSLOrderCreator:
                                         logger.error(f"[DCA] TP 삭제 직전 확인 오류: {tp_order_id}, {str(final_check_error)}")
                                     
                                     # 모니터링 데이터 삭제
-                                    await _get_redis_client().delete(monitor_key)
+                                    await get_redis_client().delete(monitor_key)
                                     logger.debug(f"[DCA] 모니터링 데이터 삭제 완료: {monitor_key}")
                                 except Exception as e:
                                     logger.error(f"[DCA] TP 주문 취소 실패: {tp_order_id}, {str(e)}")
@@ -211,8 +206,11 @@ class TPSLOrderCreator:
                             logger.debug(f"[DCA] SL 주문 삭제 전 최종 확인: {existing_sl_order_id}")
                             
                             try:
-                                from HYPERRSI.src.trading.monitoring import check_order_status, update_order_status
-                                
+                                from HYPERRSI.src.trading.monitoring import (
+                                    check_order_status,
+                                    update_order_status,
+                                )
+
                                 # 삭제 직전 실제 상태 확인
                                 final_status = await check_order_status(
                                     user_id=user_id,
@@ -249,13 +247,13 @@ class TPSLOrderCreator:
                                 logger.error(f"[DCA] SL 삭제 직전 확인 오류: {existing_sl_order_id}, {str(final_check_error)}")
                             
                             # 모니터링 데이터 삭제
-                            await _get_redis_client().delete(monitor_key)
+                            await get_redis_client().delete(monitor_key)
                             logger.info(f"[DCA] 모니터링 데이터 삭제 완료: {monitor_key}")
                         except Exception as e:
                             logger.error(f"[DCA] SL 주문 취소 실패: {existing_sl_order_id}, {str(e)}")
 
                     # Redis에서 TP/SL 관련 필드 삭제
-                    await _get_redis_client().hdel(
+                    await get_redis_client().hdel(
                         position_key,
                         "tp_order_ids", "tp_prices", "tp_sizes", "tp_contracts_amounts", "tp_sizes", "sl_contracts_amount",
                         "sl_order_id", "sl_price", "sl_size"
@@ -314,7 +312,7 @@ class TPSLOrderCreator:
             # --------------------
             # TP 주문 생성 로직
             # --------------------
-            position_data = await _get_redis_client().hgetall(position_key)
+            position_data = await get_redis_client().hgetall(position_key)
             tp_data_list = []
             
             tp_data_str = position_data.get("tp_data")
@@ -477,7 +475,7 @@ class TPSLOrderCreator:
                                 "is_hedge": "false"
                             }
                             
-                            await _get_redis_client().hset(monitor_key, mapping=monitor_data)
+                            await get_redis_client().hset(monitor_key, mapping=monitor_data)
                             logger.info(f"[TP{i+1}] 모니터링 데이터 저장 완료: {monitor_key}")
                             
                         if remaining_size <= 0 or tp_size == 0.0:
@@ -500,7 +498,7 @@ class TPSLOrderCreator:
                     "tp_data": json.dumps(tp_data_list)
                 }
                 print(f"[DEBUG] 최종 TP Redis 저장 데이터: {tp_data}")
-                await _get_redis_client().hset(position_key, mapping=tp_data)
+                await get_redis_client().hset(position_key, mapping=tp_data)
             if is_hedge and (hedge_tp_price is not None):
                 try:
                     tp_order = await self._try_send_order(
@@ -524,9 +522,9 @@ class TPSLOrderCreator:
                         "tp_contracts_amounts": str(contracts_amount),
                         "tp_data": json.dumps(tp_data_list)
                     }
-                    await _get_redis_client().hset(position_key, mapping=tp_data)
+                    await get_redis_client().hset(position_key, mapping=tp_data)
                     dual_side_key = f"user:{user_id}:{symbol}:dual_side_position"
-                    await _get_redis_client().hset(dual_side_key, mapping=tp_data)
+                    await get_redis_client().hset(dual_side_key, mapping=tp_data)
                     
                     # 모니터링 데이터 저장 (헷지 TP)
                     monitor_key = f"monitor:user:{user_id}:{symbol}:order:{tp_order.order_id}"
@@ -549,7 +547,7 @@ class TPSLOrderCreator:
                         "is_hedge": "true"
                     }
                     
-                    await _get_redis_client().hset(monitor_key, mapping=monitor_data)
+                    await get_redis_client().hset(monitor_key, mapping=monitor_data)
                     logger.info(f"[헷지 TP] 모니터링 데이터 저장 완료: {monitor_key}")
                 except Exception as e:
                     logger.error(f"헷지 TP 주문 생성 실패: {str(e)}")
@@ -566,7 +564,7 @@ class TPSLOrderCreator:
                     use_sl_only_on_last_dca = settings.get('use_sl_on_last', False)
                     if use_sl_only_on_last_dca:
                         dca_count_key = f"user:{user_id}:position:{symbol}:{position.side}:dca_count"
-                        dca_count = await _get_redis_client().get(dca_count_key)
+                        dca_count = await get_redis_client().get(dca_count_key)
                         if dca_count is None:
                             dca_count = 0
                         else:
@@ -620,7 +618,7 @@ class TPSLOrderCreator:
                             "sl_contracts_amount": str(sl_contracts_amount)
                         }
                         #print(f"[DEBUG] SL Redis 저장 데이터: {sl_data}")
-                        await _get_redis_client().hset(position_key, mapping=sl_data)
+                        await get_redis_client().hset(position_key, mapping=sl_data)
                         position.sl_order_id = sl_order_id
                         
                         # 모니터링 데이터 저장 (SL)
@@ -644,7 +642,7 @@ class TPSLOrderCreator:
                             "is_hedge": "false"
                         }
                         
-                        await _get_redis_client().hset(monitor_key, mapping=monitor_data)
+                        await get_redis_client().hset(monitor_key, mapping=monitor_data)
                         logger.info(f"[SL] 모니터링 데이터 저장 완료: {monitor_key}")
 
                     except Exception as e:
@@ -655,7 +653,7 @@ class TPSLOrderCreator:
                         sl_order_id = None
             if is_hedge and (hedge_sl_price is not None):
                 dual_side_settings_key = f"user:{user_id}:dual_side"
-                dual_side_settings = await _get_redis_client().hgetall(dual_side_settings_key)
+                dual_side_settings = await get_redis_client().hgetall(dual_side_settings_key)
                 use_dual_sl = dual_side_settings.get('use_dual_sl', False)
                 if use_dual_sl:
                     try:
@@ -677,7 +675,7 @@ class TPSLOrderCreator:
                             "sl_contracts_amount": str(contracts_amount),
                             "sl_position_qty": str(position_qty)
                         }
-                        await _get_redis_client().hset(position_key, mapping=sl_data)
+                        await get_redis_client().hset(position_key, mapping=sl_data)
 
                         # 모니터링 데이터 저장 (헷지 SL)
                         monitor_key = f"monitor:user:{user_id}:{symbol}:order:{sl_order.order_id}"
@@ -700,7 +698,7 @@ class TPSLOrderCreator:
                             "is_hedge": "true"
                         }
 
-                        await _get_redis_client().hset(monitor_key, mapping=monitor_data)
+                        await get_redis_client().hset(monitor_key, mapping=monitor_data)
                         logger.info(f"[헷지 SL] 모니터링 데이터 저장 완료: {monitor_key}")
                     except Exception as e:  
                         logger.error(f"헷지 SL 주문 생성 실패: {str(e)}")
@@ -714,7 +712,7 @@ class TPSLOrderCreator:
                     
             elif position.sl_price is None or position.sl_price == 0.0 or settings.get('use_sl') == False:
                 try:
-                    await _get_redis_client().hdel(position_key, "sl_price", "sl_order_id", "sl_size", "sl_contracts_amount", "sl_position_qty")
+                    await get_redis_client().hdel(position_key, "sl_price", "sl_order_id", "sl_size", "sl_contracts_amount", "sl_position_qty")
                     logger.info(f"SL 관련 필드 삭제 완료: {position_key}")
                             # 로컬 객체 상태 업데이트
                     position.sl_price = None

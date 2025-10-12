@@ -1,8 +1,11 @@
-from decimal import Decimal
-from typing import Optional, Dict, List
 from datetime import datetime
+from decimal import Decimal
+from typing import Dict, List, Optional
+
+from HYPERRSI.src.api.exchange.models import OrderSide
 from HYPERRSI.src.api.exchange.models import Position as ExchangePosition
-from HYPERRSI.src.api.exchange.models import OrderSide, PositionSide
+from HYPERRSI.src.api.exchange.models import PositionSide
+
 
 class PositionManager:
     def __init__(self):

@@ -8,51 +8,51 @@ Includes entry size calculation, long/short pyramiding execution, and DCA state 
 import asyncio
 import json
 from datetime import datetime
-from typing import Dict, Any, Tuple, Optional
+from typing import Any, Dict, Optional, Tuple
 
-from HYPERRSI.src.trading.trading_service import TradingService
-from HYPERRSI.src.trading.models import Position, get_timeframe
+from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
-from HYPERRSI.src.trading.stats import record_trade_entry
+from HYPERRSI.src.core.logger import setup_error_logger
+from HYPERRSI.src.trading.dual_side_entry import manage_dual_side_entry
 from HYPERRSI.src.trading.error_message import map_exchange_error
+from HYPERRSI.src.trading.models import Position, get_timeframe
 from HYPERRSI.src.trading.position_manager import PositionStateManager
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
-from HYPERRSI.src.api.routes.position import open_position_endpoint, OpenPositionRequest
-from HYPERRSI.src.trading.dual_side_entry import manage_dual_side_entry
-from HYPERRSI.src.trading.utils.trading_utils import (
-    calculate_dca_levels,
-    update_dca_levels_redis,
-    check_dca_condition
-)
-from shared.logging import get_logger
-from HYPERRSI.src.core.logger import setup_error_logger
-
-# Import from position_handler package
-from HYPERRSI.src.trading.utils.position_handler.core import (
-    get_redis_client,
-    calculate_next_candle_time,
-    set_position_lock,
-    get_investment_amount
-)
-from HYPERRSI.src.trading.utils.position_handler.validation import (
-    check_cooldown,
-    check_position_lock,
-    validate_position_response,
-    should_enter_with_trend
-)
+from HYPERRSI.src.trading.stats import record_trade_entry
+from HYPERRSI.src.trading.trading_service import TradingService
 from HYPERRSI.src.trading.utils.position_handler.constants import (
     DCA_COUNT_KEY,
     DCA_LEVELS_KEY,
     POSITION_KEY,
-    TREND_SIGNAL_ALERT_KEY,
     TREND_ALERT_EXPIRY_SECONDS,
+    TREND_SIGNAL_ALERT_KEY,
     TREND_STATE_STRONG_DOWNTREND,
-    TREND_STATE_STRONG_UPTREND
+    TREND_STATE_STRONG_UPTREND,
+)
+
+# Import from position_handler package
+from HYPERRSI.src.trading.utils.position_handler.core import (
+    calculate_next_candle_time,
+    get_investment_amount,
+    get_redis_client,
+    set_position_lock,
 )
 from HYPERRSI.src.trading.utils.position_handler.messaging import (
+    format_next_dca_level,
     parse_tp_prices,
-    format_next_dca_level
 )
+from HYPERRSI.src.trading.utils.position_handler.validation import (
+    check_cooldown,
+    check_position_lock,
+    should_enter_with_trend,
+    validate_position_response,
+)
+from HYPERRSI.src.trading.utils.trading_utils import (
+    calculate_dca_levels,
+    check_dca_condition,
+    update_dca_levels_redis,
+)
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 error_logger = setup_error_logger()

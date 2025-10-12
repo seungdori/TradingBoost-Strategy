@@ -1,10 +1,11 @@
+import asyncio
 import os
 from typing import List
-import asyncio
+
 import shared.exchange_apis
-from shared.dtos.trading import TradingDataDto, WinrateDto
 from GRID.repositories import trading_data_repository, trading_log_repository
 from GRID.strategies import grid
+from shared.dtos.trading import TradingDataDto, WinrateDto
 
 
 async def fetch_trading_data(exchange_name: str, symbols: List[str]) -> List[TradingDataDto]:

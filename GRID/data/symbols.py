@@ -2,8 +2,10 @@
 Exchange symbol fetching utilities
 """
 import ssl
-import aiohttp
 from typing import Any
+
+import aiohttp
+
 from GRID.trading.instance_manager import get_exchange_instance
 
 

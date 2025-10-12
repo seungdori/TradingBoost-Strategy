@@ -1,10 +1,13 @@
-import math
-import aiohttp
-import os
 import json
+import math
+import os
 import traceback
+
+import aiohttp
 import redis.asyncio as redis
+
 from shared.config import settings
+
 
 # Redis 클라이언트 생성
 async def get_redis_client():

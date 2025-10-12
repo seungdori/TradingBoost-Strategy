@@ -8,10 +8,11 @@ Provides structured logging with JSON formatting for:
 - Sensitive data redaction
 """
 
-import logging
 import json
+import logging
 from datetime import datetime
 from typing import Any
+
 from shared.config import settings
 
 

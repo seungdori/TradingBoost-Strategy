@@ -7,10 +7,9 @@ Async helpers for managing blacklist and whitelist entries using PostgreSQL.
 
 from typing import Iterable, List, Sequence, Union
 
+from GRID.repositories.symbol_list_repository_pg import SymbolListRepositoryPG
 from shared.database.session import get_db, get_transactional_session
 from shared.logging import get_logger
-
-from GRID.repositories.symbol_list_repository_pg import SymbolListRepositoryPG
 
 logger = get_logger(__name__)
 

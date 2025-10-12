@@ -1,23 +1,31 @@
-import trace
-import ccxt
 import asyncio
-from decimal import Decimal, ROUND_HALF_UP, InvalidOperation, ConversionSyntax
-from httpx import get
-import redis
-from GRID.trading import instance
-from GRID.api.apilist import telegram_store
-from GRID.trading.get_minimum_qty import round_to_qty, split_contracts, get_perpetual_instruments, get_lot_sizes
 import logging
-from GRID import telegram_message
-from queue import Queue
-from datetime import datetime, timedelta
-import pytz  # type: ignore[import-untyped]
-import aiohttp
 import math
-import traceback
-from GRID.database import redis_database as database
 import random
+import trace
+import traceback
+from datetime import datetime, timedelta
+from decimal import ROUND_HALF_UP, ConversionSyntax, Decimal, InvalidOperation
+from queue import Queue
 from typing import Any, Optional
+
+import aiohttp
+import ccxt
+import pytz  # type: ignore[import-untyped]
+import redis
+from httpx import get
+
+from GRID import telegram_message
+from GRID.api.apilist import telegram_store
+from GRID.database import redis_database as database
+from GRID.trading import instance
+from GRID.trading.get_minimum_qty import (
+    get_lot_sizes,
+    get_perpetual_instruments,
+    round_to_qty,
+    split_contracts,
+)
+
 global order_ids
 
 order_ids: dict[str, Any] = {}
@@ -147,11 +155,9 @@ async def change_leverage(exchange_name: str, symbol: str, leverage: int | str, 
             await exchange.close()
         
 
-from shared.utils.exchange_precision import (
-    get_corrected_rounded_price,
-    get_order_price_unit_upbit as get_order_price_unit,
-    round_to_upbit_tick_size as round_to_tick_size
-)
+from shared.utils.exchange_precision import get_corrected_rounded_price
+from shared.utils.exchange_precision import get_order_price_unit_upbit as get_order_price_unit
+from shared.utils.exchange_precision import round_to_upbit_tick_size as round_to_tick_size
 
 # Backward compatibility: re-export functions
 __all__ = ['get_corrected_rounded_price', 'get_order_price_unit', 'round_to_tick_size']

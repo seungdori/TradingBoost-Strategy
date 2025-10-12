@@ -1,13 +1,6 @@
+from .models import Balance, OrderRequest, OrderResponse, OrderSide, OrderType, Position
 from .okx.client import OKXClient
 from .okx.websocket import OKXWebsocket
-from .models import (
-    OrderType,
-    OrderSide,
-    OrderRequest,
-    OrderResponse,
-    Balance,
-    Position
-)
 
 __all__ = [
     'OKXClient',

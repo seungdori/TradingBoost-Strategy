@@ -6,14 +6,14 @@ Provides database session management and initialization using shared infrastruct
 
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
 
-from shared.database.session import DatabaseConfig, get_db
-from shared.logging import get_logger
-from shared.errors import DatabaseException
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from GRID.models.base import Base
+from shared.database.session import DatabaseConfig, get_db
+from shared.errors import DatabaseException
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -50,8 +50,8 @@ async def init_grid_db():
         logger.info("Initializing GRID database tables...")
 
         # Import models to register them with SQLAlchemy
-        from GRID.models import user  # User, TelegramID, Job, Blacklist, Whitelist
         from GRID.models import trading  # Entry, TakeProfit, StopLoss, WinRate
+        from GRID.models import user  # User, TelegramID, Job, Blacklist, Whitelist
 
         engine = DatabaseConfig.get_engine()
 

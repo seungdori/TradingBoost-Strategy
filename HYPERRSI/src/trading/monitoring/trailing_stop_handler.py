@@ -7,31 +7,25 @@
 import asyncio
 import traceback
 from datetime import datetime
-from typing import List, Dict, Optional
-from shared.logging import get_logger, log_order
+from typing import Dict, List, Optional
 
 from HYPERRSI.src.api.dependencies import get_exchange_context
+from HYPERRSI.src.api.routes.order import ClosePositionRequest, close_position
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
-from HYPERRSI.src.api.routes.order import close_position, ClosePositionRequest
-from .telegram_service import get_identifier, send_telegram_message
-from .utils import is_true_value, get_user_settings
+from shared.database.redis_helper import get_redis_client
+from shared.logging import get_logger, log_order
+
 from .position_validator import check_position_exists
+from .telegram_service import get_identifier, send_telegram_message
+from .utils import get_user_settings, is_true_value
 
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 
 
@@ -133,20 +127,20 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
                 }
                 
                 # 트레일링 키에 데이터 저장
-                await _get_redis_client().hset(trailing_key, mapping=ts_data)
+                await get_redis_client().hset(trailing_key, mapping=ts_data)
                 
                 # 트레일링 키 만료 시간 설정 (7일 - 안전장치)
-                await _get_redis_client().expire(trailing_key, 60 * 60 * 24 * 7)
+                await get_redis_client().expire(trailing_key, 60 * 60 * 24 * 7)
                 
                 # 기존 포지션 키에도 트레일링 활성화 정보 저장 (포지션이 남아있는 경우만)
                 position_key = f"user:{user_id}:position:{symbol}:{direction}"
-                position_exists = await _get_redis_client().exists(position_key)
+                position_exists = await get_redis_client().exists(position_key)
                 
                 if position_exists:
                     # SL 가격 업데이트
-                    await _get_redis_client().hset(position_key, "sl_price", trailing_stop_price)
-                    await _get_redis_client().hset(position_key, "trailing_stop_active", "true")
-                    await _get_redis_client().hset(position_key, "trailing_stop_key", trailing_key)
+                    await get_redis_client().hset(position_key, "sl_price", trailing_stop_price)
+                    await get_redis_client().hset(position_key, "trailing_stop_active", "true")
+                    await get_redis_client().hset(position_key, "trailing_stop_key", trailing_key)
                 
                 # SL 주문 업데이트 시도
                 try:
@@ -220,18 +214,18 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
         trailing_key = f"trailing:user:{okx_uid}:{symbol}:{direction}"
         
         # 트레일링 스탑 키가 존재하는지 확인
-        if not await _get_redis_client().exists(trailing_key):
+        if not await get_redis_client().exists(trailing_key):
             # 포지션 키에서 트레일링 스탑 활성화 정보 확인 (레거시 지원)
             position_key = f"user:{okx_uid}:position:{symbol}:{direction}"
             
             try:
                 # 키 타입 확인
-                key_type = await _get_redis_client().type(position_key)
+                key_type = await get_redis_client().type(position_key)
                 
                 # 해시 타입인지 확인 - 문자열로 변환하여 비교
                 if str(key_type).lower() == 'hash' or str(key_type).lower() == "b'hash'":
                     # 정상적인 해시 타입인 경우
-                    position_data = await _get_redis_client().hgetall(position_key)
+                    position_data = await get_redis_client().hgetall(position_key)
                 else:
                     # 다른 타입이거나 키가 없는 경우
                     logger.warning(f"포지션 데이터가 해시 타입이 아닙니다. (key: {position_key}, 타입: {key_type})")
@@ -248,12 +242,12 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
         # 트레일링 스탑 데이터 조회
         try:
             # 키 타입 확인
-            key_type = await _get_redis_client().type(trailing_key)
+            key_type = await get_redis_client().type(trailing_key)
             
             # 해시 타입인지 확인 - 문자열로 변환하여 비교
             if str(key_type).lower() == 'hash' or str(key_type).lower() == "b'hash'":
                 # 정상적인 해시 타입인 경우
-                ts_data = await _get_redis_client().hgetall(trailing_key)
+                ts_data = await get_redis_client().hgetall(trailing_key)
             else:
                 # 다른 타입이거나 키가 없는 경우
                 logger.warning(f"트레일링 스탑 데이터가 해시 타입이 아닙니다. (key: {trailing_key}, 타입: {key_type})")
@@ -264,7 +258,7 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
         
         if not ts_data or not ts_data.get("active", False):
             # 비활성화된 트레일링 스탑은 삭제
-            await _get_redis_client().delete(trailing_key)
+            await get_redis_client().delete(trailing_key)
             return False
             
         # 기본 정보
@@ -283,19 +277,19 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                 trailing_stop_price = highest_price - trailing_offset
                 
                 # 트레일링 스탑 키 업데이트
-                await _get_redis_client().hset(trailing_key, "highest_price", str(highest_price))
-                await _get_redis_client().hset(trailing_key, "trailing_stop_price", str(trailing_stop_price))
-                await _get_redis_client().hset(trailing_key, "last_updated", str(int(datetime.now().timestamp())))
+                await get_redis_client().hset(trailing_key, "highest_price", str(highest_price))
+                await get_redis_client().hset(trailing_key, "trailing_stop_price", str(trailing_stop_price))
+                await get_redis_client().hset(trailing_key, "last_updated", str(int(datetime.now().timestamp())))
                 
                 # 포지션 키가 존재하면 함께 업데이트
                 position_key = f"user:{okx_uid}:position:{symbol}:{direction}"
-                if await _get_redis_client().exists(position_key):
+                if await get_redis_client().exists(position_key):
                     try:
                         # 키 타입 확인
-                        key_type = await _get_redis_client().type(position_key)
+                        key_type = await get_redis_client().type(position_key)
                         # 해시 타입인지 확인 - 문자열로 변환하여 비교
                         if str(key_type).lower() == 'hash' or str(key_type).lower() == "b'hash'":
-                            await _get_redis_client().hset(position_key, "sl_price", str(trailing_stop_price))
+                            await get_redis_client().hset(position_key, "sl_price", str(trailing_stop_price))
                         else:
                             logger.warning(f"포지션 데이터가 해시 타입이 아니라 SL 가격 업데이트를 건너뜁니다. (key: {position_key})")
                     except Exception as redis_error:
@@ -321,7 +315,7 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                     ))  
                     
                     # 마지막 SL 업데이트 시간 기록
-                    await _get_redis_client().hset(trailing_key, "last_sl_update", str(current_time))
+                    await get_redis_client().hset(trailing_key, "last_sl_update", str(current_time))
                 
                 logger.info(f"트레일링 스탑 업데이트 (롱) - 사용자:{okx_uid}, 심볼:{symbol}, "
                            f"새 최고가:{highest_price:.2f}, 새 스탑:{trailing_stop_price:.2f}")
@@ -365,14 +359,14 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                 await clear_trailing_stop(okx_uid, symbol, direction)
                 
                 # 트레일링 스탑 키에 조건 충족 상태 기록
-                await _get_redis_client().hset(trailing_key, "status", "triggered")
-                await _get_redis_client().hset(trailing_key, "trigger_price", str(current_price))
-                await _get_redis_client().hset(trailing_key, "trigger_time", str(int(datetime.now().timestamp())))
+                await get_redis_client().hset(trailing_key, "status", "triggered")
+                await get_redis_client().hset(trailing_key, "trigger_price", str(current_price))
+                await get_redis_client().hset(trailing_key, "trigger_time", str(int(datetime.now().timestamp())))
                 
                 # 트레일링 스탑 실행 로깅
                 try:
                     position_key = f"user:{okx_uid}:position:{symbol}:{direction}"
-                    position_data = await _get_redis_client().hgetall(position_key)
+                    position_data = await get_redis_client().hgetall(position_key)
                     position_size = float(position_data.get("size", "0")) if position_data else 0
                     
                     log_order(
@@ -405,19 +399,19 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                 trailing_stop_price = lowest_price + trailing_offset
                 
                 # 트레일링 스탑 키 업데이트
-                await _get_redis_client().hset(trailing_key, "lowest_price", str(lowest_price))
-                await _get_redis_client().hset(trailing_key, "trailing_stop_price", str(trailing_stop_price))
-                await _get_redis_client().hset(trailing_key, "last_updated", str(int(datetime.now().timestamp())))
+                await get_redis_client().hset(trailing_key, "lowest_price", str(lowest_price))
+                await get_redis_client().hset(trailing_key, "trailing_stop_price", str(trailing_stop_price))
+                await get_redis_client().hset(trailing_key, "last_updated", str(int(datetime.now().timestamp())))
                 
                 # 포지션 키가 존재하면 함께 업데이트
                 position_key = f"user:{okx_uid}:position:{symbol}:{direction}"
-                if await _get_redis_client().exists(position_key):
+                if await get_redis_client().exists(position_key):
                     try:
                         # 키 타입 확인
-                        key_type = await _get_redis_client().type(position_key)
+                        key_type = await get_redis_client().type(position_key)
                         # 해시 타입인지 확인 - 문자열로 변환하여 비교
                         if str(key_type).lower() == 'hash' or str(key_type).lower() == "b'hash'":
-                            await _get_redis_client().hset(position_key, "sl_price", str(trailing_stop_price))
+                            await get_redis_client().hset(position_key, "sl_price", str(trailing_stop_price))
                         else:
                             logger.warning(f"포지션 데이터가 해시 타입이 아니라 SL 가격 업데이트를 건너뜁니다. (key: {position_key})")
                     except Exception as redis_error:
@@ -443,7 +437,7 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                     ))
                     
                     # 마지막 SL 업데이트 시간 기록
-                    await _get_redis_client().hset(trailing_key, "last_sl_update", str(current_time))
+                    await get_redis_client().hset(trailing_key, "last_sl_update", str(current_time))
                 
                 logger.info(f"트레일링 스탑 업데이트 (숏) - 사용자:{user_id}, 심볼:{symbol}, "
                            f"새 최저가:{lowest_price:.2f}, 새 스탑:{trailing_stop_price:.2f}")
@@ -488,14 +482,14 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                 asyncio.create_task(clear_trailing_stop(user_id, symbol, direction))
                 
                 # 트레일링 스탑 키에 조건 충족 상태 기록
-                await _get_redis_client().hset(trailing_key, "status", "triggered")
-                await _get_redis_client().hset(trailing_key, "trigger_price", str(current_price))
-                await _get_redis_client().hset(trailing_key, "trigger_time", str(int(datetime.now().timestamp())))
+                await get_redis_client().hset(trailing_key, "status", "triggered")
+                await get_redis_client().hset(trailing_key, "trigger_price", str(current_price))
+                await get_redis_client().hset(trailing_key, "trigger_time", str(int(datetime.now().timestamp())))
                 
                 # 트레일링 스탑 실행 로깅
                 try:
                     position_key = f"user:{user_id}:position:{symbol}:{direction}"
-                    position_data = await _get_redis_client().hgetall(position_key)
+                    position_data = await get_redis_client().hgetall(position_key)
                     position_size = float(position_data.get("size", "0")) if position_data else 0
                     
                     log_order(
@@ -534,13 +528,13 @@ async def clear_trailing_stop(user_id: str, symbol: str, direction: str):
     try:
         # 트레일링 스탑 키 삭제
         trailing_key = f"trailing:user:{user_id}:{symbol}:{direction}"
-        await _get_redis_client().delete(trailing_key)
+        await get_redis_client().delete(trailing_key)
         
         # 포지션 키가 있으면 트레일링 스탑 관련 필드도 리셋
         position_key = f"user:{user_id}:position:{symbol}:{direction}"
-        if await _get_redis_client().exists(position_key):
-            await _get_redis_client().hset(position_key, "trailing_stop_active", "false")
-            await _get_redis_client().hdel(position_key, "trailing_stop_key")
+        if await get_redis_client().exists(position_key):
+            await get_redis_client().hset(position_key, "trailing_stop_active", "false")
+            await get_redis_client().hdel(position_key, "trailing_stop_key")
             
         logger.info(f"트레일링 스탑 데이터 삭제 완료: {trailing_key}")
         return True
@@ -553,10 +547,10 @@ async def clear_trailing_stop(user_id: str, symbol: str, direction: str):
 async def get_active_trailing_stops() -> List[Dict]:
 
     try:
-        trailing_keys = await _get_redis_client().keys("trailing:user:*")
+        trailing_keys = await get_redis_client().keys("trailing:user:*")
         trailing_stops = []
         for key in trailing_keys:
-            data = await _get_redis_client().hgetall(key)
+            data = await get_redis_client().hgetall(key)
             if data and data.get("active", "false").lower() == "true":
                 # key 구조: trailing:user:{user_id}:{symbol}:{direction}
                 parts = key.split(":")

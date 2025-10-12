@@ -1,17 +1,20 @@
 #src.api.dependencies.py
 
-from fastapi import  HTTPException
-from typing import Optional
-import ccxt.async_support as ccxt
-import time
-from datetime import timedelta
-from contextlib  import asynccontextmanager
-import logging
 import asyncio
+import logging
+import time
+from contextlib import asynccontextmanager
+from datetime import timedelta
+from typing import Optional
+
+import ccxt.async_support as ccxt
+from fastapi import HTTPException
+
+from shared.database.redis_helper import get_redis_client
 
 # Prometheus metrics
 try:
-    from prometheus_client import Counter, Histogram, Gauge
+    from prometheus_client import Counter, Gauge, Histogram
     pool_metrics = {
         'client_created': Counter(
             'exchange_client_created_total',
@@ -48,16 +51,17 @@ except ImportError:
 logger =  logging.getLogger(__name__)
 
 # Dynamic redis_client access - import at runtime, not at module load time
-def _get_redis_client():
+def get_redis_client():
     """Get redis_client lazily to avoid initialization order issues"""
-    from HYPERRSI.src.core.database import get_redis_binary_client
     import asyncio
+
+    from HYPERRSI.src.core.database import get_redis_binary_client
     loop = asyncio.get_event_loop()
     return loop.run_until_complete(get_redis_binary_client())
 
 class ExchangeConnectionPool:
     def __init__(self, redis_client=None, max_size=10, max_age=3600):  # max_age는 초 단위
-        self.redis = redis_client if redis_client is not None else _get_redis_client()
+        self.redis = redis_client if redis_client is not None else get_redis_client()
         self.max_size = max_size
         self.max_age = max_age
         self.pools = {}
@@ -250,7 +254,7 @@ async def get_user_api_keys(user_id: str) -> dict:
     try:
         #logger.info(f"Redis에서 키 조회 시작: {key}")
         redis_client = await get_redis_binary_client()
-        api_keys = await _get_redis_client().hgetall(key)
+        api_keys = await get_redis_client().hgetall(key)
         #logger.info(f"Redis 원본 응답: {api_keys}, 타입: {type(api_keys)}")
         
         if not api_keys:

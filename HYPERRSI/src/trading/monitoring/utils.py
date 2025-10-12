@@ -8,43 +8,40 @@ HYPERRSI 모니터링 유틸리티 함수
 """
 
 import time
-from shared.logging import get_logger
 
+from shared.config.constants import (
+    API_RATE_LIMIT,
+    CONNECTION_TIMEOUT,
+    LOG_INTERVAL_SECONDS,
+    MAX_MEMORY_MB,
+    MAX_RESTART_ATTEMPTS,
+    MEMORY_CLEANUP_INTERVAL,
+    MESSAGE_PROCESSING_FLAG,
+    MESSAGE_QUEUE_KEY,
+    MONITOR_INTERVAL,
+    ORDER_CHECK_INTERVAL,
+    ORDER_STATUS_CACHE_TTL,
+    SUPPORTED_SYMBOLS,
+)
+from shared.database.redis_helper import get_redis_client
+from shared.logging import get_logger
 
 # shared 모듈에서 공통 유틸리티 import 및 re-export
 from shared.utils import (
-    is_true_value,
-    get_actual_order_type,
     convert_to_trading_symbol,
-)
-from shared.config.constants import (
-    SUPPORTED_SYMBOLS,
-    MESSAGE_QUEUE_KEY,
-    MESSAGE_PROCESSING_FLAG,
-    MONITOR_INTERVAL,
-    ORDER_CHECK_INTERVAL,
-    MAX_RESTART_ATTEMPTS,
-    MAX_MEMORY_MB,
-    MEMORY_CLEANUP_INTERVAL,
-    CONNECTION_TIMEOUT,
-    API_RATE_LIMIT,
-    ORDER_STATUS_CACHE_TTL,
-    LOG_INTERVAL_SECONDS
+    get_actual_order_type,
+    is_true_value,
 )
 
 logger = get_logger(__name__)
 
 # Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
 
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 
 # ============================================================================

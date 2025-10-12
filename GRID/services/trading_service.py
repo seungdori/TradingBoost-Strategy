@@ -8,18 +8,17 @@ New code should use TradingAccessService from trading_service_new.py
 """
 
 import json
-from typing import List, cast
 from pathlib import Path
-
-from shared.logging import get_logger
-from shared.errors import DatabaseException, ConfigurationException, ValidationException
+from typing import List, cast
 
 from GRID.dtos.symbol import AccessListDto
-from shared.utils import path_helper
 from GRID.repositories.symbol_repository import (
     get_ban_list_from_db,
     get_white_list_from_db,
 )
+from shared.errors import ConfigurationException, DatabaseException, ValidationException
+from shared.logging import get_logger
+from shared.utils import path_helper
 
 logger = get_logger(__name__)
 

@@ -8,18 +8,18 @@ Demonstrates:
 - Structured logging
 """
 
-from fastapi import APIRouter, Depends, Query, Path, Body
-from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 
-from shared.database.session import get_db
-from shared.dtos.response import ResponseDto
-from shared.errors import ValidationException, DatabaseException
-from shared.logging import get_logger
-from shared.validation import sanitize_symbol
+from fastapi import APIRouter, Body, Depends, Path, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from GRID.dtos.symbol import AccessListDto
 from GRID.services.trading_service_new import TradingAccessService
+from shared.database.session import get_db
+from shared.dtos.response import ResponseDto
+from shared.errors import DatabaseException, ValidationException
+from shared.logging import get_logger
+from shared.validation import sanitize_symbol
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/trading", tags=["trading"])

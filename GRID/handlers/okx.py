@@ -6,11 +6,12 @@ import asyncio
 import json
 import random
 from typing import Optional
+
 from redis.asyncio import Redis
 
-from shared.exchange.okx.client import OKXClient
-from shared.exchange.helpers.position_helper import process_position_data
 from shared.exchange.helpers.cache_helper import get_cached_data
+from shared.exchange.helpers.position_helper import process_position_data
+from shared.exchange.okx.client import OKXClient
 
 
 async def handle_okx(

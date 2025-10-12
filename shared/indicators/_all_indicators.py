@@ -2,12 +2,14 @@
 Compute all indicators at once
 """
 import math
+
 import numpy as np
-from ._core import dynamic_round, crossover, crossunder
-from ._moving_averages import calc_sma, calc_jma, calc_t3, calc_vidya
-from ._rsi import calc_rsi
+
 from ._atr import calc_atr
 from ._bollinger import calc_bollinger_bands, calc_stddev
+from ._core import crossover, crossunder, dynamic_round
+from ._moving_averages import calc_jma, calc_sma, calc_t3, calc_vidya
+from ._rsi import calc_rsi
 from ._trend import rational_quadratic
 
 

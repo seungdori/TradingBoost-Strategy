@@ -3,27 +3,31 @@ Stop Loss Service
 
 스탑로스 주문 관리 관련 비즈니스 로직
 """
-from typing import Optional, Dict, Any
 import json
+from typing import Any, Dict, Optional
+
 import ccxt.async_support as ccxt
 from fastapi import HTTPException
 
 from HYPERRSI.src.api.exchange.models import OrderResponse
-from shared.logging import get_logger
-from HYPERRSI.src.core.logger import error_logger
-from shared.utils.type_converters import safe_float
-from ..parsers import parse_algo_order_to_order_response
-from ..validators import validate_symbol_format, validate_stop_loss_params
-from ..calculators import calculate_stop_loss_distance
-from ..error_messages import (
+from HYPERRSI.src.api.routes.order.calculators import calculate_stop_loss_distance
+from HYPERRSI.src.api.routes.order.error_messages import (
     INVALID_SYMBOL_FORMAT,
+    REDIS_DELETE_FAILED,
+    REDIS_QUERY_FAILED,
+    REDIS_SAVE_FAILED,
     STOP_LOSS_CREATE_FAILED,
     STOP_LOSS_NO_RESPONSE_DATA,
-    REDIS_SAVE_FAILED,
-    REDIS_QUERY_FAILED,
-    REDIS_DELETE_FAILED
 )
-from .base_service import BaseService
+from HYPERRSI.src.api.routes.order.parsers import parse_algo_order_to_order_response
+from HYPERRSI.src.api.routes.order.services.base_service import BaseService
+from HYPERRSI.src.api.routes.order.validators import (
+    validate_stop_loss_params,
+    validate_symbol_format,
+)
+from HYPERRSI.src.core.logger import error_logger
+from shared.logging import get_logger
+from shared.utils.type_converters import safe_float
 
 logger = get_logger(__name__)
 

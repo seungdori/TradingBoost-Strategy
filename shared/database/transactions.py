@@ -9,14 +9,16 @@ Provides explicit transaction boundaries with:
 - Structured logging
 """
 
-from contextlib import asynccontextmanager
-from typing import AsyncGenerator, TypeVar, Callable, Any
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import DBAPIError
-from sqlalchemy import text
-from shared.logging import get_logger
-from shared.errors.exceptions import DatabaseException
 import asyncio
+from contextlib import asynccontextmanager
+from typing import Any, AsyncGenerator, Callable, TypeVar
+
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from shared.errors.exceptions import DatabaseException
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

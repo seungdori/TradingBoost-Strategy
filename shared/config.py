@@ -1,9 +1,10 @@
 """Shared configuration for TradingBoost-Strategy projects"""
 
-from pydantic_settings import BaseSettings
-from functools import lru_cache
-from dotenv import load_dotenv
 import os
+from functools import lru_cache
+
+from dotenv import load_dotenv
+from pydantic_settings import BaseSettings
 
 # Load .env from project root
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

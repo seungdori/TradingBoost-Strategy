@@ -3,8 +3,9 @@ Order API Pydantic Models
 
 주문 관련 요청/응답 모델 정의
 """
-from pydantic import BaseModel
 from typing import Optional
+
+from pydantic import BaseModel
 
 
 class ClosePositionRequest(BaseModel):

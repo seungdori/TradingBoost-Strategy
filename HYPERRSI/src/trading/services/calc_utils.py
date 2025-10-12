@@ -4,34 +4,25 @@ Calculation Utilities - Migrated to New Infrastructure
 Trading calculation utilities with structured logging and exception handling.
 """
 
-from decimal import Decimal, ROUND_HALF_UP, ROUND_DOWN
-from typing import Optional
 import json
+from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
+from typing import Optional
 
 import ccxt.async_support as ccxt
 
-from shared.utils import safe_float, convert_symbol_to_okx_instrument
-from shared.logging import get_logger
-from shared.errors import DatabaseException, ValidationException
-
-
 from HYPERRSI.src.trading.models import tf_mapping
+from shared.database.redis_helper import get_redis_client
+from shared.errors import DatabaseException, ValidationException
+from shared.logging import get_logger
+from shared.utils import convert_symbol_to_okx_instrument, safe_float
 
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 
 
@@ -76,7 +67,7 @@ async def get_contract_size(symbol: str) -> float:
             extra={"symbol": symbol}
         )
 
-        spec_key = await _get_redis_client().get(f"symbol_info:contract_specifications")
+        spec_key = await get_redis_client().get(f"symbol_info:contract_specifications")
 
         if not spec_key:
             logger.warning(
@@ -119,7 +110,7 @@ async def round_to_qty(size: float, symbol: str) -> float:
     기본적으로, size에는 contract amount가 들어오고, 이걸 주문에 맞게 반올림하는 함수.
     """
     try:
-        spec_json = await _get_redis_client().get("symbol_info:contract_specifications")
+        spec_json = await get_redis_client().get("symbol_info:contract_specifications")
         if not spec_json:
             return max(0.01, size)
 
@@ -166,7 +157,7 @@ async def get_tick_size_from_redis(symbol: str) -> Optional[float]:
     }
     """
     try:
-        spec_json = await _get_redis_client().get("symbol_info:contract_specifications")
+        spec_json = await get_redis_client().get("symbol_info:contract_specifications")
         if spec_json:
             specs = json.loads(spec_json)
             spec = specs.get(symbol)
@@ -186,7 +177,7 @@ async def get_minimum_qty(symbol: str) -> float:
     Redis에 저장된 contract_specifications에서 해당 심볼의 최소 주문 수량을 반환합니다.
     """
     try:
-        spec_json = await _get_redis_client().get("symbol_info:contract_specifications")
+        spec_json = await get_redis_client().get("symbol_info:contract_specifications")
         if not spec_json:
             logger.error(f"Contract specification not found for symbol: {symbol}")
             return 0.1

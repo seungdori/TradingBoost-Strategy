@@ -1,41 +1,66 @@
 # services/trading_service.py
 
-import json
-from datetime import datetime, timedelta
-import logging
-import pytz  # type: ignore[import-untyped]
-from HYPERRSI.src.trading.cancel_trigger_okx import TriggerCancelClient
-from numpy import minimum
-from HYPERRSI.src.trading.models import Position, OrderStatus, order_type_mapping, UpdateStopLossRequest
-from fastapi import HTTPException
-from typing import Any, Dict, Optional, List, Tuple, AsyncGenerator
-from HYPERRSI.src.api.routes.order import cancel_algo_orders, update_stop_loss_order  # type: ignore[attr-defined]
-from HYPERRSI.src.trading.stats import record_trade_history_entry, update_trade_history_exit
-import pandas as pd
-import traceback
-import httpx
-from HYPERRSI.telegram_message import send_telegram_message
-from HYPERRSI.src.trading.error_message import map_exchange_error
-from shared.logging import get_logger
 import asyncio
 import contextlib
+import json
+import logging
 import time
+import traceback
+from datetime import datetime, timedelta
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+
 import ccxt.async_support as ccxt
+import httpx
+import pandas as pd
+import pytz  # type: ignore[import-untyped]
+from fastapi import HTTPException
+from numpy import minimum
+
+from HYPERRSI.src.api.dependencies import get_exchange_client as get_okx_client
+from HYPERRSI.src.api.dependencies import get_exchange_context
+from HYPERRSI.src.api.routes.order import (  # type: ignore[attr-defined]
+    cancel_algo_orders,
+    update_stop_loss_order,
+)
+
 # Redis, OKX client 등 (실제 경로/모듈명은 프로젝트에 맞게 조정)
 from HYPERRSI.src.core.database import TradingCache
-from HYPERRSI.src.api.dependencies import get_exchange_client as get_okx_client, get_exchange_context
-
-from shared.utils import round_to_tick_size, safe_float, convert_symbol_to_okx_instrument, get_tick_size_from_redis, get_minimum_qty, round_to_qty, get_contract_size as get_contract_size_from_module, convert_bool_to_string, convert_bool_to_int
-from HYPERRSI.src.trading.services.get_current_price import get_current_price
-from HYPERRSI.src.trading.services.order_utils import get_order_info as get_order_info_from_module, try_send_order, InsufficientMarginError
+from HYPERRSI.src.trading.cancel_trigger_okx import TriggerCancelClient
+from HYPERRSI.src.trading.error_message import map_exchange_error
+from HYPERRSI.src.trading.models import (
+    OrderStatus,
+    Position,
+    UpdateStopLossRequest,
+    order_type_mapping,
+)
 
 # Import all module classes
 from HYPERRSI.src.trading.modules.market_data_service import MarketDataService
-from HYPERRSI.src.trading.modules.tp_sl_calculator import TPSLCalculator
 from HYPERRSI.src.trading.modules.okx_position_fetcher import OKXPositionFetcher
 from HYPERRSI.src.trading.modules.order_manager import OrderManager
-from HYPERRSI.src.trading.modules.tp_sl_order_creator import TPSLOrderCreator
 from HYPERRSI.src.trading.modules.position_manager import PositionManager
+from HYPERRSI.src.trading.modules.tp_sl_calculator import TPSLCalculator
+from HYPERRSI.src.trading.modules.tp_sl_order_creator import TPSLOrderCreator
+from HYPERRSI.src.trading.services.get_current_price import get_current_price
+from HYPERRSI.src.trading.services.order_utils import InsufficientMarginError
+from HYPERRSI.src.trading.services.order_utils import get_order_info as get_order_info_from_module
+from HYPERRSI.src.trading.services.order_utils import try_send_order
+from HYPERRSI.src.trading.stats import record_trade_history_entry, update_trade_history_exit
+from HYPERRSI.telegram_message import send_telegram_message
+from shared.logging import get_logger
+from shared.utils import (
+    convert_bool_to_int,
+    convert_bool_to_string,
+    convert_symbol_to_okx_instrument,
+)
+from shared.utils import get_contract_size as get_contract_size_from_module
+from shared.utils import (
+    get_minimum_qty,
+    get_tick_size_from_redis,
+    round_to_qty,
+    round_to_tick_size,
+    safe_float,
+)
 
 # Initialize logger before using it
 logger = get_logger(__name__)

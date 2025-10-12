@@ -3,8 +3,8 @@ Position Calculation Helpers
 
 포지션 관련 계산 유틸리티 함수들
 """
-from typing import Optional
 from decimal import Decimal
+from typing import Optional
 
 
 def calculate_position_value(amount: float, price: float) -> Decimal:

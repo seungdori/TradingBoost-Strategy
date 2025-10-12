@@ -1,24 +1,25 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 # src/data_collector/polling_data_collector.py
-import sys
 import os
+import sys
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+import asyncio
 import json
 import logging
-import time
-from datetime import datetime, UTC
 import threading
-import asyncio
+import time
+from datetime import UTC, datetime
 
 import ccxt
 import pytz
 import redis
 
-from HYPERRSI.src.core.config import settings
-from shared.logging import get_logger
-from shared.indicators import compute_all_indicators
 from HYPERRSI.src.config import get_settings
+from HYPERRSI.src.core.config import settings
+from shared.indicators import compute_all_indicators
+from shared.logging import get_logger
 
 # 로깅 설정
 logger = get_logger(__name__)
@@ -96,7 +97,8 @@ shutdown_event = threading.Event()
 last_candle_timestamps = {}
 last_check_times = {}
 
-from shared.utils.time_helpers import calculate_update_interval, align_timestamp, is_bar_end
+from shared.utils.time_helpers import align_timestamp, calculate_update_interval, is_bar_end
+
 
 def fetch_latest_candles(symbol, timeframe, limit=POLLING_CANDLES, include_current=False):
     """최신 캔들 데이터 가져오기"""

@@ -1,12 +1,17 @@
 
-import redis.asyncio as aioredis
 import json
 import os
 import traceback
+
+import redis.asyncio as aioredis
+
 from shared.config import settings
+
 REDIS_PASSWORD = settings.REDIS_PASSWORD
 import asyncio
+
 from GRID.strategies import strategy
+
 
 async def get_redis_connection():
     if REDIS_PASSWORD:

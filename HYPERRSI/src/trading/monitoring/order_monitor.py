@@ -9,33 +9,35 @@ import json
 import time
 import traceback
 from datetime import datetime
-from typing import Dict, List, Optional, Any
-from shared.logging import get_logger, log_order
+from typing import Any, Dict, List, Optional
 
 from HYPERRSI.src.api.dependencies import get_exchange_context
-from HYPERRSI.src.api.routes.order.order import get_order_detail, get_algo_order_info, close_position
 from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
+from HYPERRSI.src.api.routes.order.order import (
+    close_position,
+    get_algo_order_info,
+    get_order_detail,
+)
+from shared.database.redis_helper import get_redis_client
+from shared.logging import get_logger, log_order
 from shared.utils import contracts_to_qty
-from .telegram_service import get_identifier, send_telegram_message
-from .utils import order_status_cache, ORDER_STATUS_CACHE_TTL, get_actual_order_type, is_true_value
-from .position_validator import check_position_exists, verify_and_handle_position_closure, check_and_cleanup_orders
+
 from .break_even_handler import move_sl_to_break_even
+from .position_validator import (
+    check_and_cleanup_orders,
+    check_position_exists,
+    verify_and_handle_position_closure,
+)
+from .telegram_service import get_identifier, send_telegram_message
+from .utils import ORDER_STATUS_CACHE_TTL, get_actual_order_type, is_true_value, order_status_cache
 
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 
 
@@ -56,7 +58,7 @@ async def check_missing_orders(user_id: str, symbol: str, current_orders: List) 
         
         # 이전에 저장된 주문 ID 목록 조회
         prev_orders_key = f"prev_orders:{user_id}:{symbol}"
-        prev_order_ids_str = await _get_redis_client().get(prev_orders_key)
+        prev_order_ids_str = await get_redis_client().get(prev_orders_key)
         
         if prev_order_ids_str:
             prev_order_ids = set(json.loads(prev_order_ids_str))
@@ -73,7 +75,7 @@ async def check_missing_orders(user_id: str, symbol: str, current_orders: List) 
                         # 완료된 주문 저장소에서 먼저 확인
                         okx_uid = await get_identifier(str(user_id))
                         completed_key = f"completed:user:{okx_uid}:{symbol}:order:{order_id}"
-                        completed_data = await _get_redis_client().hgetall(completed_key)
+                        completed_data = await get_redis_client().hgetall(completed_key)
                         
                         if completed_data:
                             # 이미 완료 저장소에 있으면 알림 이미 전송됨
@@ -130,7 +132,7 @@ async def check_missing_orders(user_id: str, symbol: str, current_orders: List) 
         # 현재 주문 ID 목록 저장 (다음 비교용)
         try:
             current_order_ids_str = json.dumps(list(current_order_ids))
-            await _get_redis_client().set(prev_orders_key, current_order_ids_str, ex=3600)  # 1시간 TTL
+            await get_redis_client().set(prev_orders_key, current_order_ids_str, ex=3600)  # 1시간 TTL
         except Exception as save_error:
             logger.error(f"주문 ID 목록 저장 중 오류: {str(save_error)}")
         
@@ -171,7 +173,7 @@ async def check_recent_filled_orders(user_id: str, symbol: str) -> None:
                 
                 # 완료된 주문 저장소에서 확인
                 completed_key = f"completed:user:{okx_uid}:{symbol}:order:{order_id}"
-                completed_data = await _get_redis_client().hgetall(completed_key)
+                completed_data = await get_redis_client().hgetall(completed_key)
                 
                 if not completed_data:
                     # 완료 저장소에 없다면 놓친 주문일 가능성
@@ -440,11 +442,11 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
         okx_uid = await get_identifier(str(user_id))
         
         monitor_key = f"monitor:user:{okx_uid}:{symbol}:order:{order_id}"
-        order_data = await _get_redis_client().hgetall(monitor_key)
+        order_data = await get_redis_client().hgetall(monitor_key)
         
         if not order_data:
             logger.warning(f"주문 데이터를 찾을 수 없음: {monitor_key}")
-            await _get_redis_client().delete(monitor_key)
+            await get_redis_client().delete(monitor_key)
             return
         
         # 이미 같은 상태면 업데이트 및 알림 건너뛰기
@@ -482,7 +484,7 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
             if position_side:
                 try:
                     position_key = f"user:{okx_uid}:position:{symbol}:{position_side}"
-                    position_data = await _get_redis_client().hgetall(position_key)
+                    position_data = await get_redis_client().hgetall(position_key)
                     
                     # 포지션 정보가 있으면 주요 데이터 추가
                     if position_data:
@@ -521,10 +523,10 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                     logger.warning(f"포지션 정보 조회 중 오류 발생: {str(e)}")
             
             # completed 키에 데이터 저장
-            await _get_redis_client().hset(completed_key, mapping=updated_order_data)
+            await get_redis_client().hset(completed_key, mapping=updated_order_data)
             
             # 2주일(14일) TTL 설정
-            await _get_redis_client().expire(completed_key, 60 * 60 * 24 * 14)  # 14일 = 1,209,600초
+            await get_redis_client().expire(completed_key, 60 * 60 * 24 * 14)  # 14일 = 1,209,600초
             
             # 기존 모니터링 키 삭제 전 마지막 확인
             logger.info(f"주문 {order_id} 삭제 전 최종 상태 확인")
@@ -564,7 +566,7 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                                 
                                 # 포지션 정보에서 TP 가격들 가져오기
                                 position_key = f"user:{okx_uid}:position:{symbol}:{position_side}"
-                                position_data = await _get_redis_client().hgetall(position_key)
+                                position_data = await get_redis_client().hgetall(position_key)
                                 
                                 if position_data:
                                     tp1_price = float(position_data.get("tp1_price", "0"))
@@ -636,12 +638,12 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                 logger.error(f"삭제 직전 최종 확인 중 오류: {order_id}, {str(final_check_error)}")
             
             # 기존 모니터링 키 삭제
-            await _get_redis_client().delete(monitor_key)
+            await get_redis_client().delete(monitor_key)
             
             logger.info(f"주문 {order_id}를 모니터링에서 제거하고 완료 저장소로 이동 (TTL: 14일)")
         else:
             # 진행 중인 주문은 모니터링 키 업데이트
-            await _get_redis_client().hset(monitor_key, mapping=update_data)
+            await get_redis_client().hset(monitor_key, mapping=update_data)
             
         logger.info(f"주문 상태 업데이트 완료: {order_id}, 상태: {status}")
         
@@ -654,7 +656,7 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
             
             # PnL 계산을 위한 추가 정보 가져오기
             position_key = f"user:{okx_uid}:position:{symbol}:{position_side}"
-            position_data = await _get_redis_client().hgetall(position_key)
+            position_data = await get_redis_client().hgetall(position_key)
             position_qty = f"{float(position_data.get('position_qty', '0')):.4f}"
             is_hedge = is_true_value(position_data.get("is_hedge", "false"))
 
@@ -771,7 +773,7 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                     asyncio.create_task(verify_and_handle_position_closure(okx_uid, symbol, position_side, "breakeven"))
                 
                 break_even_key = f"break_even:notification:user:{okx_uid}:{symbol}:{position_side}"
-                last_notification_time = await _get_redis_client().get(break_even_key)
+                last_notification_time = await get_redis_client().get(break_even_key)
                 
                 if last_notification_time:
                     # 마지막 알림 시간과 현재 시간의 차이 계산 (초 단위)
@@ -781,8 +783,8 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                         should_send_message = False
                 
                 # 현재 시간 저장 (중복 알림 방지용)
-                await _get_redis_client().set(break_even_key, str(int(now.timestamp())))
-                await _get_redis_client().expire(break_even_key, 300)  # 5분 TTL 설정
+                await get_redis_client().set(break_even_key, str(int(now.timestamp())))
+                await get_redis_client().expire(break_even_key, 300)  # 5분 TTL 설정
             
             # TP 체결 알림 순서 관리 로직 (개선된 버전)
             logger.debug(f"TP 큐 처리 확인 - order_type: '{order_type}', startswith_tp: {order_type.startswith('tp') if order_type else False}")
@@ -836,21 +838,21 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                 }
                 
                 # 대기열 추가
-                await _get_redis_client().hset(tp_queue_key, str(tp_level), json.dumps(tp_queue_data))
-                await _get_redis_client().expire(tp_queue_key, 300)  # 5분 TTL
+                await get_redis_client().hset(tp_queue_key, str(tp_level), json.dumps(tp_queue_data))
+                await get_redis_client().expire(tp_queue_key, 300)  # 5분 TTL
                 
                 # TP1의 경우 즉시 알림 전송 (순서 관계없이)
                 if tp_level == 1 and status == "filled":
                     logger.info(f"TP1 체결 감지 - 즉시 알림 전송")
                     await send_telegram_message(message, okx_uid=okx_uid)
                     tp_queue_data["processed"] = True
-                    await _get_redis_client().hset(tp_queue_key, str(tp_level), json.dumps(tp_queue_data))
+                    await get_redis_client().hset(tp_queue_key, str(tp_level), json.dumps(tp_queue_data))
                     should_send_message = False
                     
                     # TP1 체결 후 브레이크이븐 로직 처리
                     try:
                         position_key = f"user:{okx_uid}:position:{symbol}:{position_side}"
-                        position_data = await _get_redis_client().hgetall(position_key)
+                        position_data = await get_redis_client().hgetall(position_key)
                         
                         if position_data:
                             use_break_even_tp1 = is_true_value(position_data.get("use_break_even_tp1", "false"))
@@ -874,7 +876,7 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                 
                 # Redis에서 현재 완료된 모든 TP 확인
                 completed_tps = []
-                all_tp_data = await _get_redis_client().hgetall(tp_queue_key)
+                all_tp_data = await get_redis_client().hgetall(tp_queue_key)
                 for tp_str, data_str in all_tp_data.items():
                     if tp_str.isdigit():
                         completed_tps.append(int(tp_str))
@@ -908,25 +910,25 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                     
                     # 처리 완료 표시
                     tp_queue_data["processed"] = True
-                    await _get_redis_client().hset(tp_queue_key, str(tp_level), json.dumps(tp_queue_data))
+                    await get_redis_client().hset(tp_queue_key, str(tp_level), json.dumps(tp_queue_data))
                     
                     # 누락된 이전 TP들도 확인하고 알림 전송
                     for i in range(1, tp_level):
                         if i not in processable_tps and i in completed_tps:
-                            tp_data_str = await _get_redis_client().hget(tp_queue_key, str(i))
+                            tp_data_str = await get_redis_client().hget(tp_queue_key, str(i))
                             if tp_data_str:
                                 tp_data = json.loads(tp_data_str)
                                 if not tp_data.get("processed", False):
                                     logger.warning(f"누락된 TP{i} 발견, 알림 전송")
                                     await send_telegram_message(tp_data["message"], okx_uid=okx_uid)
                                     tp_data["processed"] = True
-                                    await _get_redis_client().hset(tp_queue_key, str(i), json.dumps(tp_data))
+                                    await get_redis_client().hset(tp_queue_key, str(i), json.dumps(tp_data))
                 
                 # 처리 가능한 TP들을 순서대로 알림 전송
                 should_send_message = False
                 logger.info(f"처리 가능한 TP 개수: {len(processable_tps)}, 현재 TP: {tp_level}")
                 for tp_num in processable_tps:
-                    tp_data_str = await _get_redis_client().hget(tp_queue_key, str(tp_num))
+                    tp_data_str = await get_redis_client().hget(tp_queue_key, str(tp_num))
                     if tp_data_str:
                         tp_data = json.loads(tp_data_str)
                         if not tp_data.get("processed", False):
@@ -941,7 +943,7 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                             
                             # 처리 완료 표시
                             tp_data["processed"] = True
-                            await _get_redis_client().hset(tp_queue_key, str(tp_num), json.dumps(tp_data))
+                            await get_redis_client().hset(tp_queue_key, str(tp_num), json.dumps(tp_data))
                             
                             # 현재 처리 중인 TP면 should_send_message를 False로 설정
                             if tp_num == tp_level:
@@ -1019,7 +1021,7 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
             if order_type and order_type.startswith("tp") and status == "filled":
                 tp_level_str_update = order_type[2:] if len(order_type) > 2 else "1"
                 if tp_level_str_update.isdigit() and int(tp_level_str_update) > 0:
-                    await _get_redis_client().hset(position_key, "tp_state", tp_level_str_update)
+                    await get_redis_client().hset(position_key, "tp_state", tp_level_str_update)
                     logger.info(f"tp_state 업데이트: {user_id} {symbol} TP{tp_level_str_update} 체결됨")
             
     

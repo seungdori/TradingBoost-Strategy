@@ -2,41 +2,26 @@
 
 import asyncio
 import datetime
-import traceback
 import json
-from typing import Optional, Dict, Any
-import ccxt.async_support as ccxt
-from shared.logging import get_logger, log_bot_error
+import traceback
+from decimal import ROUND_DOWN, Decimal
+from typing import Any, Dict, Optional
 
-from HYPERRSI.src.trading.models import OrderStatus
-from HYPERRSI.src.trading.error_message import map_exchange_error
-from shared.utils import safe_float, round_to_qty, convert_symbol_to_okx_instrument
-from HYPERRSI.src.trading.cancel_trigger_okx import TriggerCancelClient
-from HYPERRSI.src.api.dependencies import get_user_api_keys
-from HYPERRSI.src.bot.telegram_message import send_telegram_message
+import ccxt.async_support as ccxt
 import httpx
-from HYPERRSI.src.trading.models import order_type_mapping
-from HYPERRSI.src.trading.services.get_current_price import get_current_price
+
+from HYPERRSI.src.api.dependencies import get_exchange_context, get_user_api_keys
+from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.config import API_BASE_URL
-from HYPERRSI.src.api.dependencies import get_exchange_context
-from decimal import Decimal, ROUND_DOWN
+from HYPERRSI.src.trading.cancel_trigger_okx import TriggerCancelClient
+from HYPERRSI.src.trading.error_message import map_exchange_error
+from HYPERRSI.src.trading.models import OrderStatus, order_type_mapping
+from HYPERRSI.src.trading.services.get_current_price import get_current_price
+from shared.database.redis_helper import get_redis_client
+from shared.logging import get_logger, log_bot_error
+from shared.utils import convert_symbol_to_okx_instrument, round_to_qty, safe_float
 
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client() -> Any:
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
-
-
-# Module-level attribute for backward compatibility
-def __getattr__(name: str) -> Any:
-    if name == "redis_client":
-        return _get_redis_client()
-    raise AttributeError(f"module has no attribute {name}")
 
 # 특별한 예외 클래스 추가
 class InsufficientMarginError(Exception):
@@ -234,7 +219,7 @@ async def store_order_in_redis(user_id: str, order_state: OrderStatus) -> None:
     - value: JSON (OrderStatus)
     """
     redis_key: str = f"user:{user_id}:open_orders"
-    existing: Any = await _get_redis_client().get(f"open_orders:{user_id}:{order_state.order_id}")
+    existing: Any = await get_redis_client().get(f"open_orders:{user_id}:{order_state.order_id}")
     if existing:
         return
     order_data: Dict[str, Any] = {
@@ -251,7 +236,7 @@ async def store_order_in_redis(user_id: str, order_state: OrderStatus) -> None:
         "posSide": order_state.posSide
     }
     # 간단히 lpush
-    await _get_redis_client().lpush(redis_key, json.dumps(order_data))
+    await get_redis_client().lpush(redis_key, json.dumps(order_data))
     # 실제 운영 시 "open_orders"에서 상태가 확정된 주문(= filled or canceled 등)은 제거하거나 별도 리스트에 옮기는 식으로 관리
 
 
@@ -268,7 +253,7 @@ async def check_margin_block(user_id: str, symbol: str) -> bool:
         bool: 차단된 경우 True, 아닌 경우 False
     """
     block_key: str = f"margin_block:{user_id}:{symbol}"
-    block_status: Any = await _get_redis_client().get(block_key)
+    block_status: Any = await get_redis_client().get(block_key)
     return block_status is not None
 
 async def set_margin_block(user_id: str, symbol: str, duration_seconds: int = 600) -> None:
@@ -281,7 +266,7 @@ async def set_margin_block(user_id: str, symbol: str, duration_seconds: int = 60
     """
     block_key = f"margin_block:{user_id}:{symbol}"
     block_msg = f"자금 부족으로 인해 {symbol} 거래가 {duration_seconds}초 동안 차단됩니다."
-    await _get_redis_client().set(block_key, "blocked", ex=duration_seconds)
+    await get_redis_client().set(block_key, "blocked", ex=duration_seconds)
     await send_telegram_message(f"🔒 {block_msg}", user_id, debug=True)
     logger.warning(f"[{user_id}] {block_msg}")
 
@@ -296,7 +281,7 @@ async def get_margin_retry_count(user_id: str, symbol: str) -> int:
         int: 현재까지의 재시도 횟수
     """
     retry_key: str = f"margin_retry_count:{user_id}:{symbol}"
-    retry_count: Any = await _get_redis_client().get(retry_key)
+    retry_count: Any = await get_redis_client().get(retry_key)
     return int(retry_count) if retry_count else 0
 
 async def increment_margin_retry_count(user_id: str, symbol: str) -> int:
@@ -311,8 +296,8 @@ async def increment_margin_retry_count(user_id: str, symbol: str) -> int:
     """
     retry_key: str = f"margin_retry_count:{user_id}:{symbol}"
     # 24시간 동안 유지 (필요에 따라 조정 가능)
-    retry_count: int = int(await _get_redis_client().incr(retry_key))
-    await _get_redis_client().expire(retry_key, 86400)  # 24시간 (초)
+    retry_count: int = int(await get_redis_client().incr(retry_key))
+    await get_redis_client().expire(retry_key, 86400)  # 24시간 (초)
     return retry_count
 
 async def reset_margin_retry_count(user_id: str, symbol: str) -> None:
@@ -323,7 +308,7 @@ async def reset_margin_retry_count(user_id: str, symbol: str) -> None:
         symbol (str): 심볼
     """
     retry_key = f"margin_retry_count:{user_id}:{symbol}"
-    await _get_redis_client().delete(retry_key)
+    await get_redis_client().delete(retry_key)
 
 async def try_send_order(
     user_id: str,
@@ -428,7 +413,7 @@ async def try_send_order(
     
     try:
         # 실제 실행
-        specs_json: Any = await _get_redis_client().get("symbol_info:contract_specifications")
+        specs_json: Any = await get_redis_client().get("symbol_info:contract_specifications")
         tick_size: float = 0.001
         current_price: float = 0.0
         
@@ -448,7 +433,7 @@ async def try_send_order(
                     if response.status_code != 200:
                         raise ValueError("계약 사양 정보 조회 실패")
 
-                    specs_json = await _get_redis_client().get(f"symbol_info:contract_specifications")
+                    specs_json = await get_redis_client().get(f"symbol_info:contract_specifications")
                     if not specs_json:
                         raise ValueError(f"계약 사양 정보를 찾을 수 없습니다: {symbol}")
             specs_dict: Dict[str, Any] = json.loads(specs_json) if specs_json else {}

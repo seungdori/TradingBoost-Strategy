@@ -3,27 +3,22 @@
 import asyncio
 import json
 import logging
+
 from celery import shared_task
 
 # src/trading/models에 정의된 Position, PositionState를 그대로 사용
 from HYPERRSI.src.trading.models import Position, PositionState
 from HYPERRSI.src.trading.trading_service import TradingService
+from shared.database.redis_helper import get_redis_client
+
   # 비동기 Redis 클라이언트
 
 logger = logging.getLogger(__name__)
 
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
-
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 
 async def subscribe_order_updates_event(
@@ -46,7 +41,7 @@ async def subscribe_order_updates_event(
     - 주기적으로(짧은 딜레이) 현재 주문 상태도 재확인하여 최종 PositionState를 업데이트합니다.
     """
     channel = f"order_updates:{user_id}:{position.symbol}"
-    pubsub = _get_redis_client().pubsub()
+    pubsub = get_redis_client().pubsub()
     await pubsub.subscribe(channel)
     logger.info(f"Subscribed to channel: {channel}")
     

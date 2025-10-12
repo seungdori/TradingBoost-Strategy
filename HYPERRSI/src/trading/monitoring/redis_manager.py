@@ -10,27 +10,23 @@ import json
 import traceback
 from datetime import datetime, timedelta
 from typing import Dict, List
+
 import psutil
-from shared.logging import get_logger
+
 from HYPERRSI.src.core.database import check_redis_connection, reconnect_redis
+from shared.database.redis_helper import get_redis_client
+from shared.logging import get_logger
+
 from .telegram_service import get_identifier
-from .utils import order_status_cache, ORDER_STATUS_CACHE_TTL, MEMORY_CLEANUP_INTERVAL
+from .utils import MEMORY_CLEANUP_INTERVAL, ORDER_STATUS_CACHE_TTL, order_status_cache
 
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 
 
@@ -52,11 +48,11 @@ async def get_all_running_users() -> List[int]:
                 logger.warning(f"Redis 연결 상태 불량, 재연결 시도 ({retry_count+1}/{max_retry})")
                 await reconnect_redis()
 
-            status_keys = await _get_redis_client().keys("user:*:trading:status")
+            status_keys = await get_redis_client().keys("user:*:trading:status")
             running_users = []
 
             for key in status_keys:
-                status = await _get_redis_client().get(key)
+                status = await get_redis_client().get(key)
                 if status == "running":
                     # key 구조: user:{user_id}:trading:status
                     parts = key.split(":")
@@ -121,15 +117,15 @@ async def perform_memory_cleanup():
             # 2주 이상 지난 완료된 주문 데이터 삭제
             two_weeks_ago = int((datetime.now() - timedelta(days=14)).timestamp())
             pattern = "completed:user:*:order:*"
-            old_order_keys = await _get_redis_client().keys(pattern)
+            old_order_keys = await get_redis_client().keys(pattern)
 
             for key in old_order_keys:
                 try:
-                    order_data = await _get_redis_client().hgetall(key)
+                    order_data = await get_redis_client().hgetall(key)
                     last_updated = int(order_data.get("last_updated_time", "0"))
                     if last_updated < two_weeks_ago:
                         logger.info(f"오래된 완료 주문 데이터 삭제: {key}")
-                        await _get_redis_client().delete(key)
+                        await get_redis_client().delete(key)
                 except Exception as e:
                     logger.error(f"완료 주문 데이터 삭제 중 오류: {str(e)}")
                     continue
@@ -177,18 +173,18 @@ async def get_user_monitor_orders(user_id: str) -> Dict[str, Dict]:
 
         # 사용자 주문 모니터링 키 패턴
         pattern = f"monitor:user:{okx_uid}:*:order:*"
-        order_keys = await _get_redis_client().keys(pattern)
+        order_keys = await get_redis_client().keys(pattern)
 
         orders = {}
         for key in order_keys:
             try:
                 # 키 타입 확인
-                key_type = await _get_redis_client().type(key)
+                key_type = await get_redis_client().type(key)
 
                 # 해시 타입인지 확인 - 문자열로 변환하여 비교
                 if str(key_type).lower() == 'hash' or str(key_type).lower() == "b'hash'":
                     # 정상적인 해시 타입인 경우
-                    order_data = await _get_redis_client().hgetall(key)
+                    order_data = await get_redis_client().hgetall(key)
                     if order_data and "status" in order_data:
                         # Redis에는 open으로 저장되어 있지만 실제로는 체결되었을 수 있음
                         if order_data["status"] == "open":

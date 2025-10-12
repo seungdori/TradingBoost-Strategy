@@ -4,13 +4,12 @@ User Repository - Migrated to New Infrastructure
 Manages user data retrieval from Redis with structured logging and error handling.
 """
 
-from typing import Optional, Dict, Any
-
-from shared.logging import get_logger
-from shared.errors import DatabaseException, ValidationException
-from shared.dtos.user import UserDto, UserExistDto, UserCreateDto
+from typing import Any, Dict, Optional
 
 from GRID.database import redis_database
+from shared.dtos.user import UserCreateDto, UserDto, UserExistDto
+from shared.errors import DatabaseException, ValidationException
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

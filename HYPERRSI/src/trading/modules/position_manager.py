@@ -5,27 +5,31 @@ Position Manager
 포지션 오픈/클로즈 및 포지션 조회 관리
 """
 
-import json
 import asyncio
+import json
 import traceback
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List, Any
+from typing import Any, Dict, List, Optional
 
 from HYPERRSI.src.core.database import TradingCache
-from HYPERRSI.src.trading.models import Position, OrderStatus
+from HYPERRSI.src.trading.error_message import map_exchange_error
+from HYPERRSI.src.trading.models import OrderStatus, Position
 from HYPERRSI.src.trading.stats import record_trade_history_entry, update_trade_history_exit
 from HYPERRSI.telegram_message import send_telegram_message
-from HYPERRSI.src.trading.error_message import map_exchange_error
-from shared.utils import safe_float, round_to_qty, get_minimum_qty, convert_bool_to_string, get_lot_sizes, get_perpetual_instruments
+from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger
+from shared.utils import (
+    convert_bool_to_string,
+    get_lot_sizes,
+    get_minimum_qty,
+    get_perpetual_instruments,
+    round_to_qty,
+    safe_float,
+)
 
 logger = get_logger(__name__)
 
 # Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
 
 
 class PositionManager:
@@ -195,7 +199,7 @@ class PositionManager:
             leverage: 레버리지 (기본값: 10.0)
             settings: 설정 정보
         """
-        redis_client = _get_redis_client()
+        redis_client = get_redis_client()
         print(f"direction: {direction}, size: {size}, leverage: {leverage}, size : {size}")
         contracts_amount = size
         position_qty = await self.contract_size_to_qty(user_id, symbol, contracts_amount)
@@ -204,7 +208,7 @@ class PositionManager:
             if direction not in ['long', 'short']:
                 raise ValueError("direction must be either 'long' or 'short'")
             settings_key = f"user:{user_id}:settings"
-            settings_str = await _get_redis_client().get(settings_key)
+            settings_str = await get_redis_client().get(settings_key)
             if not settings_str:
                 raise ValueError("설정 정보를 찾을 수 없습니다.")
             settings = json.loads(settings_str)
@@ -212,8 +216,8 @@ class PositionManager:
             position_key = f"user:{user_id}:position:{symbol}:{direction}"
             cooldown_key = f"user:{user_id}:cooldown:{symbol}:{direction}"
             if str(user_id) != "1709556958" and not is_hedge:
-                if await _get_redis_client().get(cooldown_key):
-                    ttl = await _get_redis_client().ttl(cooldown_key)
+                if await get_redis_client().get(cooldown_key):
+                    ttl = await get_redis_client().ttl(cooldown_key)
                     raise ValueError(f"[{user_id}] {direction} 진입 중지. 직전 주문 종료 후 쿨다운 시간이 지나지 않았습니다. 쿨다운 시간: " + str(ttl) + "초")
                 # 현재가 조회
             current_price = await self.trading_service.market_data.get_current_price(symbol)

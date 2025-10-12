@@ -1,7 +1,10 @@
 from typing import Optional, Tuple
-from HYPERRSI.src.utils.check_invitee import get_uid_from_api_keys
+
 from sqlalchemy.orm import Session
+
 from HYPERRSI.src.core.models.database import UserModel
+from HYPERRSI.src.utils.check_invitee import get_uid_from_api_keys
+
 
 async def get_or_create_okx_uid(
     db: Session, 

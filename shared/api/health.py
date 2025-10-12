@@ -16,10 +16,12 @@ Usage:
 
 from datetime import datetime
 from typing import Any
+
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
-from shared.database.session import DatabaseConfig
+
 from shared.database.redis import RedisConnectionPool
+from shared.database.session import DatabaseConfig
 from shared.logging import get_logger
 
 logger = get_logger(__name__)

@@ -9,55 +9,55 @@ import asyncio
 import json
 import traceback
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any, Dict
 
-from HYPERRSI.src.trading.trading_service import TradingService
-from HYPERRSI.src.trading.models import Position, get_timeframe
+from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
 from HYPERRSI.src.api.trading.Calculate_signal import TrendStateCalculator
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
-from HYPERRSI.src.trading.stats import record_trade_entry
+from HYPERRSI.src.core.logger import setup_error_logger
 from HYPERRSI.src.trading.error_message import map_exchange_error
+from HYPERRSI.src.trading.models import Position, get_timeframe
 from HYPERRSI.src.trading.position_manager import PositionStateManager
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
-from HYPERRSI.src.api.routes.position import open_position_endpoint, OpenPositionRequest
+from HYPERRSI.src.trading.stats import record_trade_entry
+from HYPERRSI.src.trading.trading_service import TradingService
 from HYPERRSI.src.trading.utils.message_builder import create_position_message
-from HYPERRSI.src.trading.utils.trading_utils import init_user_position_data
-from shared.logging import get_logger
-from HYPERRSI.src.core.logger import setup_error_logger
+from HYPERRSI.src.trading.utils.position_handler.constants import (
+    DCA_COUNT_KEY,
+    DCA_LEVELS_KEY,
+    DIRECTION_LONG,
+    DIRECTION_LONG_SHORT,
+    DIRECTION_SHORT,
+    DUAL_SIDE_COUNT_KEY,
+    ENTRY_FAIL_COUNT_KEY,
+    MAIN_POSITION_DIRECTION_KEY,
+    MAX_ENTRY_FAILURES,
+    POSITION_KEY,
+    TP_DATA_KEY,
+    TREND_ALERT_EXPIRY_SECONDS,
+    TREND_SIGNAL_ALERT_KEY,
+)
 
 # Import from position_handler package
 from HYPERRSI.src.trading.utils.position_handler.core import (
-    get_redis_client,
-    calculate_next_candle_time,
-    get_investment_amount,
-    set_position_lock,
     calculate_min_sustain_contract_size,
-    get_atr_value
+    calculate_next_candle_time,
+    get_atr_value,
+    get_investment_amount,
+    get_redis_client,
+    set_position_lock,
 )
 from HYPERRSI.src.trading.utils.position_handler.validation import (
-    check_margin_block,
+    check_any_direction_locked,
     check_entry_failure_limit,
+    check_margin_block,
     increment_entry_failure,
     reset_entry_failure,
-    check_any_direction_locked,
+    should_enter_with_trend,
     validate_position_response,
-    should_enter_with_trend
 )
-from HYPERRSI.src.trading.utils.position_handler.constants import (
-    ENTRY_FAIL_COUNT_KEY,
-    MAIN_POSITION_DIRECTION_KEY,
-    DCA_COUNT_KEY,
-    DCA_LEVELS_KEY,
-    DUAL_SIDE_COUNT_KEY,
-    POSITION_KEY,
-    TP_DATA_KEY,
-    TREND_SIGNAL_ALERT_KEY,
-    TREND_ALERT_EXPIRY_SECONDS,
-    MAX_ENTRY_FAILURES,
-    DIRECTION_LONG,
-    DIRECTION_SHORT,
-    DIRECTION_LONG_SHORT
-)
+from HYPERRSI.src.trading.utils.trading_utils import init_user_position_data
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 error_logger = setup_error_logger()

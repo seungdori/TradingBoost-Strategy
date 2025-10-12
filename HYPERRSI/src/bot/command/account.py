@@ -1,30 +1,24 @@
 #src/bot/command/account.py
-from aiogram import types, Router
+import json
+import os
+
+import httpx
+import pytz
+from aiogram import Router, types
 from aiogram.filters import Command
 from aiogram.types import FSInputFile
-import pytz
 
-import json
-import httpx
+from HYPERRSI.src.trading.stats import (
+    generate_pnl_statistics_image,
+    get_pnl_history,
+    get_trade_history,
+    get_user_trading_statistics,
+)
+from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger
-from HYPERRSI.src.trading.stats import get_trade_history, get_user_trading_statistics, generate_pnl_statistics_image, get_pnl_history
 from shared.utils import get_contract_size
-import os
+
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
-import matplotlib.pyplot as plt
-import pandas as pd
-from io import BytesIO
-from datetime import datetime
-router = Router()
-API_BASE_URL = "/api"
 
 async def get_okx_uid_from_telegram_id(telegram_id: str) -> str:
     """
@@ -38,7 +32,7 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> str:
     """
     try:
         # 텔레그램 ID로 OKX UID 조회
-        okx_uid = await _get_redis_client().get(f"user:{telegram_id}:okx_uid")
+        okx_uid = await get_redis_client().get(f"user:{telegram_id}:okx_uid")
         if okx_uid:
             return okx_uid.decode() if isinstance(okx_uid, bytes) else okx_uid
         return None
@@ -70,7 +64,7 @@ def is_allowed_user(user_id):
 async def balance_command(message: types.Message):
     """계좌 잔고 확인"""
     telegram_id = str(message.from_user.id)
-    okx_uid = await _get_redis_client().get(f"user:{telegram_id}:okx_uid")
+    okx_uid = await get_redis_client().get(f"user:{telegram_id}:okx_uid")
     
     # 텔레그램 ID를 OKX UID로 변환
     okx_uid = await get_okx_uid_from_telegram_id(telegram_id)
@@ -87,7 +81,7 @@ async def balance_command(message: types.Message):
         return
         
     keys = get_redis_keys(okx_uid)
-    api_keys = await _get_redis_client().hgetall(keys['api_keys'])
+    api_keys = await get_redis_client().hgetall(keys['api_keys'])
     
     if not api_keys:
         await message.reply(
@@ -220,7 +214,7 @@ async def history_command(message: types.Message):
     keys = get_redis_keys(okx_uid)
     trade_history_as_exchange = False
     # API 키 확인
-    api_keys = await _get_redis_client().hgetall(keys['api_keys'])
+    api_keys = await get_redis_client().hgetall(keys['api_keys'])
     if not api_keys:
         await message.reply(
             "⚠️ 등록되지 않은 사용자입니다.\n"

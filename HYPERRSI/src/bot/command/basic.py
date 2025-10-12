@@ -1,25 +1,18 @@
 # src/bot/commands/basic.py
 
-from aiogram import types, Router, F
+import logging
+
+from aiogram import F, Router, types
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import any_state
 
+from HYPERRSI.src.bot.states.states import RegisterStates
 from HYPERRSI.src.services.timescale_service import TimescaleUserService
-import logging
-
-from HYPERRSI.src.bot.states.states import RegisterStates  
+from shared.database.redis_helper import get_redis_client
 
 router = Router()
 logger = logging.getLogger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 def get_redis_keys(user_id):
     return {
@@ -45,7 +38,7 @@ async def start_command(message: types.Message, state: FSMContext) -> None:
     telegram_uid_key = f"user:{user_id}:okx_uid"
    
     # 이미 등록된 UID가 있는지 확인
-    okx_uid = await _get_redis_client().get(telegram_uid_key)
+    okx_uid = await get_redis_client().get(telegram_uid_key)
 
     if okx_uid:
         if isinstance(okx_uid, bytes):
@@ -99,7 +92,7 @@ async def process_uid(message: types.Message, state: FSMContext) -> None:
         okx_uid_int = int(okx_uid)
         
         # Redis에 UID 저장
-        await _get_redis_client().set(telegram_uid_key, okx_uid)
+        await get_redis_client().set(telegram_uid_key, okx_uid)
         
         display_name = " ".join(filter(None, [message.from_user.first_name, message.from_user.last_name])).strip()
         username = message.from_user.username
@@ -126,8 +119,11 @@ async def process_uid(message: types.Message, state: FSMContext) -> None:
         
         # 기본 설정 초기화
         try:
-            from shared.constants.default_settings import DEFAULT_PARAMS_SETTINGS, DEFAULT_DUAL_SIDE_ENTRY_SETTINGS
             from HYPERRSI.src.services.redis_service import RedisService
+            from shared.constants.default_settings import (
+                DEFAULT_DUAL_SIDE_ENTRY_SETTINGS,
+                DEFAULT_PARAMS_SETTINGS,
+            )
             redis_service = RedisService()
             
             # 사용자 설정 초기화
@@ -138,7 +134,7 @@ async def process_uid(message: types.Message, state: FSMContext) -> None:
             default_dual_settings = {k: v for k, v in DEFAULT_DUAL_SIDE_ENTRY_SETTINGS.items()}
             settings_key = f"user:{okx_uid}:dual_side"
             settings_to_save = {k: str(v).lower() if isinstance(v, bool) else str(v) for k, v in default_dual_settings.items()}
-            await _get_redis_client().hset(settings_key, mapping=settings_to_save)
+            await get_redis_client().hset(settings_key, mapping=settings_to_save)
             
             await message.reply(
                 f"✅ UID ({okx_uid}) 등록 완료!\n"
@@ -168,7 +164,7 @@ async def reset_command(message: types.Message) -> None:
     telegram_uid_key = f"user:{user_id}:okx_uid"
     
     # 등록된 UID 확인
-    okx_uid = await _get_redis_client().get(telegram_uid_key)
+    okx_uid = await get_redis_client().get(telegram_uid_key)
     
     if not okx_uid:
         await message.reply(
@@ -178,7 +174,7 @@ async def reset_command(message: types.Message) -> None:
         return
     
     # Redis에서 UID 삭제
-    await _get_redis_client().delete(telegram_uid_key)
+    await get_redis_client().delete(telegram_uid_key)
     
     # TimescaleDB에서 사용자 상태 업데이트
     okx_uid_str = okx_uid.decode() if isinstance(okx_uid, bytes) else str(okx_uid)
@@ -260,13 +256,13 @@ async def help_command(message: types.Message) -> None:
        return
    user_id = message.from_user.id
    
-   okx_uid = await _get_redis_client().get(f"user:{user_id}:okx_uid")
+   okx_uid = await get_redis_client().get(f"user:{user_id}:okx_uid")
    if not is_allowed_user(okx_uid):
        await message.reply("⛔ 접근 권한이 없습니다.")
        return
    
    keys = get_redis_keys(user_id)
-   api_keys = await _get_redis_client().hgetall(keys['api_keys'])
+   api_keys = await get_redis_client().hgetall(keys['api_keys'])
    is_registered = bool(api_keys)
 
    basic_commands = (
@@ -290,7 +286,7 @@ async def help_command(message: types.Message) -> None:
            "\n⚠️ 트레이딩을 시작하려면 먼저 등록이 필요합니다."
        )
    else:
-       trading_status = await _get_redis_client().get(keys['status'])
+       trading_status = await get_redis_client().get(keys['status'])
        is_trading = trading_status == "running"
        commands = (
            f"{basic_commands}"

@@ -2,11 +2,13 @@
 Incremental indicator calculations for performance optimization
 """
 import logging
+from typing import Any, Tuple, cast
+
 import numpy as np
 import pandas as pd
-from typing import Tuple, Any, cast
-from shared.indicators import calculate_dm_tr, calculate_tr, compute_mama_fama
+
 from GRID.indicators.state import IndicatorState
+from shared.indicators import calculate_dm_tr, calculate_tr, compute_mama_fama
 
 
 def calculate_adx_incremental(df: pd.DataFrame, state: IndicatorState, dilen: int = 28, adxlen: int = 28) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:

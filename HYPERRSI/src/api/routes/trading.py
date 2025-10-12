@@ -1,32 +1,24 @@
-from fastapi import APIRouter, HTTPException, Query, Request
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel
 import asyncio
 import datetime as dt
-import logging
 import json
+import logging
+from typing import Any, Dict, List, Optional
 
-from HYPERRSI.src.trading.trading_service import TradingService, get_okx_client
-from shared.logging import get_logger
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel
 
-from HYPERRSI.src.core.celery_task import celery_app
+from HYPERRSI.src.api.routes.settings import ApiKeyService, get_api_keys_from_timescale
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
-from HYPERRSI.src.utils.check_invitee import get_okx_uid_from_telegram
-from shared.helpers.user_id_converter import get_telegram_id_from_uid
-from HYPERRSI.src.api.routes.settings import get_api_keys_from_timescale, ApiKeyService
+from HYPERRSI.src.core.celery_task import celery_app
+from HYPERRSI.src.core.error_handler import ErrorCategory, handle_critical_error
 from HYPERRSI.src.services.timescale_service import TimescaleUserService
-from HYPERRSI.src.core.error_handler import handle_critical_error, ErrorCategory
+from HYPERRSI.src.trading.trading_service import TradingService, get_okx_client
+from shared.database.redis_helper import get_redis_client
+from shared.helpers.user_id_resolver import get_okx_uid_from_telegram, get_telegram_id_from_okx_uid
+from shared.logging import get_logger
 
 # 로거 설정
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 router = APIRouter(prefix="/trading", tags=["trading"])
 
@@ -48,24 +40,174 @@ class TradingTaskRequest(BaseModel):
         }
     }
 
-@router.post("/start",
+@router.post(
+    "/start",
     summary="트레이딩 태스크 시작 (OKX UID 기준)",
-    description="특정 사용자의 자동 트레이딩을 시작합니다 (OKX UID 기준).",
+    description="""
+# 트레이딩 태스크 시작
+
+특정 사용자의 자동 트레이딩을 시작합니다. OKX UID 또는 텔레그램 ID를 사용하여 사용자를 식별합니다.
+
+## 요청 본문 (TradingTaskRequest)
+
+- **user_id** (string, required): 사용자 식별자
+  - OKX UID (18자리 숫자) 또는 텔레그램 ID
+  - 텔레그램 ID인 경우 자동으로 OKX UID로 변환 시도
+- **symbol** (string, optional): 거래 심볼
+  - 형식: "SOL-USDT-SWAP", "BTC-USDT-SWAP" 등
+  - 기본값: "SOL-USDT-SWAP"
+- **timeframe** (string, optional): 차트 시간 프레임
+  - 지원: "1m", "5m", "15m", "1h", "4h"
+  - 기본값: "1m"
+
+## 쿼리 파라미터
+
+- **restart** (boolean, optional): 재시작 모드
+  - `true`: 실행 중인 태스크가 있어도 강제로 재시작
+  - `false`: 이미 실행 중이면 오류 반환 (기본값)
+
+## 동작 방식
+
+1. **사용자 식별**: OKX UID 또는 텔레그램 ID 확인 및 변환
+2. **Redis 연결 확인**: Redis 연결 상태 검증 (2초 타임아웃)
+3. **API 키 확인**: Redis에서 API 키 조회, 없으면 TimescaleDB에서 가져오기
+4. **상태 확인**: 현재 실행 중인 트레이딩 태스크 확인
+5. **기존 태스크 처리**: restart=true인 경우 기존 태스크 종료
+6. **락/쿨다운 정리**: 트레이딩 관련 Redis 키 초기화
+7. **Celery 태스크 시작**: 새로운 트레이딩 사이클 실행
+8. **상태 저장**: Redis에 실행 상태 및 태스크 ID 저장
+
+## 반환 정보
+
+- **status** (string): 요청 처리 상태 ("success")
+- **message** (string): 결과 메시지
+- **task_id** (string): Celery 태스크 ID
+  - 형식: UUID 형식의 고유 식별자
+  - 태스크 추적 및 취소에 사용
+
+## 사용 시나리오
+
+- 🚀 **최초 트레이딩 시작**: 사용자의 첫 트레이딩 봇 가동
+- 🔄 **재시작**: 서버 재시작 후 트레이딩 봇 복구
+- ⚙️ **설정 변경**: 심볼 또는 타임프레임 변경 시 재시작
+- 🔧 **문제 해결**: 오류 상태에서 정상 상태로 복구
+
+## 보안 및 검증
+
+- **Redis 연결 확인**: 2초 타임아웃으로 연결 상태 검증
+- **API 키 암호화**: AES-256으로 암호화된 API 키 사용
+- **중복 실행 방지**: 이미 실행 중이면 오류 반환 (restart=false)
+- **에러 핸들링**: 모든 단계에서 에러 로깅 및 텔레그램 알림
+
+## 예시 요청
+
+```bash
+curl -X POST "http://localhost:8000/trading/start?restart=false" \\
+     -H "Content-Type: application/json" \\
+     -d '{
+           "user_id": "518796558012178692",
+           "symbol": "SOL-USDT-SWAP",
+           "timeframe": "1m"
+         }'
+```
+""",
     responses={
         200: {
-            "description": "트레이딩 태스크 시작 성공",
+            "description": "✅ 트레이딩 태스크 시작 성공",
             "content": {
                 "application/json": {
-                    "example": {
-                        "status": "success",
-                        "message": "트레이딩 태스크가 시작되었습니다.",
-                        "task_id": "abc123xyz"
+                    "examples": {
+                        "success": {
+                            "summary": "트레이딩 시작 성공",
+                            "value": {
+                                "status": "success",
+                                "message": "트레이딩 태스크가 시작되었습니다.",
+                                "task_id": "abc123-def456-ghi789-jkl012"
+                            }
+                        },
+                        "restart_success": {
+                            "summary": "재시작 성공",
+                            "value": {
+                                "status": "success",
+                                "message": "트레이딩 태스크가 시작되었습니다.",
+                                "task_id": "xyz789-uvw456-rst123-opq098"
+                            }
+                        }
                     }
                 }
             }
         },
-        400: {"description": "트레이딩 태스크 시작 실패"}
-    })
+        400: {
+            "description": "❌ 잘못된 요청 - 이미 실행 중",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "already_running": {
+                            "summary": "이미 실행 중",
+                            "value": {
+                                "detail": "이미 트레이딩 태스크가 실행 중입니다."
+                            }
+                        },
+                        "invalid_symbol": {
+                            "summary": "잘못된 심볼",
+                            "value": {
+                                "detail": "Invalid symbol format"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        403: {
+            "description": "🔒 권한 없음 - 허용되지 않은 사용자",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "unauthorized": {
+                            "summary": "권한 없음",
+                            "value": {
+                                "detail": "권한이 없는 사용자입니다."
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "💥 서버 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "redis_error": {
+                            "summary": "Redis 연결 실패",
+                            "value": {
+                                "detail": "Redis 연결 오류: Connection refused"
+                            }
+                        },
+                        "redis_timeout": {
+                            "summary": "Redis 타임아웃",
+                            "value": {
+                                "detail": "Redis 연결 시간 초과"
+                            }
+                        },
+                        "task_start_error": {
+                            "summary": "태스크 시작 실패",
+                            "value": {
+                                "detail": "트레이딩 태스크 시작 실패: Celery worker not available"
+                            }
+                        },
+                        "api_key_error": {
+                            "summary": "API 키 오류",
+                            "value": {
+                                "detail": "트레이딩 시작 실패: API key not found"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def start_trading(request: TradingTaskRequest, restart: bool = False):
     try:
         okx_uid = request.user_id # okx_uid 사용
@@ -74,7 +216,7 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
 
         # Redis 연결 확인
         try:
-            ping_result = await asyncio.wait_for(_get_redis_client().ping(), timeout=2.0)
+            ping_result = await asyncio.wait_for(get_redis_client().ping(), timeout=2.0)
             if not ping_result:
                 raise HTTPException(status_code=500, detail="Redis 연결 실패")
         except asyncio.TimeoutError:
@@ -102,10 +244,10 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
                 is_telegram_id = False
 
     
-        telegram_id = await get_telegram_id_from_uid(okx_uid, TimescaleUserService)
+        telegram_id = await get_telegram_id_from_okx_uid(okx_uid, TimescaleUserService)
 
         # API 키 확인 및 업데이트
-        api_keys = await _get_redis_client().hgetall(f"user:{okx_uid}:api:keys")
+        api_keys = await get_redis_client().hgetall(f"user:{okx_uid}:api:keys")
         
         # API 키가 기본값인지 확인
         is_default_api_key = False
@@ -156,7 +298,7 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
             okx_status_key = f"user:{okx_uid}:trading:status"
 
             # Pipeline으로 두 키를 한 번에 조회
-            async with _get_redis_client().pipeline() as pipe:
+            async with get_redis_client().pipeline() as pipe:
                 pipe.get(telegram_status_key)
                 pipe.get(okx_status_key)
                 results = await pipe.execute()
@@ -164,7 +306,7 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
         else:
             # telegram_id가 없으면 okx_uid만 조회
             okx_status_key = f"user:{okx_uid}:trading:status"
-            okx_status = await _get_redis_client().get(okx_status_key)
+            okx_status = await get_redis_client().get(okx_status_key)
 
         # telegram_id 상태 처리
         if telegram_status:
@@ -211,12 +353,12 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
             
             if telegram_id and telegram_id != "":
                 telegram_task_id_key = f"user:{telegram_id}:task_id"
-                task_id = await _get_redis_client().get(telegram_task_id_key)
+                task_id = await get_redis_client().get(telegram_task_id_key)
             
             # okx_uid의 task_id 확인
             if not task_id:
                 okx_task_id_key = f"user:{okx_uid}:task_id"
-                task_id = await _get_redis_client().get(okx_task_id_key)
+                task_id = await get_redis_client().get(okx_task_id_key)
             
             # 기존 태스크 종료 시도
             if task_id:
@@ -226,10 +368,10 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
                     
                     # telegram_id의 task_id 키 삭제
                     if telegram_id:
-                        await _get_redis_client().delete(f"user:{telegram_id}:task_id")
+                        await get_redis_client().delete(f"user:{telegram_id}:task_id")
                     
                     # okx_uid의 task_id 키 삭제
-                    await _get_redis_client().delete(f"user:{okx_uid}:task_id")
+                    await get_redis_client().delete(f"user:{okx_uid}:task_id")
                     
                     # 태스크가 완전히 종료될 때까지 짧은 지연 추가
                     await asyncio.sleep(2)
@@ -242,10 +384,10 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
             lock_key = f"lock:user:{okx_uid}:{symbol}:{timeframe}"
             try:
             # 락 존재 확인 후 삭제
-                lock_exists = await _get_redis_client().exists(lock_key)
+                lock_exists = await get_redis_client().exists(lock_key)
                 if lock_exists:
                     logger.info(f"[{okx_uid}] 기존 락 삭제: {symbol}/{timeframe}")
-                    await _get_redis_client().delete(lock_key)
+                    await get_redis_client().delete(lock_key)
             except Exception as lock_err:
                 logger.warning(f"[{okx_uid}] 락 삭제 중 오류 (무시됨): {str(lock_err)}")
         
@@ -253,20 +395,20 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
         for direction in ["long", "short"]:
             cooldown_key = f"user:{okx_uid}:cooldown:{symbol}:{direction}"
             try:
-                cooldown_exists = await _get_redis_client().exists(cooldown_key)
+                cooldown_exists = await get_redis_client().exists(cooldown_key)
                 if cooldown_exists:
                     logger.info(f"[{okx_uid}] 기존 쿨다운 삭제: {symbol}/{direction}")
-                    await _get_redis_client().delete(cooldown_key)
+                    await get_redis_client().delete(cooldown_key)
             except Exception as cooldown_err:
                 logger.warning(f"[{okx_uid}] 쿨다운 삭제 중 오류 (무시됨): {str(cooldown_err)}")
                 
         # 3. 태스크 실행 상태 초기화 (이전에 비정상 종료된 태스크가 있을 경우)
         task_running_key = f"user:{okx_uid}:task_running"
         try:
-            task_running_exists = await _get_redis_client().exists(task_running_key)
+            task_running_exists = await get_redis_client().exists(task_running_key)
             if task_running_exists:
                 logger.info(f"[{okx_uid}] 기존 태스크 실행 상태 초기화")
-                await _get_redis_client().delete(task_running_key)
+                await get_redis_client().delete(task_running_key)
         except Exception as task_err:
             logger.warning(f"[{okx_uid}] 태스크 상태 초기화 중 오류 (무시됨): {str(task_err)}")
 
@@ -274,14 +416,14 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
             # Redis 상태 저장 (telegram_id와 okx_uid 모두)
             if telegram_id:
                 #await redis_client.set(f"user:{telegram_id}:trading:status", "running")
-                await _get_redis_client().hset(
+                await get_redis_client().hset(
                     f"user:{telegram_id}:preferences",
                     mapping={"symbol": request.symbol, "timeframe": request.timeframe}
                 )
 
             # 상태를 'running'으로 명시적 설정
-            await _get_redis_client().set(okx_status_key, "running")
-            await _get_redis_client().hset(
+            await get_redis_client().set(okx_status_key, "running")
+            await get_redis_client().hset(
                 f"user:{okx_uid}:preferences",
                 mapping={"symbol": request.symbol, "timeframe": request.timeframe}
             )
@@ -298,8 +440,8 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
 
             # task_id 저장 (telegram_id와 okx_uid 모두)
             if telegram_id:
-                await _get_redis_client().set(f"user:{telegram_id}:task_id", task.id)
-            await _get_redis_client().set(f"user:{okx_uid}:task_id", task.id)
+                await get_redis_client().set(f"user:{telegram_id}:task_id", task.id)
+            await get_redis_client().set(f"user:{okx_uid}:task_id", task.id)
 
             return {
                 "status": "success",
@@ -316,8 +458,8 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
             )
             # Redis 상태 초기화
             if telegram_id:
-                await _get_redis_client().set(f"user:{telegram_id}:trading:status", "error")
-            await _get_redis_client().set(okx_status_key, "error")
+                await get_redis_client().set(f"user:{telegram_id}:trading:status", "error")
+            await get_redis_client().set(okx_status_key, "error")
             raise HTTPException(status_code=500, detail=f"트레이딩 태스크 시작 실패: {str(task_error)}")
             
     except HTTPException as he:
@@ -352,7 +494,7 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
 async def start_all_users():
     try:
         # Redis 연결 확인
-        if not await _get_redis_client().ping():
+        if not await get_redis_client().ping():
             await handle_critical_error(
                 error=Exception("Redis ping 실패"),
                 category=ErrorCategory.REDIS_CONNECTION,
@@ -362,7 +504,7 @@ async def start_all_users():
             raise HTTPException(status_code=500, detail="Redis 연결 실패")
             
         # 패턴 변경: user:*:trading:status
-        status_keys = await _get_redis_client().keys("user:*:trading:status")
+        status_keys = await get_redis_client().keys("user:*:trading:status")
         restarted_users = []
         errors = []
         
@@ -370,7 +512,7 @@ async def start_all_users():
         
         for key in status_keys:
             okx_uid = None # 루프 시작 시 초기화
-            status = await _get_redis_client().get(key)
+            status = await get_redis_client().get(key)
             
             # 바이트 문자열을 디코딩
             if isinstance(status, bytes):
@@ -390,23 +532,23 @@ async def start_all_users():
                     logger.info(f"사용자 {okx_uid} 재시작 시도 중")
                     
                     task_id_key = f"user:{okx_uid}:task_id"
-                    current_task_id = await _get_redis_client().get(task_id_key)
+                    current_task_id = await get_redis_client().get(task_id_key)
                     
                     # 기존 태스크가 존재하면 종료
                     if current_task_id:
                         logger.info(f"기존 태스크 종료: {current_task_id} (okx_uid: {okx_uid})")
                         celery_app.control.revoke(current_task_id, terminate=True)
-                        await _get_redis_client().delete(task_id_key)
+                        await get_redis_client().delete(task_id_key)
                         # 상태는 임시로 'restarting'으로 설정
-                        await _get_redis_client().set(key, "restarting")
+                        await get_redis_client().set(key, "restarting")
                         
                         # 태스크가 완전히 종료될 때까지 짧은 지연 추가
                         await asyncio.sleep(1)
                     
                     try:
                         preference_key = f"user:{okx_uid}:preferences"
-                        symbol = await _get_redis_client().hget(preference_key, "symbol")
-                        timeframe = await _get_redis_client().hget(preference_key, "timeframe")
+                        symbol = await get_redis_client().hget(preference_key, "symbol")
+                        timeframe = await get_redis_client().hget(preference_key, "timeframe")
                         # restart 옵션을 True로 해서 새 태스크 실행 (okx_uid 전달)
                         task = celery_app.send_task(
                             'trading_tasks.execute_trading_cycle',
@@ -416,8 +558,8 @@ async def start_all_users():
                         logger.info(f"[{okx_uid}] 새 트레이딩 태스크 시작: {task.id} (symbol: {symbol}, timeframe: {timeframe})")
                         
                         # Redis에 새 태스크 정보 업데이트
-                        await _get_redis_client().set(key, "running") # 상태 키 사용
-                        await _get_redis_client().set(task_id_key, task.id) # 태스크 ID 키 사용
+                        await get_redis_client().set(key, "running") # 상태 키 사용
+                        await get_redis_client().set(task_id_key, task.id) # 태스크 ID 키 사용
                         
                         restarted_users.append({"okx_uid": okx_uid, "task_id": task.id}) # user_id -> okx_uid
                     except Exception as task_error:
@@ -430,7 +572,7 @@ async def start_all_users():
                         )
                         errors.append({"okx_uid": okx_uid, "error": f"태스크 시작 실패: {str(task_error)}"}) # user_id -> okx_uid
                         # 상태를 'error'로 설정
-                        await _get_redis_client().set(key, "error") # 상태 키 사용
+                        await get_redis_client().set(key, "error") # 상태 키 사용
                         
                 except Exception as user_err:
                     error_id = okx_uid if okx_uid else key # okx_uid 추출 실패 시 키 자체를 ID로 사용
@@ -460,23 +602,158 @@ async def start_all_users():
         raise HTTPException(status_code=500, detail=f"start_all_users 실패: {str(e)}")
 
 
-@router.post("/stop",
+@router.post(
+    "/stop",
     summary="트레이딩 태스크 중지 (OKX UID 기준)",
-    description="특정 사용자의 자동 트레이딩을 중지합니다 (OKX UID 기준).",
+    description="""
+# 트레이딩 태스크 중지
+
+특정 사용자의 자동 트레이딩을 안전하게 중지합니다. 실행 중인 Celery 태스크를 종료하고 관련 Redis 상태를 정리합니다.
+
+## 요청 방식
+
+**쿼리 파라미터** 또는 **JSON 본문** 중 하나를 사용:
+
+### 방법 1: 쿼리 파라미터
+- **user_id** (string, required): 사용자 식별자
+  - OKX UID (18자리 숫자) 또는 텔레그램 ID
+
+### 방법 2: JSON 본문
+- **okx_uid** (string, required): OKX UID
+
+## 동작 방식
+
+1. **사용자 식별**: OKX UID 또는 텔레그램 ID 확인 및 변환
+2. **상태 확인**: 현재 트레이딩 상태 조회 (running 여부)
+3. **종료 신호 설정**: Redis에 stop_signal 설정
+4. **Celery 태스크 취소**: 실행 중인 태스크 종료 (SIGTERM)
+5. **락/쿨다운 해제**: 트레이딩 관련 Redis 키 삭제
+6. **열린 주문 취소** (선택): 활성 주문 취소 시도
+7. **상태 정리**: Redis 상태를 'stopped'로 변경
+8. **텔레그램 알림**: 사용자에게 중지 메시지 전송
+
+## 정리되는 Redis 키
+
+- `user:{okx_uid}:trading:status` → "stopped"
+- `user:{okx_uid}:task_id` → 삭제
+- `user:{okx_uid}:stop_signal` → 삭제
+- `user:{okx_uid}:task_running` → 삭제
+- `user:{okx_uid}:cooldown:{symbol}:long` → 삭제
+- `user:{okx_uid}:cooldown:{symbol}:short` → 삭제
+- `lock:user:{okx_uid}:{symbol}:{timeframe}` → 삭제
+
+## 반환 정보
+
+- **status** (string): 요청 처리 상태 ("success")
+- **message** (string): 결과 메시지
+  - "트레이딩 중지 신호가 보내졌습니다. 잠시 후 중지됩니다."
+  - "트레이딩이 이미 중지되어 있습니다."
+
+## 사용 시나리오
+
+- 🛑 **수동 중지**: 사용자가 트레이딩을 직접 중지
+- ⚠️ **비상 중지**: 시장 급변 시 긴급 중지
+- 🔧 **유지보수**: 설정 변경 또는 업데이트를 위한 중지
+- 📊 **전략 변경**: 새로운 전략 적용을 위한 중지
+- 💰 **손실 제한**: 일정 손실 도달 시 자동 중지
+
+## 예시 요청
+
+### 쿼리 파라미터 방식
+```bash
+curl -X POST "http://localhost:8000/trading/stop?user_id=518796558012178692"
+```
+
+### JSON 본문 방식
+```bash
+curl -X POST "http://localhost:8000/trading/stop" \\
+     -H "Content-Type: application/json" \\
+     -d '{"okx_uid": "518796558012178692"}'
+```
+""",
     responses={
         200: {
-            "description": "트레이딩 태스크 중지 성공",
+            "description": "✅ 트레이딩 태스크 중지 성공",
             "content": {
                 "application/json": {
-                    "example": {
-                        "status": "success",
-                        "message": "트레이딩이 중지되었습니다."
+                    "examples": {
+                        "stop_success": {
+                            "summary": "중지 성공",
+                            "value": {
+                                "status": "success",
+                                "message": "트레이딩 중지 신호가 보내졌습니다. 잠시 후 중지됩니다."
+                            }
+                        },
+                        "already_stopped": {
+                            "summary": "이미 중지됨",
+                            "value": {
+                                "status": "success",
+                                "message": "트레이딩이 이미 중지되어 있습니다."
+                            }
+                        }
                     }
                 }
             }
         },
-        400: {"description": "트레이딩 태스크 중지 실패"}
-    })
+        400: {
+            "description": "❌ 잘못된 요청 - 필수 파라미터 누락",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "missing_user_id": {
+                            "summary": "사용자 ID 누락",
+                            "value": {
+                                "detail": "user_id 또는 okx_uid가 필요합니다."
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "🔍 사용자를 찾을 수 없음",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "user_not_found": {
+                            "summary": "존재하지 않는 사용자",
+                            "value": {
+                                "detail": "User not found"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "💥 서버 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "redis_error": {
+                            "summary": "Redis 연결 실패",
+                            "value": {
+                                "detail": "Redis 연결 오류: Connection refused"
+                            }
+                        },
+                        "task_cancel_error": {
+                            "summary": "태스크 취소 실패",
+                            "value": {
+                                "detail": "트레이딩 중지 실패: Failed to cancel task"
+                            }
+                        },
+                        "cleanup_error": {
+                            "summary": "상태 정리 실패",
+                            "value": {
+                                "detail": "트레이딩 중지 실패: Cleanup operation failed"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def stop_trading(request: Request, user_id: Optional[str] = Query(None, description="사용자 ID (OKX UID 또는 텔레그램 ID)")):
     try:
         symbol = None
@@ -513,14 +790,14 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
         else:
             # OKX UID인 경우 텔레그램 ID 찾기 (선택 사항)
             try:
-                telegram_id = await get_telegram_id_from_uid(okx_uid, TimescaleUserService)
+                telegram_id = await get_telegram_id_from_okx_uid(okx_uid, TimescaleUserService)
             except Exception as e:
                 logger.debug(f"텔레그램 ID 조회 실패 (무시됨): {str(e)}")
         
         # 텔레그램 ID로 된 키 확인 (원래 ID가 텔레그램 ID인 경우)
         if telegram_id:
             telegram_status_key = f"user:{telegram_id}:trading:status"
-            telegram_status = await _get_redis_client().get(telegram_status_key)
+            telegram_status = await get_redis_client().get(telegram_status_key)
             
             # 바이트 문자열을 디코딩
             if isinstance(telegram_status, bytes):
@@ -531,12 +808,12 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
                 telegram_status = telegram_status.strip().strip('"\'')
                 
             if telegram_status == "running":
-                await _get_redis_client().set(telegram_status_key, "stopped")
+                await get_redis_client().set(telegram_status_key, "stopped")
                 logger.info(f"텔레그램 ID {telegram_id}의 트레이딩 상태를 stopped로 변경했습니다.")
         
         # OKX UID로 된 키 확인
         okx_status_key = f"user:{okx_uid}:trading:status"
-        okx_status = await _get_redis_client().get(okx_status_key)
+        okx_status = await get_redis_client().get(okx_status_key)
         
         # 바이트 문자열을 디코딩
         if isinstance(okx_status, bytes):
@@ -547,7 +824,7 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
             okx_status = okx_status.strip().strip('"\'')
             
         if okx_status == "running":
-            await _get_redis_client().set(okx_status_key, "stopped")
+            await get_redis_client().set(okx_status_key, "stopped")
             logger.info(f"OKX UID {okx_uid}의 트레이딩 상태를 stopped로 변경했습니다.")
         
         # 둘 다 running이 아닌 경우
@@ -562,8 +839,8 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
         
         # 종료 신호 설정
         if telegram_id:
-            await _get_redis_client().set(f"user:{telegram_id}:stop_signal", "true")
-        await _get_redis_client().set(f"user:{okx_uid}:stop_signal", "true")
+            await get_redis_client().set(f"user:{telegram_id}:stop_signal", "true")
+        await get_redis_client().set(f"user:{okx_uid}:stop_signal", "true")
             
         logger.info(f"사용자 {okx_uid}에게 종료 신호를 설정했습니다.")
         
@@ -571,11 +848,11 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
         task_id = None
         if telegram_id:
             task_id_key = f"user:{telegram_id}:task_id"
-            task_id = await _get_redis_client().get(task_id_key)
+            task_id = await get_redis_client().get(task_id_key)
         
         if not task_id:
             task_id_key = f"user:{okx_uid}:task_id"
-            task_id = await _get_redis_client().get(task_id_key)
+            task_id = await get_redis_client().get(task_id_key)
             
         # 현재 실행 중인 태스크 취소 시도
         if task_id:
@@ -595,22 +872,22 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
         try:
             if telegram_id:
                 preference_key = f"user:{telegram_id}:preferences"
-                symbol = await _get_redis_client().hget(preference_key, "symbol")
-                timeframe = await _get_redis_client().hget(preference_key, "timeframe")
+                symbol = await get_redis_client().hget(preference_key, "symbol")
+                timeframe = await get_redis_client().hget(preference_key, "timeframe")
                 
             if not symbol or not timeframe:
                 preference_key = f"user:{okx_uid}:preferences"
-                symbol = await _get_redis_client().hget(preference_key, "symbol")
-                timeframe = await _get_redis_client().hget(preference_key, "timeframe")
+                symbol = await get_redis_client().hget(preference_key, "symbol")
+                timeframe = await get_redis_client().hget(preference_key, "timeframe")
                 
             # 1. 사용자 락(lock) 해제
             if symbol and timeframe:
                 lock_key = f"lock:user:{okx_uid}:{symbol}:{timeframe}"
                 try:
-                    lock_exists = await _get_redis_client().exists(lock_key)
+                    lock_exists = await get_redis_client().exists(lock_key)
                     if lock_exists:
                         logger.info(f"[{okx_uid}] 락 해제: {symbol}/{timeframe}")
-                        await _get_redis_client().delete(lock_key)
+                        await get_redis_client().delete(lock_key)
                 except Exception as lock_err:
                     logger.warning(f"[{okx_uid}] 락 삭제 중 오류 (무시됨): {str(lock_err)}")
                 
@@ -619,10 +896,10 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
                 for direction in ["long", "short"]:
                     cooldown_key = f"user:{okx_uid}:cooldown:{symbol}:{direction}"
                     try:
-                        cooldown_exists = await _get_redis_client().exists(cooldown_key)
+                        cooldown_exists = await get_redis_client().exists(cooldown_key)
                         if cooldown_exists:
                             logger.info(f"[{okx_uid}] 쿨다운 해제: {symbol}/{direction}")
-                            await _get_redis_client().delete(cooldown_key)
+                            await get_redis_client().delete(cooldown_key)
                     except Exception as cooldown_err:
                         logger.warning(f"[{okx_uid}] 쿨다운 삭제 중 오류 (무시됨): {str(cooldown_err)}")
         except Exception as pref_err:
@@ -645,10 +922,10 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
         # 3. 태스크 실행 상태 정리
         task_running_key = f"user:{okx_uid}:task_running"
         try:
-            task_running_exists = await _get_redis_client().exists(task_running_key)
+            task_running_exists = await get_redis_client().exists(task_running_key)
             if task_running_exists:
                 logger.info(f"[{okx_uid}] 태스크 실행 상태 정리")
-                await _get_redis_client().delete(task_running_key)
+                await get_redis_client().delete(task_running_key)
         except Exception as task_err:
             logger.warning(f"[{okx_uid}] 태스크 상태 정리 중 오류 (무시됨): {str(task_err)}")
             
@@ -704,7 +981,7 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
             # 삭제 실행
             for key in keys_to_delete:
                 try:
-                    await _get_redis_client().delete(key)
+                    await get_redis_client().delete(key)
                 except Exception as del_err:
                     logger.warning(f"키 삭제 중 오류 발생 (key: {key}): {str(del_err)}")
             
@@ -731,23 +1008,115 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
             detail=f"트레이딩 중지 실패: {str(e)}"
         )
         
-@router.get("/running_users",
-    summary="실행 중(trading status=running)인 모든 사용자 조회 (OKX UID 기준)",
-    description="Redis에서 'user:{okx_uid}:trading:status'가 'running'인 모든 유저의 OKX UID 목록을 조회합니다."
+@router.get(
+    "/running_users",
+    summary="실행 중인 모든 사용자 조회 (OKX UID 기준)",
+    description="""
+# 실행 중인 모든 사용자 조회
+
+Redis에서 트레이딩 상태가 'running'인 모든 사용자의 OKX UID 목록을 조회합니다.
+
+## 동작 방식
+
+1. **Redis 패턴 매칭**: `user:*:trading:status` 패턴으로 모든 상태 키 조회
+2. **상태 필터링**: 값이 'running'인 키만 선택
+3. **UID 추출**: 키에서 OKX UID 파싱
+4. **목록 반환**: 실행 중인 사용자 UID 배열 반환
+
+## 반환 정보
+
+- **status** (string): 요청 처리 상태 ("success")
+- **running_users** (array of string): 실행 중인 사용자 OKX UID 목록
+  - 빈 배열: 실행 중인 사용자 없음
+  - 각 요소: 18자리 OKX UID
+
+## 사용 시나리오
+
+- 📊 **시스템 모니터링**: 전체 활성 사용자 수 파악
+- 🔄 **일괄 재시작**: 서버 재시작 시 복구할 사용자 목록 확인
+- 🛑 **일괄 중지**: 긴급 상황 시 중지할 사용자 식별
+- 📈 **통계 분석**: 활성 사용자 통계 집계
+- 🔧 **관리자 도구**: 관리자 대시보드에 활성 사용자 표시
+
+## 예시 URL
+
+```
+GET /trading/running_users
+```
+""",
+    responses={
+        200: {
+            "description": "✅ 실행 중인 사용자 조회 성공",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "multiple_users": {
+                            "summary": "여러 사용자 실행 중",
+                            "value": {
+                                "status": "success",
+                                "running_users": [
+                                    "518796558012178692",
+                                    "549641376070615063",
+                                    "587662504768345929"
+                                ]
+                            }
+                        },
+                        "single_user": {
+                            "summary": "단일 사용자 실행 중",
+                            "value": {
+                                "status": "success",
+                                "running_users": [
+                                    "518796558012178692"
+                                ]
+                            }
+                        },
+                        "no_users": {
+                            "summary": "실행 중인 사용자 없음",
+                            "value": {
+                                "status": "success",
+                                "running_users": []
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "💥 서버 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "redis_error": {
+                            "summary": "Redis 연결 실패",
+                            "value": {
+                                "detail": "Redis 연결 실패"
+                            }
+                        },
+                        "query_error": {
+                            "summary": "데이터 조회 실패",
+                            "value": {
+                                "detail": "running_users 조회 실패: Query failed"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 )
 async def get_all_running_users():
     """
     현재 'running' 상태인 모든 OKX UID를 조회
     """
     try:
-        if not await _get_redis_client().ping():
+        if not await get_redis_client().ping():
             raise HTTPException(status_code=500, detail="Redis 연결 실패")
         
-        status_keys = await _get_redis_client().keys("user:*:trading:status") # 패턴 변경
+        status_keys = await get_redis_client().keys("user:*:trading:status") # 패턴 변경
         running_users = []
         
         for key in status_keys:
-            status = await _get_redis_client().get(key)
+            status = await get_redis_client().get(key)
             
             # 바이트 문자열을 디코딩
             if isinstance(status, bytes):
@@ -780,10 +1149,10 @@ async def stop_all_running_users():
     stop_trading 로직을 반복해서 수행 (OKX UID 기준).
     """
     try:
-        if not await _get_redis_client().ping():
+        if not await get_redis_client().ping():
             raise HTTPException(status_code=500, detail="Redis 연결 실패")
         
-        status_keys = await _get_redis_client().keys("user:*:trading:status") # 패턴 변경
+        status_keys = await get_redis_client().keys("user:*:trading:status") # 패턴 변경
         stopped_users = []
         errors = []
         
@@ -791,7 +1160,7 @@ async def stop_all_running_users():
 
         for key in status_keys:
             okx_uid = None # 루프 시작 시 초기화
-            status = await _get_redis_client().get(key)
+            status = await get_redis_client().get(key)
             
             # 바이트 문자열을 디코딩
             if isinstance(status, bytes):
@@ -809,8 +1178,8 @@ async def stop_all_running_users():
                 
                 try:
                     # 종료 신호 설정 (okx_uid 사용)
-                    await _get_redis_client().set(f"user:{okx_uid}:stop_signal", "true")
-                    await _get_redis_client().set(f"user:{okx_uid}:trading:status", "stopped")
+                    await get_redis_client().set(f"user:{okx_uid}:stop_signal", "true")
+                    await get_redis_client().set(f"user:{okx_uid}:trading:status", "stopped")
                     # await send_telegram_message(f"⚠️[{okx_uid}] User의 상태를 Stopped로 강제 변경.6", okx_uid, debug=True)
                     logger.info(f"사용자 {okx_uid}에게 종료 신호를 설정했습니다.")
                     
@@ -822,7 +1191,7 @@ async def stop_all_running_users():
                         if not trading_service.client:
                             trading_service.client = await get_okx_client(user_id=okx_uid)
                         
-                        symbol = await _get_redis_client().hget(f"user:{okx_uid}:preferences", "symbol")
+                        symbol = await get_redis_client().hget(f"user:{okx_uid}:preferences", "symbol")
                         if symbol:
                             logger.info(f"사용자 {okx_uid}의 열린 주문 취소 시도 (심볼: {symbol})")
                             try:
@@ -835,7 +1204,7 @@ async def stop_all_running_users():
                     
                     # Celery task 취소 (okx_uid 사용)
                     task_id_key = f"user:{okx_uid}:task_id"
-                    task_id = await _get_redis_client().get(task_id_key)
+                    task_id = await get_redis_client().get(task_id_key)
                     if task_id:
                         try:
                             logger.info(f"Celery 태스크 취소 시도 (task_id: {task_id}, okx_uid: {okx_uid})")
@@ -847,7 +1216,7 @@ async def stop_all_running_users():
                     # Redis 상태 초기화 (okx_uid 사용)
                     try:
                         logger.info(f"사용자 {okx_uid}의 Redis 상태 초기화 중")
-                        await _get_redis_client().set(f"user:{okx_uid}:trading:status", "stopped") # 이미 위에서 설정함
+                        await get_redis_client().set(f"user:{okx_uid}:trading:status", "stopped") # 이미 위에서 설정함
                         #await send_telegram_message(f"⚠️[{okx_uid}] User의 상태를 Stopped로 강제 변경.8", okx_uid, debug=True)
                         
                         # 관련 키 삭제 (키 형식 변경)
@@ -872,7 +1241,7 @@ async def stop_all_running_users():
                         
                         for key_to_del in keys_to_delete: # 변수명 변경 (key 중복 방지)
                             try:
-                                await _get_redis_client().delete(key_to_del)
+                                await get_redis_client().delete(key_to_del)
                             except Exception as del_err:
                                 logger.warning(f"키 삭제 중 오류 발생 (key: {key_to_del}): {str(del_err)}")
                         
@@ -936,16 +1305,16 @@ async def restart_all_running_users():
     기존 태스크는 revoke 후, 새 태스크를 생성 (OKX UID 기준).
     """
     try:
-        if not await _get_redis_client().ping():
+        if not await get_redis_client().ping():
             raise HTTPException(status_code=500, detail="Redis 연결 실패")
             
-        status_keys = await _get_redis_client().keys("user:*:trading:status") # 패턴 변경
+        status_keys = await get_redis_client().keys("user:*:trading:status") # 패턴 변경
         restarted_users = []
         errors = []
         
         for key in status_keys:
             okx_uid = None # 루프 시작 시 초기화
-            status = await _get_redis_client().get(key)
+            status = await get_redis_client().get(key)
             
             # 바이트 문자열을 디코딩
             if isinstance(status, bytes):
@@ -961,17 +1330,17 @@ async def restart_all_running_users():
                 try:
                     # 사용자 preference 정보 가져오기 (okx_uid 사용)
                     preference_key = f"user:{okx_uid}:preferences"
-                    symbol = await _get_redis_client().hget(preference_key, "symbol")
-                    timeframe = await _get_redis_client().hget(preference_key, "timeframe")
+                    symbol = await get_redis_client().hget(preference_key, "symbol")
+                    timeframe = await get_redis_client().hget(preference_key, "timeframe")
                     
                     task_id_key = f"user:{okx_uid}:task_id"
-                    current_task_id = await _get_redis_client().get(task_id_key)
+                    current_task_id = await get_redis_client().get(task_id_key)
                     
                     if current_task_id:
                         logger.info(f"기존 태스크 종료: {current_task_id} (okx_uid: {okx_uid})")
                         celery_app.control.revoke(current_task_id, terminate=True)
-                        await _get_redis_client().delete(task_id_key)
-                        await _get_redis_client().set(key, "restarting") # 상태 키 사용
+                        await get_redis_client().delete(task_id_key)
+                        await get_redis_client().set(key, "restarting") # 상태 키 사용
                         await asyncio.sleep(0.5)
                     
                     # 기존 방식으로 태스크 실행 (okx_uid 전달)
@@ -980,12 +1349,12 @@ async def restart_all_running_users():
                         args=[okx_uid, symbol, timeframe , True]  # restart=True
                     )
                     # Redis 상태 업데이트 (okx_uid 사용)
-                    await _get_redis_client().set(key, "running") # 상태 키 사용
-                    await _get_redis_client().set(task_id_key, task.id) # 태스크 ID 키 사용
+                    await get_redis_client().set(key, "running") # 상태 키 사용
+                    await get_redis_client().set(task_id_key, task.id) # 태스크 ID 키 사용
                     
                     # preference 정보 확인 및 업데이트 (okx_uid 사용)
                     if symbol and timeframe:
-                        await _get_redis_client().hset(
+                        await get_redis_client().hset(
                             preference_key,
                             mapping={"symbol": symbol, "timeframe": timeframe}
                         )
@@ -1004,7 +1373,7 @@ async def restart_all_running_users():
                     logger.error(f"okx_uid {okx_uid} 재시작 중 에러: {str(user_err)}", exc_info=True)
                     errors.append({"okx_uid": okx_uid, "error": str(user_err)}) # user_id -> okx_uid
                     # 오류 발생 시 상태를 'error'로 설정 (okx_uid 사용)
-                    await _get_redis_client().set(key, "error") # 상태 키 사용
+                    await get_redis_client().set(key, "error") # 상태 키 사용
         
         response = {
             "status": "success",
@@ -1021,37 +1390,158 @@ async def restart_all_running_users():
         logger.error(f"restart_all_running_users 실패: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"restart_all_running_users 실패: {str(e)}")
 
-@router.get("/status/{okx_uid}", # user_id -> okx_uid
+@router.get(
+    "/status/{okx_uid}",
     summary="특정 사용자의 트레이딩 상태 조회 (OKX UID 기준)",
-    description="특정 사용자의 트레이딩 상태 및 관련 정보를 조회합니다 (OKX UID 기준).",
+    description="""
+# 특정 사용자의 트레이딩 상태 조회
+
+특정 사용자의 트레이딩 상태 및 관련 정보를 종합적으로 조회합니다.
+
+## URL 파라미터
+
+- **okx_uid** (string, required): OKX UID
+  - 형식: 18자리 숫자 (예: "518796558012178692")
+
+## 반환 정보
+
+### 기본 정보
+- **trading_status** (string): 트레이딩 상태
+  - `running`: 실행 중
+  - `stopped`: 중지됨
+  - `error`: 오류 발생
+  - `restarting`: 재시작 중
+  - `not_found`: 정보 없음
+
+### 태스크 정보
+- **task_id** (string, optional): Celery 태스크 ID
+  - 형식: UUID 형식
+  - 실행 중인 태스크의 고유 식별자
+
+### 사용자 설정 (preferences)
+- **symbol** (string): 거래 심볼
+- **timeframe** (string): 차트 시간 프레임
+
+### 포지션 정보 (position_info)
+- **main_direction** (string): 주 포지션 방향
+  - `long`: 롱 포지션
+  - `short`: 숏 포지션
+- **position_state** (string): 포지션 상태
+  - `in_position`: 포지션 보유 중
+  - `no_position`: 포지션 없음
+  - `closing`: 청산 중
+
+### 기타 정보
+- **stop_signal** (string, optional): 중지 신호 여부
+  - `true`: 중지 신호 활성
+
+## 사용 시나리오
+
+- 📊 **상태 모니터링**: 실시간 트레이딩 상태 확인
+- 🔍 **디버깅**: 트레이딩 문제 분석 및 해결
+- 📈 **대시보드**: 사용자 대시보드에 상태 표시
+- ⚙️ **설정 확인**: 현재 적용된 심볼/타임프레임 확인
+- 💼 **포지션 추적**: 현재 보유 포지션 현황 파악
+
+## 예시 URL
+
+```
+GET /trading/status/518796558012178692
+```
+""",
     responses={
         200: {
-            "description": "트레이딩 상태 조회 성공",
+            "description": "✅ 트레이딩 상태 조회 성공",
             "content": {
                 "application/json": {
-                    "example": {
-                        "status": "success",
-                        "data": {
-                            "trading_status": "running",
-                            "symbol": "SOL-USDT-SWAP",
-                            "timeframe": "1m",
-                            "task_id": "abc123xyz",
-                            "preferences": {
-                                "symbol": "SOL-USDT-SWAP",
-                                "timeframe": "1m"
-                            },
-                            "position_info": {
-                                "main_direction": "long",
-                                "position_state": "in_position"
+                    "examples": {
+                        "running_with_position": {
+                            "summary": "실행 중 (포지션 보유)",
+                            "value": {
+                                "status": "success",
+                                "data": {
+                                    "trading_status": "running",
+                                    "symbol": "SOL-USDT-SWAP",
+                                    "timeframe": "1m",
+                                    "task_id": "abc123-def456-ghi789-jkl012",
+                                    "preferences": {
+                                        "symbol": "SOL-USDT-SWAP",
+                                        "timeframe": "1m"
+                                    },
+                                    "position_info": {
+                                        "main_direction": "long",
+                                        "position_state": "in_position"
+                                    }
+                                }
+                            }
+                        },
+                        "stopped": {
+                            "summary": "중지됨",
+                            "value": {
+                                "status": "success",
+                                "data": {
+                                    "trading_status": "stopped",
+                                    "symbol": "BTC-USDT-SWAP",
+                                    "timeframe": "5m",
+                                    "preferences": {
+                                        "symbol": "BTC-USDT-SWAP",
+                                        "timeframe": "5m"
+                                    }
+                                }
+                            }
+                        },
+                        "not_found": {
+                            "summary": "정보 없음",
+                            "value": {
+                                "status": "success",
+                                "data": {
+                                    "trading_status": "not_found",
+                                    "message": "사용자의 트레이딩 정보가 없습니다."
+                                }
                             }
                         }
                     }
                 }
             }
         },
-        404: {"description": "사용자 정보를 찾을 수 없음"},
-        500: {"description": "서버 오류"}
-    })
+        404: {
+            "description": "🔍 사용자 정보를 찾을 수 없음",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "user_not_found": {
+                            "summary": "존재하지 않는 사용자",
+                            "value": {
+                                "detail": "User not found"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "💥 서버 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "redis_error": {
+                            "summary": "Redis 연결 실패",
+                            "value": {
+                                "detail": "Redis 연결 실패"
+                            }
+                        },
+                        "query_error": {
+                            "summary": "데이터 조회 실패",
+                            "value": {
+                                "detail": "트레이딩 상태 조회 실패: Query failed"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def get_user_trading_status(okx_uid: str): # user_id -> okx_uid
     """
     특정 사용자의 트레이딩 상태 조회 (OKX UID 기준)
@@ -1064,7 +1554,7 @@ async def get_user_trading_status(okx_uid: str): # user_id -> okx_uid
     """
     try:
         # Redis 연결 확인
-        if not await _get_redis_client().ping():
+        if not await get_redis_client().ping():
             await handle_critical_error(
                 error=Exception("Redis ping 실패"),
                 category=ErrorCategory.REDIS_CONNECTION,
@@ -1075,7 +1565,7 @@ async def get_user_trading_status(okx_uid: str): # user_id -> okx_uid
         
         # 기본 상태 키 (okx_uid 사용)
         status_key = f"user:{okx_uid}:trading:status" # 키 변경
-        trading_status = await _get_redis_client().get(status_key)
+        trading_status = await get_redis_client().get(status_key)
         
         # 바이트 문자열을 디코딩
         if isinstance(trading_status, bytes):
@@ -1097,13 +1587,13 @@ async def get_user_trading_status(okx_uid: str): # user_id -> okx_uid
         
         # 관련 정보 수집 (okx_uid 사용)
         task_id_key = f"user:{okx_uid}:task_id" # 키 변경
-        task_id = await _get_redis_client().get(task_id_key)
+        task_id = await get_redis_client().get(task_id_key)
         if task_id:
             response_data["task_id"] = task_id
         
         # 사용자 설정 정보 (okx_uid 사용)
         preferences_key = f"user:{okx_uid}:preferences" # 키 변경
-        preferences = await _get_redis_client().hgetall(preferences_key)
+        preferences = await get_redis_client().hgetall(preferences_key)
         if preferences:
             response_data["preferences"] = preferences
             
@@ -1117,8 +1607,8 @@ async def get_user_trading_status(okx_uid: str): # user_id -> okx_uid
                 main_direction_key = f"user:{okx_uid}:position:{symbol}:main_direction_direction" # 키 변경
                 position_state_key = f"user:{okx_uid}:position:{symbol}:position_state" # 키 변경
                 
-                main_direction = await _get_redis_client().get(main_direction_key)
-                position_state = await _get_redis_client().get(position_state_key)
+                main_direction = await get_redis_client().get(main_direction_key)
+                position_state = await get_redis_client().get(position_state_key)
                 
                 if main_direction:
                     position_info["main_direction"] = main_direction
@@ -1133,7 +1623,7 @@ async def get_user_trading_status(okx_uid: str): # user_id -> okx_uid
         
         # 정지 신호 확인 (okx_uid 사용)
         stop_signal_key = f"user:{okx_uid}:stop_signal" # 키 변경
-        stop_signal = await _get_redis_client().get(stop_signal_key)
+        stop_signal = await get_redis_client().get(stop_signal_key)
         if stop_signal:
             response_data["stop_signal"] = stop_signal
         
@@ -1195,7 +1685,7 @@ async def get_user_symbol_status(okx_uid: str, symbol: str): # user_id -> okx_ui
     """
     try:
         # Redis 연결 확인
-        if not await _get_redis_client().ping():
+        if not await get_redis_client().ping():
             await handle_critical_error(
                 error=Exception("Redis ping 실패"),
                 category=ErrorCategory.REDIS_CONNECTION,
@@ -1206,11 +1696,11 @@ async def get_user_symbol_status(okx_uid: str, symbol: str): # user_id -> okx_ui
         
         # 사용자 트레이딩 상태 확인 (okx_uid 사용)
         status_key = f"user:{okx_uid}:trading:status" # 키 변경
-        trading_status = await _get_redis_client().get(status_key)
+        trading_status = await get_redis_client().get(status_key)
         
         # 심볼 정보 확인 (okx_uid 사용)
         symbol_status_key = f"user:{okx_uid}:position:{symbol}:position_state" # 키 변경
-        symbol_status = await _get_redis_client().get(symbol_status_key)
+        symbol_status = await get_redis_client().get(symbol_status_key)
         
         # 기본 응답 구조
         response_data = {
@@ -1223,7 +1713,7 @@ async def get_user_symbol_status(okx_uid: str, symbol: str): # user_id -> okx_ui
         
         # 메인 방향 정보
         main_direction_key = f"user:{okx_uid}:position:{symbol}:main_direction_direction" # 키 변경
-        main_direction = await _get_redis_client().get(main_direction_key)
+        main_direction = await get_redis_client().get(main_direction_key)
         if main_direction:
             position_info["main_direction"] = main_direction
         
@@ -1233,7 +1723,7 @@ async def get_user_symbol_status(okx_uid: str, symbol: str): # user_id -> okx_ui
         
         # 롱 포지션 정보
         long_position_key = f"user:{okx_uid}:position:{symbol}:long" # 키 변경
-        long_position = await _get_redis_client().get(long_position_key)
+        long_position = await get_redis_client().get(long_position_key)
         if long_position:
             try:
                 position_info["long"] = json.loads(long_position)
@@ -1242,7 +1732,7 @@ async def get_user_symbol_status(okx_uid: str, symbol: str): # user_id -> okx_ui
         
         # 숏 포지션 정보
         short_position_key = f"user:{okx_uid}:position:{symbol}:short" # 키 변경
-        short_position = await _get_redis_client().get(short_position_key)
+        short_position = await get_redis_client().get(short_position_key)
         if short_position:
             try:
                 position_info["short"] = json.loads(short_position)
@@ -1254,8 +1744,8 @@ async def get_user_symbol_status(okx_uid: str, symbol: str): # user_id -> okx_ui
         long_dca_key = f"user:{okx_uid}:position:{symbol}:long_dca_levels" # 키 변경
         short_dca_key = f"user:{okx_uid}:position:{symbol}:short_dca_levels" # 키 변경
         
-        long_dca = await _get_redis_client().get(long_dca_key)
-        short_dca = await _get_redis_client().get(short_dca_key)
+        long_dca = await get_redis_client().get(long_dca_key)
+        short_dca = await get_redis_client().get(short_dca_key)
         
         if long_dca or short_dca:
             if long_dca:
@@ -1276,7 +1766,7 @@ async def get_user_symbol_status(okx_uid: str, symbol: str): # user_id -> okx_ui
         
         # 심볼에 대한 설정 정보 추가 (있다면) (okx_uid 사용)
         symbol_settings_key = f"user:{okx_uid}:preferences" # 키 변경
-        symbol_settings = await _get_redis_client().hgetall(symbol_settings_key)
+        symbol_settings = await get_redis_client().hgetall(symbol_settings_key)
         if symbol_settings:
             response_data["preferences"] = symbol_settings
         

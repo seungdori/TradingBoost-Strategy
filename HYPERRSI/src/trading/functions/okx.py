@@ -1,39 +1,31 @@
 # src/utils/order_utils.py
 
-import json
 import datetime as dt
+import json
 import traceback
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 import ccxt.async_support as ccxt
 from fastapi import HTTPException
-from shared.logging import get_logger
-
 
 # API 모델 (Pydantic) 및 Enum
 from HYPERRSI.src.api.exchange.models import (
     OrderResponse,
+    OrderSide,
     OrderStatus,
     OrderType,
-    OrderSide,
 )
+from shared.database.redis_helper import get_redis_client
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 
 # ======================================================
@@ -409,7 +401,7 @@ async def get_user_api_keys(user_id: str) -> Dict[str, str]:
     사용자 ID를 기반으로 Redis에서 OKX API 키를 조회합니다.
     """
     try:
-        api_keys = await _get_redis_client().hgetall(f"user:{user_id}:api:keys")
+        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
         if not api_keys:
             raise HTTPException(status_code=404, detail="API keys not found in Redis")
         return dict(api_keys)

@@ -2,17 +2,18 @@
 
 실시간 시장 데이터 및 계정 정보 수신을 위한 WebSocket 클라이언트
 """
-import json
 import asyncio
-import hmac
 import base64
 import hashlib
+import hmac
+import json
 import time
 from typing import Any, Callable, Dict, Optional
+
 import websockets
 from websockets.legacy.client import WebSocketClientProtocol
 
-from shared.exchange.okx.constants import WSS_PUBLIC_URL, WSS_PRIVATE_URL
+from shared.exchange.okx.constants import WSS_PRIVATE_URL, WSS_PUBLIC_URL
 from shared.logging import get_logger
 
 logger = get_logger(__name__)

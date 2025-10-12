@@ -5,8 +5,8 @@
 """
 
 import math
-from typing import Optional, Any
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any, Optional
 
 
 def get_upbit_precision(price: float) -> int:

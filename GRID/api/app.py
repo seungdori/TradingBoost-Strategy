@@ -1,43 +1,51 @@
 # Auto-configure PYTHONPATH for monorepo structure
 from shared.utils.path_config import configure_pythonpath
+
 configure_pythonpath()
 
-from fastapi import FastAPI, Request, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-import psutil
-
 import asyncio
-import logging
-from GRID.services import db_service, bot_state_service
-from GRID.routes import (
-    auth_route, logs_route, trading_route, exchange_route,
-    feature_route, bot_state_route, utils_route,
-    user_route, telegram_route,
-)
-from shared.dtos.bot_state import BotStateDto, BotStateKeyDto, BotStateError
-from GRID.trading.instance_manager import start_cleanup_task
-import os
 import json
-from GRID.dtos.feature import StartFeatureDto
+import logging
+import os
+import traceback
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
+
+import psutil
+import redis.asyncio as aioredis
+import uvicorn
+from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 import GRID.strategies.grid_process
-from GRID.strategies.grid_process import update_user_data, start_grid_main_in_process
-import redis.asyncio as aioredis
-import traceback
-import uvicorn
-
-# New infrastructure imports
-from shared.config import settings
-from shared.errors import register_exception_handlers
-from shared.errors.middleware import RequestIDMiddleware
-from shared.database.session import init_db, close_db
-from shared.database.redis import init_redis, close_redis
-from shared.logging import setup_json_logger
+from GRID.dtos.feature import StartFeatureDto
+from GRID.routes import (
+    auth_route,
+    bot_state_route,
+    exchange_route,
+    feature_route,
+    logs_route,
+    telegram_route,
+    trading_route,
+    user_route,
+    utils_route,
+)
+from GRID.services import bot_state_service, db_service
+from GRID.strategies.grid_process import start_grid_main_in_process, update_user_data
+from GRID.trading.instance_manager import start_cleanup_task
 
 # Legacy imports (for backward compatibility)
 from GRID.trading.redis_connection_manager import RedisConnectionManager
-from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+
+# New infrastructure imports
+from shared.config import settings
+from shared.database.redis import close_redis, init_redis
+from shared.database.session import close_db, init_db
+from shared.docs.openapi import attach_standard_error_examples
+from shared.dtos.bot_state import BotStateDto, BotStateError, BotStateKeyDto
+from shared.errors import register_exception_handlers
+from shared.errors.middleware import RequestIDMiddleware
+from shared.logging import setup_json_logger
 
 # Setup structured logging
 logger = setup_json_logger("grid")
@@ -286,11 +294,85 @@ async def save_running_symbols(app: FastAPI) -> None:
 
 app = FastAPI(
     title="GRID Trading Strategy API",
-    description="Grid-based trading strategy with automatic rebalancing",
+    description="""
+# GRID Trading Strategy API
+
+그리드 트레이딩 전략을 위한 자동화된 거래 API입니다.
+
+## 주요 기능
+
+- **자동 그리드 거래**: 가격 레벨에 따라 자동으로 주문을 배치하고 관리합니다
+- **다중 거래소 지원**: OKX, Binance, Upbit, Bitget, Bybit 등을 지원합니다
+- **실시간 모니터링**: WebSocket을 통한 실시간 로그 및 상태 업데이트
+- **포지션 관리**: 자동 리밸런싱 및 손익 관리
+- **리스크 관리**: 손절매, 레버리지 설정, 심볼 화이트/블랙리스트
+
+## 시작하기
+
+1. API 키 등록: `/exchange/keys` 엔드포인트를 통해 거래소 API 키를 설정하세요
+2. 봇 시작: `/feature/start` 엔드포인트로 그리드 트레이딩 봇을 시작하세요
+3. 모니터링: `/logs/ws/{user_id}` WebSocket으로 실시간 로그를 확인하세요
+
+## 보안 주의사항
+
+- API 키는 암호화되어 저장됩니다
+- 읽기 전용 권한만 부여하는 것을 권장합니다
+- 프로덕션 환경에서는 반드시 HTTPS를 사용하세요
+""",
     version="1.0.0",
+    contact={
+        "name": "TradingBoost Support",
+        "url": "https://tradingboost.io",
+        "email": "support@tradingboost.io"
+    },
+    license_info={
+        "name": "Proprietary",
+        "url": "https://tradingboost.io/license"
+    },
+    terms_of_service="https://tradingboost.io/terms",
     debug=settings.DEBUG,
-    lifespan=lifespan
+    lifespan=lifespan,
+    openapi_tags=[
+        {
+            "name": "feature",
+            "description": "봇 제어 및 기능 관리 엔드포인트 (시작, 중지, 재시작, 매도 등)"
+        },
+        {
+            "name": "state",
+            "description": "봇 상태 조회 및 관리 엔드포인트"
+        },
+        {
+            "name": "trading",
+            "description": "거래 데이터 조회 (승률, 차트, 심볼 관리 등)"
+        },
+        {
+            "name": "exchange",
+            "description": "거래소 정보 및 API 키 관리"
+        },
+        {
+            "name": "telegram",
+            "description": "텔레그램 알림 설정 및 관리"
+        },
+        {
+            "name": "logs",
+            "description": "로그, 거래량, 손익 데이터 조회 및 WebSocket 연결"
+        },
+        {
+            "name": "user",
+            "description": "사용자 정보 조회 및 관리"
+        },
+        {
+            "name": "auth",
+            "description": "인증 및 회원가입"
+        },
+        {
+            "name": "utils",
+            "description": "유틸리티 엔드포인트 (헬스체크, 버전 등)"
+        }
+    ]
 )
+
+attach_standard_error_examples(app)
 
 # Register exception handlers (new infrastructure)
 register_exception_handlers(app)

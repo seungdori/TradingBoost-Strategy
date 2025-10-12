@@ -5,18 +5,19 @@ Handles balance and position-related operations for grid trading.
 Extracted from grid_original.py for better maintainability.
 """
 
+import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import random
-import asyncio
 import time
 import traceback
-import base64
-import hmac
-import hashlib
-import websockets
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
-from shared.config import OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE
+import websockets
+
+from shared.config import OKX_API_KEY, OKX_PASSPHRASE, OKX_SECRET_KEY
 
 
 async def get_redis_connection():

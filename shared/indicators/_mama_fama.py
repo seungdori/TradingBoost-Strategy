@@ -1,8 +1,8 @@
 """
 MAMA/FAMA (MESA Adaptive Moving Average) indicator
 """
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 # PI 상수 정의
 PI = 2 * np.arcsin(1)

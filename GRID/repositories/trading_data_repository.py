@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from typing import Optional
 
+from GRID.repositories.trading_repository_pg import TradingDataRepositoryPG
 from shared.database.session import get_db
 from shared.dtos.trading import TradingDataDto
 from shared.logging import get_logger
-
-from GRID.repositories.trading_repository_pg import TradingDataRepositoryPG
 
 logger = get_logger(__name__)
 

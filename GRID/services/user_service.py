@@ -4,14 +4,13 @@ User Service - Migrated to New Infrastructure
 Manages user operations with repository pattern and exception handling.
 """
 
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
-from shared.logging import get_logger
-from shared.errors import DatabaseException, ValidationException
-
-from shared.dtos.user import UserDto, UserExistDto, UserCreateDto
-from GRID.repositories import user_repository_redis as user_repository
 from GRID.database import redis_database
+from GRID.repositories import user_repository_redis as user_repository
+from shared.dtos.user import UserCreateDto, UserDto, UserExistDto
+from shared.errors import DatabaseException, ValidationException
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

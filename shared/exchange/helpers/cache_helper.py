@@ -3,8 +3,10 @@
 거래소 데이터의 Redis 캐싱을 위한 공통 함수
 """
 import json
-from typing import Any, Optional, Callable, Awaitable
+from typing import Any, Awaitable, Callable, Optional
+
 from redis.asyncio import Redis
+
 from shared.logging import get_logger
 
 logger = get_logger(__name__)

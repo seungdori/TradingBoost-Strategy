@@ -1,18 +1,22 @@
 # src/data_collector/tasks.py
+import json
 import os
 import time
-import redis
-from datetime import datetime, UTC
+from datetime import UTC, datetime
+
 import ccxt
 import pytz
+import redis
 from celery import Celery
-# shared indicators에서 가져옴
-from shared.indicators import compute_all_indicators
-import json
-from shared.logging import get_logger
+
+from HYPERRSI.src.config import get_settings
 from HYPERRSI.src.core.config import settings
 from HYPERRSI.src.trading.models import get_timeframe
-from HYPERRSI.src.config import get_settings
+
+# shared indicators에서 가져옴
+from shared.indicators import compute_all_indicators
+from shared.logging import get_logger
+
 ################################################################################
 # 5) Celery Beat 스케줄 설정:
 #    - 1초마다 check_and_fetch_candles() 실행
@@ -120,7 +124,7 @@ TF_MAP = {1:'1m', 3:'3m', 5:'5m', 15:'15m', 30:'30m', 60:'1h', 240:'4h'}
 ################################################################################
 # 3) 특정 타임프레임(tf)에 대해 캔들 가져오기 + Redis 저장 + 지표 계산
 ################################################################################
-def fetch_candles_for_tf(symbol: str, tf: int):
+def fetch_candles_for_tf(symbol: str, tf: int) -> None:
     """
     - 본문에는 기존에 작성한 get_exchange_candles_full(), save_candles_to_redis() 등
       로직을 그대로 재사용
@@ -206,7 +210,7 @@ def get_latest_candle(symbol: str, timeframe: int) -> dict:
     
     return None
 
-def get_exchange_candles_full(symbol: str, timeframe: int, desired_count=3000):
+def get_exchange_candles_full(symbol: str, timeframe: int, desired_count: int = 3000) -> list:
     tf_str = get_timeframe(timeframe)
     key = f"candles:{symbol}:{tf_str}"
     params = {
@@ -303,7 +307,7 @@ def get_exchange_candles_full(symbol: str, timeframe: int, desired_count=3000):
                         if attempt >= max_retries:
                             print(f"[ERROR] Max retries reached for rate limit on {symbol} ({tf_str}). Error: {e}")
                             raise e
-                        wait_time = 1 ** attempt  # 지수 백오프: 2, 4, 8, ... 초
+                        wait_time = 2 ** attempt  # 지수 백오프: 2, 4, 8, 16, 32 초
                         print(f"[WARNING] Rate limit exceeded for {symbol} ({tf_str}). Waiting {wait_time} seconds before retrying... (Attempt {attempt}/{max_retries})")
                         time.sleep(wait_time)
                     except Exception as e:
@@ -358,7 +362,7 @@ def get_exchange_candles_full(symbol: str, timeframe: int, desired_count=3000):
 ###############################################################################
 # 5) Redis에 저장 (중복 timestamp는 덮어쓰기)
 ###############################################################################
-def save_candles_to_redis(symbol: str, timeframe: int, new_candles: list):
+def save_candles_to_redis(symbol: str, timeframe: int, new_candles: list) -> None:
     """
     - new_candles: [{timestamp, open, high, low, close, volume}, ...] (과거->현재)
     - 키: "candles:{symbol}:{tf}"
@@ -407,7 +411,7 @@ def save_candles_to_redis(symbol: str, timeframe: int, new_candles: list):
 ################################################################################
 # (B) Raw 캔들에 인디케이터를 합쳐서, 별도 key에 저장
 ################################################################################
-def save_candles_with_indicators_to_redis(symbol: str, timeframe: int, candles_with_ind: list):
+def save_candles_with_indicators_to_redis(symbol: str, timeframe: int, candles_with_ind: list) -> None:
     """
     key = "candles_with_indicators:{symbol}:{tf}"
     'timestamp'가 동일하면 덮어쓰기

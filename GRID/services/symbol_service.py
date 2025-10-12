@@ -6,9 +6,11 @@ Extracted from grid_original.py for better maintainability.
 """
 
 import json
+from typing import List, Optional
+
 import aiohttp
 import pandas as pd
-from typing import List, Optional
+
 from shared.dtos.trading import WinrateDto
 from shared.utils import path_helper
 

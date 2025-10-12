@@ -1,7 +1,8 @@
 from decimal import Decimal
-from typing import Optional, Dict, Any, TYPE_CHECKING
 from enum import Enum
-from HYPERRSI.src.api.exchange.models import OrderType, OrderSide, Position, PositionSide
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+from HYPERRSI.src.api.exchange.models import OrderSide, OrderType, Position, PositionSide
 
 if TYPE_CHECKING:
     from typing import Any as ExchangeClient

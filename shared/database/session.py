@@ -7,16 +7,18 @@ connection pooling, and error handling.
 
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+
 from sqlalchemy.ext.asyncio import (
-    create_async_engine,
-    AsyncSession,
     AsyncEngine,
+    AsyncSession,
     async_sessionmaker,
+    create_async_engine,
 )
 from sqlalchemy.pool import NullPool, QueuePool
+
 from shared.config.settings import settings
-from shared.logging import get_logger
 from shared.database.pool_monitor import PoolMonitor
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

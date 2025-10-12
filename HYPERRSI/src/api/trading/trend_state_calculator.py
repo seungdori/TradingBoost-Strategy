@@ -1,20 +1,15 @@
-import pandas as pd
-import numpy as np
-from typing import Union, Optional, Tuple, Dict
-from functools import lru_cache
-
-from shared.logging import get_logger
 import json
+from functools import lru_cache
+from typing import Dict, Optional, Tuple, Union
+
+import numpy as np
+import pandas as pd
+
 from HYPERRSI.src.trading.models import get_timeframe
+from shared.database.redis_helper import get_redis_client
+from shared.logging import get_logger
+
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 class TrendStateCalculatorException(Exception):
     """TrendStateCalculator 관련 예외"""
@@ -347,7 +342,7 @@ class TrendStateCalculator:
             tf_str = get_timeframe(timeframe)
             redis_key = f"candles_with_indicators:{symbol}:{tf_str}"
             # 최근 21개 캔들 데이터 가져오기 (20기간 모멘텀 계산용)
-            candles = await _get_redis_client().lrange(redis_key, -21, -1)
+            candles = await get_redis_client().lrange(redis_key, -21, -1)
             if not candles or len(candles) < 21:
                 logger.error(f"충분한 캔들 데이터를 찾을 수 없습니다: {redis_key}")
                 return self._get_empty_state()
@@ -488,7 +483,7 @@ class TrendStateCalculator:
             # Redis 키 형식: candles:SOL-USDT-SWAP:240
             tf_str = get_timeframe(timeframe)
             key = f"candles:{symbol}:{tf_str}"
-            candles = await _get_redis_client().lrange(key, 0, -1)  # 모든 캔들 가져오기
+            candles = await get_redis_client().lrange(key, 0, -1)  # 모든 캔들 가져오기
             
             # 캔들 데이터를 DataFrame으로 변환
             df = pd.DataFrame([eval(candle) for candle in candles])

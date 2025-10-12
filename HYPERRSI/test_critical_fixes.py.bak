@@ -17,6 +17,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 import asyncio
+
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -203,11 +204,8 @@ async def test_dual_side_entry_imports():
         os.environ.setdefault('DB_NAME', 'test_db')
 
         print("\n[4.1] Testing dual_side_entry imports...")
-        from HYPERRSI.src.trading.dual_side_entry import (
-            task_tracker,
-            get_user_dual_side_settings
-        )
         from HYPERRSI.src.core import database as db_module
+        from HYPERRSI.src.trading.dual_side_entry import get_user_dual_side_settings, task_tracker
 
         print("✅ All imports successful")
         print(f"   - task_tracker: {task_tracker.name}")

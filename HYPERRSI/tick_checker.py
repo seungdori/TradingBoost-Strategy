@@ -4,12 +4,13 @@ Tick Size Manager - PostgreSQL Version
 Manages tick size data for multiple exchanges using PostgreSQL and Redis cache.
 """
 
-import aiohttp
 import asyncio
-from redis.asyncio import Redis
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import traceback
-from sqlalchemy import select, and_
+
+import aiohttp
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from redis.asyncio import Redis
+from sqlalchemy import and_, select
 from sqlalchemy.dialects.postgresql import insert
 
 from HYPERRSI.src.core.config import settings

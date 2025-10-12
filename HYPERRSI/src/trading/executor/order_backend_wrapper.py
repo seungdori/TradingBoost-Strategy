@@ -1,16 +1,21 @@
 #src/trading/executor/order_backend_wrapper.py
-import os
-import aiohttp
 import asyncio
-from typing import Optional, Dict, Any
+import os
+from dataclasses import asdict, dataclass
 from decimal import Decimal
-from dataclasses import dataclass, asdict
-from shared.logging import get_logger
-from HYPERRSI.src.config import settings
+from typing import Any, Dict, Optional
+
+import aiohttp
+
 from HYPERRSI.src.api.exchange.models import (
-    OrderRequest, OrderResponse, OrderType, OrderSide, 
-    TimeInForce
+    OrderRequest,
+    OrderResponse,
+    OrderSide,
+    OrderType,
+    TimeInForce,
 )
+from HYPERRSI.src.config import settings
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

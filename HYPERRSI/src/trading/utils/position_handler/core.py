@@ -6,7 +6,8 @@ including Redis client access and timeframe calculations.
 """
 
 from datetime import datetime, timedelta
-from typing import Dict, Any
+from typing import Any, Dict
+
 from HYPERRSI.src.trading.models import get_timeframe
 from shared.logging import get_logger
 
@@ -231,8 +232,9 @@ async def get_atr_value(symbol: str, timeframe: str) -> float:
     Returns:
         ATR value, or 0.0 if not found
     """
-    from HYPERRSI.src.trading.utils.position_handler.constants import CANDLES_WITH_INDICATORS_KEY
     import json
+
+    from HYPERRSI.src.trading.utils.position_handler.constants import CANDLES_WITH_INDICATORS_KEY
 
     redis_client = get_redis_client()
     tf_str = get_timeframe(timeframe)

@@ -6,36 +6,29 @@ Manages user settings, API keys, and caching with structured logging
 and exception handling.
 """
 
-from redis.asyncio import Redis, ConnectionPool
 import json
-from threading import Lock
-from typing import Optional, Dict, Any, List
-from prometheus_client import Counter, Histogram
-import time
 import os
-from fastapi import HTTPException
+import time
+from threading import Lock
+from typing import Any, Dict, List, Optional
 
-from shared.utils import retry_decorator
-from shared.logging import get_logger
-from shared.errors import DatabaseException, ValidationException, ConfigurationException
-from shared.constants.default_settings import (
-    DEFAULT_PARAMS_SETTINGS,
-    SETTINGS_CONSTRAINTS,
-    ENTRY_OPTIONS,
-    TP_SL_OPTIONS,
-    DIRECTION_OPTIONS,
-    PYRAMIDING_TYPES,
-)
+from fastapi import HTTPException
+from prometheus_client import Counter, Histogram
+from redis.asyncio import ConnectionPool, Redis
 
 from HYPERRSI.src.core import database as _database_module
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
+from shared.constants.default_settings import (
+    DEFAULT_PARAMS_SETTINGS,
+    DIRECTION_OPTIONS,
+    ENTRY_OPTIONS,
+    PYRAMIDING_TYPES,
+    SETTINGS_CONSTRAINTS,
+    TP_SL_OPTIONS,
+)
+from shared.database.redis_helper import get_redis_client
+from shared.errors import ConfigurationException, DatabaseException, ValidationException
+from shared.logging import get_logger
+from shared.utils import retry_decorator
 
 logger = get_logger(__name__)
 
@@ -511,7 +504,7 @@ class ApiKeyService:
         """
         try:
             api_key_format = f"user:{user_id}:api:keys"
-            api_keys_result = await _get_redis_client().hgetall(api_key_format)
+            api_keys_result = await get_redis_client().hgetall(api_key_format)
 
             if not api_keys_result:
                 raise HTTPException(status_code=404, detail="API keys not found in Redis")
@@ -541,7 +534,7 @@ class ApiKeyService:
         """
         try:
             api_key_format = f"user:{user_id}:api:keys"
-            await _get_redis_client().hmset(api_key_format, {
+            await get_redis_client().hmset(api_key_format, {
                 'api_key': api_key,
                 'api_secret': api_secret,
                 'passphrase': passphrase

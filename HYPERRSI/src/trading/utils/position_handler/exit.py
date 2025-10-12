@@ -7,26 +7,26 @@ Includes position closing, stats update, and Redis cleanup.
 
 import traceback
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any, Dict
 
-from HYPERRSI.src.trading.trading_service import TradingService
-from HYPERRSI.src.trading.models import Position
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
-from HYPERRSI.src.trading.stats import update_trading_stats
-from HYPERRSI.src.trading.utils.trading_utils import init_user_position_data
-from shared.utils import contracts_to_qty
-from shared.logging import get_logger
 from HYPERRSI.src.core.logger import setup_error_logger
+from HYPERRSI.src.trading.models import Position
+from HYPERRSI.src.trading.stats import update_trading_stats
+from HYPERRSI.src.trading.trading_service import TradingService
+from HYPERRSI.src.trading.utils.position_handler.constants import (
+    DCA_COUNT_KEY,
+    DCA_LEVELS_KEY,
+    POSITION_KEY,
+    TREND_STATE_STRONG_DOWNTREND,
+    TREND_STATE_STRONG_UPTREND,
+)
 
 # Import from position_handler package
 from HYPERRSI.src.trading.utils.position_handler.core import get_redis_client
-from HYPERRSI.src.trading.utils.position_handler.constants import (
-    POSITION_KEY,
-    DCA_COUNT_KEY,
-    DCA_LEVELS_KEY,
-    TREND_STATE_STRONG_DOWNTREND,
-    TREND_STATE_STRONG_UPTREND
-)
+from HYPERRSI.src.trading.utils.trading_utils import init_user_position_data
+from shared.logging import get_logger
+from shared.utils import contracts_to_qty
 
 logger = get_logger(__name__)
 error_logger = setup_error_logger()

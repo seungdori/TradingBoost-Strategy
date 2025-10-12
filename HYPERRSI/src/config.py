@@ -1,9 +1,10 @@
 # src/config.py
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 프로젝트 루트 경로 찾기
 PROJECT_ROOT = Path(__file__).parent.parent.parent

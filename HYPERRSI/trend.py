@@ -1,9 +1,12 @@
-import os
 import asyncio
-import pandas as pd
-import numpy as np
+import os
 from datetime import datetime, timedelta
+
+import numpy as np
+import pandas as pd
+
 from shared.utils import path_helper
+
 
 def get_csv_path(symbol, timeframe):
     return os.path.join(path_helper.grid_dir, 'okx', f"{symbol}_{timeframe}.csv")

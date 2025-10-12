@@ -2,7 +2,8 @@
 GRID Strategy-specific ADX indicator logic
 """
 import pandas as pd
-from shared.indicators import crossover, crossunder, rising, falling
+
+from shared.indicators import crossover, crossunder, falling, rising
 
 
 def compute_adx_state(plus, minus, sig, th):

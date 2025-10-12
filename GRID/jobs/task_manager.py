@@ -6,6 +6,7 @@
 - cancel_tasks: 태스크 취소
 - task_completed: 태스크 완료 처리
 - handle_task_completion: 태스크 완료 핸들러
+- monitor_and_handle_tasks: 태스크 모니터링 및 처리 (from position_monitor)
 - create_symbol_task: 심볼 태스크 생성
 - create_new_task: 새 태스크 생성
 - create_monitoring_tasks: 모니터링 태스크
@@ -29,41 +30,45 @@ import random
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 # ==================== 외부 라이브러리 ====================
 import pandas as pd
 import redis.asyncio as aioredis
 
-# ==================== 프로젝트 모듈 ====================
-from GRID.database import redis_database
-from GRID.services.user_management_service import get_user_data_from_redis, initialize_user_data
-from GRID.main import periodic_analysis
-from GRID.routes.logs_route import add_log_endpoint as add_user_log
-from GRID.strategies import strategy
-from GRID.trading.instance_manager import get_exchange_instance
-from GRID.trading.shared_state import user_keys
 from GRID import telegram_message
-from shared.utils import path_helper, retry_async
+from GRID.core.exceptions import QuitException
 
 # ==================== Core 모듈 ====================
 from GRID.core.redis import get_redis_connection
 from GRID.core.websocket import ws_client
-from GRID.core.exceptions import QuitException
+
+# ==================== 프로젝트 모듈 ====================
+from GRID.database import redis_database
+from GRID.main import periodic_analysis
+
+# Monitoring - 포지션 및 커스텀 스탑 모니터링
+from GRID.monitoring.position_monitor import monitor_custom_stop, monitor_positions
+from GRID.routes.logs_route import add_log_endpoint as add_user_log
 
 # ==================== Services ====================
 from GRID.services.symbol_service import get_top_symbols
-from GRID.services.user_management_service import get_user_data, update_user_data
-
-# ==================== Utils ====================
-from shared.utils import parse_bool
+from GRID.services.user_management_service import (
+    get_user_data,
+    get_user_data_from_redis,
+    initialize_user_data,
+    update_user_data,
+)
+from GRID.strategies import strategy
 
 # ==================== 모듈 내부 import (순환 참조 방지) ====================
 # Grid Core - 그리드 레벨 계산 및 주문 배치
-from GRID.trading.grid_core import place_grid_orders, calculate_grid_levels
+from GRID.trading.grid_core import calculate_grid_levels, place_grid_orders
+from GRID.trading.instance_manager import get_exchange_instance
+from GRID.trading.shared_state import user_keys
 
-# Monitoring - 포지션 및 커스텀 스탑 모니터링
-from GRID.monitoring.position_monitor import monitor_positions, monitor_custom_stop
+# ==================== Utils ====================
+from shared.utils import parse_bool, path_helper, retry_async
 
 logger = logging.getLogger(__name__)
 
@@ -854,7 +859,7 @@ async def handle_task_completion(task: asyncio.Task, new_symbol: str, exchange_n
 
             if new_symbol in running_symbols:
                 running_symbols.remove(new_symbol)
-            
+
             completed_symbols.append(new_symbol)
 
             # Update both lists in Redis
@@ -869,6 +874,55 @@ async def handle_task_completion(task: asyncio.Task, new_symbol: str, exchange_n
         logging.error(f"Redis error: {e}")
     except Exception as e:
         logging.exception(f"Unexpected error handling task completion: {e}")
+
+
+
+async def monitor_and_handle_tasks(
+    created_tasks, exchange_name, user_id, symbol_queues, initial_investment,
+    direction, timeframe, grid_num, leverage, stop_loss, numbers_to_entry,
+    exchange_instance, custom_stop, user_key, redis
+):
+    """
+    Task monitoring and completion handling.
+    Moved from position_monitor to break circular dependency.
+    """
+    while created_tasks:
+        done, pending = await asyncio.wait(created_tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            task_name = task.get_name()
+            if task_name in created_tasks:
+                is_running = await get_user_data(exchange_name, user_id, "is_running")
+                if not is_running:
+                    print('프로세스가 종료되었습니다.')
+                    return created_tasks
+
+                # Remove completed task
+                created_tasks.remove(task)
+                await redis.hset(user_key, 'tasks', json.dumps([t.get_name() for t in created_tasks]))
+
+                # Handle task completion
+                await handle_task_completion(task, task_name, exchange_name, user_id, redis)
+
+                # Check if still running
+                is_running = await get_user_data(exchange_name, user_id, "is_running")
+                if not is_running:
+                    print('프로세스가 종료되었습니다.')
+                    return created_tasks
+
+                # Potentially create recovery tasks if necessary
+                if len(created_tasks) <= numbers_to_entry and is_running:
+                    try:
+                        recovery_tasks = await create_recovery_tasks(
+                            user_id, exchange_name, direction, symbol_queues, initial_investment,
+                            timeframe, grid_num, leverage, stop_loss, numbers_to_entry, custom_stop
+                        )
+                        if recovery_tasks:
+                            created_tasks.extend(recovery_tasks)
+                            await redis.hset(user_key, 'tasks', json.dumps([t.get_name() for t in created_tasks]))
+                    except Exception as e:
+                        print(f"{user_id} : Error during recovery: {e}")
+                        print(traceback.format_exc())
+    return created_tasks
 
 
 

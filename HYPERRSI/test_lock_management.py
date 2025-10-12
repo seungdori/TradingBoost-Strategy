@@ -1,8 +1,11 @@
 import asyncio
-import redis.asyncio as redis
 import time
 from datetime import datetime
+
+import redis.asyncio as redis
+
 from HYPERRSI.src.core.config import settings
+
 
 async def test_lock_management():
     """

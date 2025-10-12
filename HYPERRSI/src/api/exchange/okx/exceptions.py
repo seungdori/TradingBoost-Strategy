@@ -6,7 +6,7 @@ from shared.exchange.okx.exceptions import (
     OKXAPIException,
     OKXRequestException,
     OKXResponseException,
-    OKXWebsocketException
+    OKXWebsocketException,
 )
 
 __all__ = [

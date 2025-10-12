@@ -1,12 +1,14 @@
 """
 Data fetching utilities for OHLCV data
 """
-import logging
 import asyncio
-from typing import Any
-import pandas as pd
+import logging
 import traceback
-from GRID.data.cache import get_cache, set_cache, redis_client
+from typing import Any
+
+import pandas as pd
+
+from GRID.data.cache import get_cache, redis_client, set_cache
 from shared.utils import retry_decorator
 
 

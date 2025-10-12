@@ -1,12 +1,14 @@
-from typing import Optional, Dict, Any
+import asyncio
 import traceback
+from typing import Any, Dict, Optional
+
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.logger import error_logger as logger
-import asyncio
 
 # 공통 에러 모듈 사용
-from shared.errors import ErrorCategory, ErrorSeverity, ERROR_SEVERITY_MAP
+from shared.errors import ERROR_SEVERITY_MAP, ErrorCategory, ErrorSeverity
 from shared.errors.categories import classify_error as _classify_error
+
 
 async def handle_critical_error(
     error: Exception,
@@ -79,8 +81,9 @@ async def handle_critical_error(
         # 에러 핸들러가 실패해도 최소한의 알림은 전송
         try:
             simple_message = f"🚨 에러 핸들러 실행 중 오류 발생\n\n원본 에러: {str(error)}\n핸들러 에러: {str(e)}"
-            from HYPERRSI.src.bot.telegram_message import send_telegram_message
             import asyncio
+
+            from HYPERRSI.src.bot.telegram_message import send_telegram_message
             if asyncio.iscoroutinefunction(send_telegram_message):
                 await send_telegram_message(simple_message, "system", error=True)
         except:

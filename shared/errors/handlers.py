@@ -2,45 +2,112 @@
 FastAPI Exception Handlers
 
 Provides centralized error handling for FastAPI applications with:
-- Structured error responses
+- Unified ResponseDto error payloads
 - Request ID tracking for correlation
 - Logging integration
 - Development vs production error details
 - Timestamp tracking
 """
 
+from __future__ import annotations
+
 from datetime import datetime
-from fastapi import Request, status
-from fastapi.responses import JSONResponse
+
+from fastapi import HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError, OperationalError
-from shared.errors.exceptions import TradingException, ErrorCode, DatabaseException
-from shared.errors.middleware import get_request_id, get_error_context
+
 from shared.config import settings
+from shared.dtos.response import ResponseDto
+from shared.errors.exceptions import DatabaseException, ErrorCode, TradingException
+from shared.errors.middleware import get_error_context, get_request_id
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
 
 
+def _iso_timestamp() -> str:
+    """Return current UTC timestamp in ISO-8601 with trailing Z."""
+
+    return datetime.utcnow().isoformat() + "Z"
+
+
+def _build_error_meta(
+    *,
+    request: Request,
+    request_id: str | None,
+    error_code: str,
+    details: dict | None = None,
+    extra_meta: dict | None = None,
+) -> dict:
+    """Create a standard meta payload for error responses."""
+
+    meta: dict[str, object] = {
+        "error_code": error_code,
+        "path": str(request.url),
+        "method": request.method,
+        "timestamp": _iso_timestamp(),
+    }
+
+    if request_id:
+        meta["request_id"] = request_id
+
+    if details:
+        meta["details"] = details
+
+    if extra_meta:
+        meta.update(extra_meta)
+
+    return meta
+
+
+def _error_response(
+    *,
+    status_code: int,
+    message: str,
+    request: Request,
+    error_code: str,
+    request_id: str | None,
+    details: dict | None = None,
+    extra_meta: dict | None = None,
+) -> JSONResponse:
+    """Return a JSONResponse using the unified ResponseDto format."""
+
+    meta = _build_error_meta(
+        request=request,
+        request_id=request_id,
+        error_code=error_code,
+        details=details,
+        extra_meta=extra_meta,
+    )
+
+    dto = ResponseDto[None](
+        success=False,
+        message=message,
+        meta=meta,
+        data=None,
+    )
+
+    headers = {"X-Request-ID": request_id} if request_id else None
+
+    return JSONResponse(
+        status_code=status_code,
+        content=dto.model_dump(),
+        headers=headers,
+    )
+
+
 async def trading_exception_handler(
     request: Request, exc: TradingException
 ) -> JSONResponse:
-    """
-    Handle TradingException errors with request ID tracking.
+    """Handle TradingException errors with request ID tracking."""
 
-    Args:
-        request: FastAPI request
-        exc: TradingException instance
-
-    Returns:
-        JSONResponse: Structured error response with request ID
-    """
     request_id = get_request_id()
     error_ctx = get_error_context()
 
-    # Log error with full context
     logger.error(
-        f"Trading error: {exc.code.value}",
+        "Trading error",
         extra={
             "request_id": request_id,
             "error_code": exc.code.value,
@@ -51,38 +118,24 @@ async def trading_exception_handler(
             "method": request.method,
             "user_agent": request.headers.get("user-agent"),
         },
-        exc_info=True
+        exc_info=True,
     )
 
-    return JSONResponse(
+    return _error_response(
         status_code=exc.status_code,
-        content={
-            "error": {
-                "request_id": request_id,
-                "code": exc.code.value,
-                "message": exc.message,
-                "details": exc.details,
-                "path": str(request.url),
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        },
-        headers={"X-Request-ID": request_id}
+        message=exc.message,
+        request=request,
+        error_code=exc.code.value,
+        request_id=request_id,
+        details=exc.details,
     )
 
 
 async def validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    """
-    Handle Pydantic validation errors with request ID tracking.
+    """Handle Pydantic validation errors with request ID tracking."""
 
-    Args:
-        request: FastAPI request
-        exc: RequestValidationError instance
-
-    Returns:
-        JSONResponse: Structured validation error response with request ID
-    """
     request_id = get_request_id()
     errors = exc.errors()
 
@@ -96,39 +149,25 @@ async def validation_exception_handler(
         },
     )
 
-    return JSONResponse(
+    return _error_response(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={
-            "error": {
-                "request_id": request_id,
-                "code": ErrorCode.VALIDATION_ERROR.value,
-                "message": "Request validation failed",
-                "details": {"validation_errors": errors},
-                "path": str(request.url),
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        },
-        headers={"X-Request-ID": request_id}
+        message="Request validation failed",
+        request=request,
+        error_code=ErrorCode.VALIDATION_ERROR.value,
+        request_id=request_id,
+        details={"validation_errors": errors},
     )
 
 
 async def database_exception_handler(
     request: Request, exc: IntegrityError | OperationalError | DatabaseException
 ) -> JSONResponse:
-    """
-    Handle database errors (SQLAlchemy and custom DatabaseException).
+    """Handle database errors (SQLAlchemy and custom DatabaseException)."""
 
-    Args:
-        request: FastAPI request
-        exc: SQLAlchemy or DatabaseException
-
-    Returns:
-        JSONResponse: Structured database error response with request ID
-    """
     request_id = get_request_id()
 
     logger.error(
-        f"Database error: {type(exc).__name__}",
+        "Database error",
         extra={
             "request_id": request_id,
             "path": str(request.url),
@@ -138,11 +177,10 @@ async def database_exception_handler(
         exc_info=True,
     )
 
-    # Determine error code and message based on exception type
     if isinstance(exc, DatabaseException):
         code = ErrorCode.DATABASE_ERROR
         message = exc.message
-        details = exc.details if settings.DEBUG else {}
+        details = exc.details if settings.DEBUG else exc.details or {}
         status_code = exc.status_code
     elif isinstance(exc, IntegrityError):
         code = ErrorCode.DUPLICATE_RECORD
@@ -155,37 +193,23 @@ async def database_exception_handler(
         status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
         details = {"error": str(exc)} if settings.DEBUG else {}
 
-    return JSONResponse(
+    return _error_response(
         status_code=status_code,
-        content={
-            "error": {
-                "request_id": request_id,
-                "code": code.value,
-                "message": message,
-                "details": details,
-                "path": str(request.url),
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        },
-        headers={"X-Request-ID": request_id}
+        message=message,
+        request=request,
+        error_code=code.value,
+        request_id=request_id,
+        details=details or None,
     )
 
 
 async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """
-    Handle all uncaught exceptions with request ID tracking.
+    """Handle all uncaught exceptions with request ID tracking."""
 
-    Args:
-        request: FastAPI request
-        exc: Any exception
-
-    Returns:
-        JSONResponse: Structured error response with request ID
-    """
     request_id = get_request_id()
 
     logger.exception(
-        f"Unhandled exception: {type(exc).__name__}",
+        "Unhandled exception",
         extra={
             "request_id": request_id,
             "path": str(request.url),
@@ -193,55 +217,81 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
         },
     )
 
-    # In production, don't expose internal error details
     message = "An internal error occurred"
-    details = {}
+    details: dict[str, object] | None = None
 
     if settings.DEBUG:
         message = str(exc)
-        details["exception_type"] = type(exc).__name__
+        details = {"exception_type": type(exc).__name__}
 
-    return JSONResponse(
+    return _error_response(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "error": {
-                "request_id": request_id,
-                "code": ErrorCode.INTERNAL_ERROR.value,
-                "message": message,
-                "details": details,
-                "path": str(request.url),
-                "timestamp": datetime.utcnow().isoformat()
-            }
-        },
-        headers={"X-Request-ID": request_id}
+        message=message,
+        request=request,
+        error_code=ErrorCode.INTERNAL_ERROR.value,
+        request_id=request_id,
+        details=details,
+    )
+
+
+HTTP_STATUS_CODE_TO_ERROR_CODE: dict[int, ErrorCode] = {
+    status.HTTP_400_BAD_REQUEST: ErrorCode.VALIDATION_ERROR,
+    status.HTTP_401_UNAUTHORIZED: ErrorCode.UNAUTHORIZED,
+    status.HTTP_403_FORBIDDEN: ErrorCode.FORBIDDEN,
+    status.HTTP_404_NOT_FOUND: ErrorCode.RECORD_NOT_FOUND,
+    status.HTTP_409_CONFLICT: ErrorCode.DUPLICATE_RECORD,
+    status.HTTP_422_UNPROCESSABLE_ENTITY: ErrorCode.VALIDATION_ERROR,
+    status.HTTP_429_TOO_MANY_REQUESTS: ErrorCode.RATE_LIMIT_EXCEEDED,
+    status.HTTP_500_INTERNAL_SERVER_ERROR: ErrorCode.INTERNAL_ERROR,
+    status.HTTP_503_SERVICE_UNAVAILABLE: ErrorCode.SERVICE_UNAVAILABLE,
+}
+
+
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """Normalize FastAPI HTTPException responses to the standard ResponseDto payload."""
+
+    request_id = get_request_id()
+
+    if isinstance(exc.detail, str):
+        message = exc.detail
+        details = None
+    elif isinstance(exc.detail, dict):
+        message = (
+            exc.detail.get("message")
+            or exc.detail.get("detail")
+            or "Request failed"
+        )
+        details = exc.detail
+    else:
+        message = str(exc.detail)
+        details = {"detail": exc.detail}
+
+    error_code = HTTP_STATUS_CODE_TO_ERROR_CODE.get(
+        exc.status_code, ErrorCode.INTERNAL_ERROR
+    )
+
+    extra_meta = None
+    if exc.headers and "Retry-After" in exc.headers:
+        extra_meta = {"retry_after": exc.headers["Retry-After"]}
+
+    return _error_response(
+        status_code=exc.status_code,
+        message=message or "Request failed",
+        request=request,
+        error_code=error_code.value,
+        request_id=request_id,
+        details=details if isinstance(details, dict) else None,
+        extra_meta=extra_meta,
     )
 
 
 def register_exception_handlers(app):
-    """
-    Register all exception handlers with FastAPI app.
+    """Register all exception handlers with FastAPI app."""
 
-    Registers handlers in order of specificity (most specific first):
-    1. TradingException - Custom trading errors
-    2. DatabaseException - Custom database errors
-    3. RequestValidationError - Pydantic validation
-    4. IntegrityError/OperationalError - SQLAlchemy errors
-    5. Exception - Generic catch-all
-
-    Usage:
-        from fastapi import FastAPI
-        from shared.errors.handlers import register_exception_handlers
-
-        app = FastAPI()
-        register_exception_handlers(app)
-
-    Args:
-        app: FastAPI application instance
-    """
-    # Register in order of specificity
     app.add_exception_handler(TradingException, trading_exception_handler)
     app.add_exception_handler(DatabaseException, database_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.add_exception_handler(HTTPException, http_exception_handler)
     app.add_exception_handler(IntegrityError, database_exception_handler)
     app.add_exception_handler(OperationalError, database_exception_handler)
     app.add_exception_handler(Exception, generic_exception_handler)

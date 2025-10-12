@@ -1,9 +1,11 @@
-from shared.dtos.exchange import ExchangeApiKeyDto, ApiKeyDto
-from shared.config import settings
-import logging
 import json
-from typing import Dict, Optional, Mapping, cast
+import logging
+from typing import Dict, Mapping, Optional, cast
+
 import redis.asyncio as redis
+
+from shared.config import settings
+from shared.dtos.exchange import ApiKeyDto, ExchangeApiKeyDto
 
 logger = logging.getLogger(__name__)
 

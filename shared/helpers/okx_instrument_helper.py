@@ -4,12 +4,13 @@ OKX 영구 선물 계약 정보 조회 유틸리티
 OKX Perpetual Swap (USDT-SWAP) 계약 정보를 조회하고 처리하는 기능 제공
 """
 import json
-import aiohttp
 import math
 import traceback
-from typing import Optional, Dict, Tuple, Any, List, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
-from shared.utils.redis_utils import set_redis_data, get_redis_data
+import aiohttp
+
+from shared.utils.redis_utils import get_redis_data, set_redis_data
 
 
 async def get_perpetual_instruments(redis_client: Any) -> Optional[List[Any]]:
@@ -215,5 +216,6 @@ async def testing(redis_client):
 
 if __name__ == "__main__":
     import asyncio
+
     # Testing requires redis_client setup
     print("This module requires redis_client to be passed as parameter")

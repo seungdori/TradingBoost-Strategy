@@ -18,36 +18,37 @@ from typing import List, Optional
 # ==================== 외부 라이브러리 ====================
 import requests
 
-# ==================== 프로젝트 모듈 ====================
-from GRID.database import redis_database
-from GRID.routes.logs_route import add_log_endpoint as add_user_log
 from GRID import telegram_message
-from shared.utils import retry_async
 
 # ==================== Core 모듈 ====================
 from GRID.core.redis import get_redis_connection
 
+# ==================== 프로젝트 모듈 ====================
+from GRID.database import redis_database
+
+# ==================== Task Management ====================
+from GRID.jobs.task_manager import create_tasks
+from GRID.monitoring.position_monitor import manually_close_positions
+from GRID.routes.logs_route import add_log_endpoint as add_user_log
+
 # ==================== Services ====================
-from GRID.services.symbol_service import get_top_symbols, format_symbols
+from GRID.services.symbol_service import format_symbols, get_top_symbols
 from GRID.services.user_management_service import (
     check_permissions_and_initialize,
-    get_user_data,
-    update_user_data,
     get_and_format_symbols,
-    prepare_initial_messages,
+    get_user_data,
     handle_completed_tasks,
+    prepare_initial_messages,
+    update_user_data,
 )
 
 # ==================== Trading Modules ====================
 from GRID.trading.instance_manager import get_exchange_instance
-from GRID.monitoring.position_monitor import manually_close_positions
-
-# ==================== Task Management ====================
-from GRID.jobs.task_manager import create_tasks
+from shared.utils import retry_async
 
 # ==================== Config (for debug only) ====================
 try:
-    from config import OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE
+    from config import OKX_API_KEY, OKX_PASSPHRASE, OKX_SECRET_KEY
 except ImportError:
     OKX_API_KEY = None
     OKX_SECRET_KEY = None

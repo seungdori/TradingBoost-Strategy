@@ -3,11 +3,12 @@
 
 CPU 사용량과 실행 시간을 측정하는 유틸리티
 """
-import time
-import psutil
-from functools import wraps
 import asyncio
-from typing import Callable, Any
+import time
+from functools import wraps
+from typing import Any, Callable
+
+import psutil
 
 
 def profile_cpu_and_time(func: Callable) -> Callable:

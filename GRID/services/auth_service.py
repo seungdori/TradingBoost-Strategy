@@ -6,12 +6,11 @@ Manages password hashing and authentication with structured logging.
 
 import bcrypt
 
-from shared.logging import get_logger
-from shared.errors import ValidationException
-
 from GRID.dtos.auth import LoginDto, SignupDto
-from GRID.dtos.user import UserWithoutPasswordDto, UserCreateDto
+from GRID.dtos.user import UserCreateDto, UserWithoutPasswordDto
 from GRID.services import user_service
+from shared.errors import ValidationException
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

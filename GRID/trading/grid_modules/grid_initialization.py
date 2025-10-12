@@ -9,32 +9,32 @@
 import json
 import logging
 import traceback
-from typing import Dict, Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
 
 from GRID.core.redis import get_redis_connection
 from GRID.database.redis_database import (
     get_user,
-    update_take_profit_orders_info,
+    initialize_active_grid,
     update_active_grid,
-    initialize_active_grid
+    update_take_profit_orders_info,
 )
 from GRID.routes.logs_route import add_log_endpoint as add_user_log
-from GRID.trading import instance_manager as instance
-from GRID.trading.shared_state import cancel_state, user_keys
 from GRID.services.balance_service import get_balance_of_symbol
 from GRID.services.order_service import get_take_profit_orders_info
 from GRID.services.user_management_service import (
+    decode_value,
     ensure_symbol_initialized,
     ensure_symbol_initialized_old_struc,
-    decode_value,
 )
-from shared.utils.exchange_precision import get_price_precision
+from GRID.trading import instance_manager as instance
+from GRID.trading.shared_state import cancel_state, user_keys
 from GRID.utils.price import get_min_notional
 from GRID.utils.quantity import calculate_order_quantity
 from GRID.utils.redis_helpers import get_order_placed
 from shared.utils import retry_async
+from shared.utils.exchange_precision import get_price_precision
 
 logger = logging.getLogger(__name__)
 

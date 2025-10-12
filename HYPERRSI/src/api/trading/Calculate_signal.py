@@ -1,20 +1,15 @@
-import pandas as pd
-import numpy as np
-from typing import Union, Optional, Tuple, Dict
-from functools import lru_cache
-
-from shared.logging import get_logger
 import json
+from functools import lru_cache
+from typing import Dict, Optional, Tuple, Union
+
+import numpy as np
+import pandas as pd
+
 from HYPERRSI.src.trading.models import get_timeframe
+from shared.database.redis_helper import get_redis_client
+from shared.logging import get_logger
+
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 class TrendStateCalculatorException(Exception):
     """TrendStateCalculator 관련 예외"""
@@ -324,7 +319,7 @@ class TrendStateCalculator:
             logger.debug(f"[{symbol}] Redis에서 캔들 데이터 가져오기 시작, key={key}")
             # 예: 맨 끝(최신)부터 fetch_count개 가져오고 싶으면 lrange(key, -fetch_count, -1)
             # 여기서는 전체 가져온 뒤, 필요하면 뒤집는 식으로 처리
-            candles = await _get_redis_client().lrange(key, 0, -1)
+            candles = await get_redis_client().lrange(key, 0, -1)
             
             if not candles:
                 logger.error(f"Redis key='{key}'에서 캔들을 찾을 수 없습니다.")
@@ -456,6 +451,7 @@ class TrendStateCalculator:
 
 # --------------------------------------------------------------------------
 import asyncio
+
 
 async def main():
     calculator = TrendStateCalculator()

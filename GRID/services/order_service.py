@@ -5,11 +5,11 @@ Handles order-related operations for grid trading.
 Extracted from grid_original.py for better maintainability.
 """
 
-import json
 import asyncio
+import json
 import logging
-from typing import List, Dict, Any, Optional
 from decimal import Decimal
+from typing import Any, Dict, List, Optional
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)

@@ -1,14 +1,15 @@
 import asyncio
-import time
-from typing import Any
 import logging
-from threading import Lock
+import os
+import time
 from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
+from typing import Any
+
 import ccxt.pro as ccxtpro
 import redis.asyncio as aioredis
-import os
-from shared.config import settings
-from shared.config import OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE  # 환경 변수에서 키 가져오기
+
+from shared.config import OKX_API_KEY, OKX_PASSPHRASE, OKX_SECRET_KEY, settings  # 환경 변수에서 키 가져오기
 
 REDIS_PASSWORD = settings.REDIS_PASSWORD
 

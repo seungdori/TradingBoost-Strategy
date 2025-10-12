@@ -2,8 +2,9 @@
 
 GRID와 HYPERRSI 프로젝트에서 공통으로 사용하는 사용자 관련 데이터 모델
 """
-from pydantic import BaseModel, Field
 from typing import List, Optional
+
+from pydantic import BaseModel, Field
 
 
 class UserExistDto(BaseModel):

@@ -2,8 +2,10 @@
 
 에러 관련 데이터 모델 정의
 """
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
+
 from pydantic import BaseModel, Field
+
 from shared.errors.categories import ErrorCategory, ErrorSeverity
 
 

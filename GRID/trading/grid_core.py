@@ -20,78 +20,89 @@ import random
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 # ==================== 외부 라이브러리 ====================
 import ccxt
 import pandas as pd
-from ccxt.async_support import NetworkError, ExchangeError
+from ccxt.async_support import ExchangeError, NetworkError
+
+from GRID import telegram_message
+from GRID.core.exceptions import AddAnotherException, QuitException
+
+# ==================== Core 모듈 ====================
+from GRID.core.redis import get_redis_connection
+from GRID.core.websocket import log_exception
 
 # ==================== 프로젝트 모듈 ====================
 from GRID.database import redis_database
 from GRID.database.redis_database import (
     get_user,
-    update_take_profit_orders_info,
+    initialize_active_grid,
     update_active_grid,
-    initialize_active_grid
+    update_take_profit_orders_info,
 )
 from GRID.main import periodic_analysis
-from GRID.routes.logs_route import add_log_endpoint as add_user_log
-from GRID.trading.get_minimum_qty import round_to_qty, get_lot_sizes, get_perpetual_instruments
-from GRID.trading import instance_manager as instance
-from GRID.trading.shared_state import cancel_state, user_keys
-from GRID.strategies import strategy
-from GRID import telegram_message
-from shared.constants.error import TradingErrorName
-from shared.dtos.bot_state import BotStateDto, BotStateKeyDto, BotStateError
-from shared.utils import retry_async
 
-# ==================== Core 모듈 ====================
-from GRID.core.redis import get_redis_connection
-from GRID.core.websocket import log_exception
-from GRID.core.exceptions import QuitException, AddAnotherException
+# ==================== Monitoring ====================
+from GRID.monitoring.monitor_tp_orders import monitor_tp_orders_websocekts
+from GRID.routes.logs_route import add_log_endpoint as add_user_log
 
 # ==================== Services ====================
 from GRID.services.balance_service import get_balance_of_symbol, get_position_size
 from GRID.services.order_service import (
     fetch_order_with_retry,
-    okay_to_place_order,
     get_take_profit_orders_info,
+    okay_to_place_order,
 )
 from GRID.services.user_management_service import (
+    decode_value,
     ensure_symbol_initialized,
     ensure_symbol_initialized_old_struc,
-    decode_value,
 )
-from shared.utils import parse_bool
-
-# ==================== Monitoring ====================
-from GRID.monitoring.monitor_tp_orders import monitor_tp_orders_websocekts
-
-# ==================== Utils ====================
-from shared.utils.exchange_precision import adjust_price_precision, get_price_precision
-from GRID.utils.price import get_min_notional, get_order_price_unit_upbit, round_to_upbit_tick_size, get_corrected_rounded_price
-from GRID.utils.quantity import calculate_order_quantity
-from GRID.utils.redis_helpers import (
-    get_order_placed,
-    set_order_placed,
-    is_order_placed,
-    is_price_placed,
-    add_placed_price,
-    reset_order_placed,
-)
-from shared.utils import (parse_timeframe, calculate_current_timeframe_start, calculate_next_timeframe_start, calculate_sleep_duration)
+from GRID.strategies import strategy
+from GRID.trading import instance_manager as instance
+from GRID.trading.get_minimum_qty import get_lot_sizes, get_perpetual_instruments, round_to_qty
+from GRID.trading.grid_modules.grid_entry_logic import long_logic, short_logic
 
 # ==================== Grid Modules (새로운 모듈들) ====================
 from GRID.trading.grid_modules.grid_initialization import (
-    initialize_trading_session,
     get_exchange_instance,
-    initialize_symbol_data
+    initialize_symbol_data,
+    initialize_trading_session,
 )
-from GRID.trading.grid_modules.grid_orders import create_long_order
-from GRID.trading.grid_modules.grid_entry_logic import long_logic, short_logic
-from GRID.trading.grid_modules.grid_periodic_logic import periodic_15m_logic
 from GRID.trading.grid_modules.grid_monitoring import check_order_status
+from GRID.trading.grid_modules.grid_orders import create_long_order
+from GRID.trading.grid_modules.grid_periodic_logic import periodic_15m_logic
+from GRID.trading.shared_state import cancel_state, user_keys
+from GRID.utils.price import (
+    get_corrected_rounded_price,
+    get_min_notional,
+    get_order_price_unit_upbit,
+    round_to_upbit_tick_size,
+)
+from GRID.utils.quantity import calculate_order_quantity
+from GRID.utils.redis_helpers import (
+    add_placed_price,
+    get_order_placed,
+    is_order_placed,
+    is_price_placed,
+    reset_order_placed,
+    set_order_placed,
+)
+from shared.constants.error import TradingErrorName
+from shared.dtos.bot_state import BotStateDto, BotStateError, BotStateKeyDto
+from shared.utils import (
+    calculate_current_timeframe_start,
+    calculate_next_timeframe_start,
+    calculate_sleep_duration,
+    parse_bool,
+    parse_timeframe,
+    retry_async,
+)
+
+# ==================== Utils ====================
+from shared.utils.exchange_precision import adjust_price_precision, get_price_precision
 
 logger = logging.getLogger(__name__)
 

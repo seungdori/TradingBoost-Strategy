@@ -1,6 +1,7 @@
-from GRID.infra import database
 from GRID.database import redis_database
+from GRID.infra import database
 from GRID.services import user_service_pg
+
 
 # services/db_service.py - Updated to use PostgreSQL
 async def init_database(exchange_names):

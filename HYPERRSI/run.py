@@ -1,9 +1,10 @@
+import os
+import signal
 import subprocess
 import sys
-import signal
 import time
-import os
 from pathlib import Path
+
 from shared.logging import get_logger
 
 logger = get_logger(__name__)

@@ -1,22 +1,25 @@
     #src/data_collector/websocket.py
-import sys
 import os
+import sys
 
 # src 폴더를 Python 모듈 경로에 추가
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-import websockets
-import json
 import asyncio
-import redis
-from datetime import datetime
-import ssl
+import json
 import logging
+import ssl
 import time
-from HYPERRSI.src.core.config import settings
+from datetime import datetime
+
 import pytz
-from HYPERRSI.src.bot.telegram_message import send_telegram_message
+import redis
 import requests
+import websockets
+
+from HYPERRSI.src.bot.telegram_message import send_telegram_message
+from HYPERRSI.src.core.config import settings
+
 SYMBOLS = ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -42,7 +45,7 @@ def convert_symbol_format(symbol: str, to_okx_ws: bool = True) -> str:
         >>> convert_symbol_format("BTC/USDT:USDT", to_okx_ws=False)
         "BTC-USDT-SWAP"
     """
-    from shared.utils.symbol_helpers import okx_to_ccxt_symbol, ccxt_to_okx_symbol
+    from shared.utils.symbol_helpers import ccxt_to_okx_symbol, okx_to_ccxt_symbol
     if to_okx_ws:
         return okx_to_ccxt_symbol(symbol)
     else:

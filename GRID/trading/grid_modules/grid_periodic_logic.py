@@ -11,25 +11,29 @@ import random
 import time
 import traceback
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
+from GRID import telegram_message
 from GRID.database import redis_database
 from GRID.database.redis_database import update_take_profit_orders_info
 from GRID.main import periodic_analysis
-from GRID.main.main_loop import add_user_log
 from GRID.monitoring.monitor_tp_orders import monitor_tp_orders_websocekts
+from GRID.routes.logs_route import add_log_endpoint as add_user_log
 from GRID.services.balance_service import get_balance_of_symbol, get_position_size
 from GRID.services.order_service import (
-    get_take_profit_orders_info, add_placed_price, set_order_placed,
-    is_price_placed, is_order_placed, okay_to_place_order
+    add_placed_price,
+    get_take_profit_orders_info,
+    is_order_placed,
+    is_price_placed,
+    okay_to_place_order,
+    set_order_placed,
 )
 from GRID.strategies import strategy
 from GRID.trading.shared_state import user_keys
 from GRID.utils.price import get_corrected_rounded_price
-from GRID.utils.redis_helpers import reset_order_placed, get_order_placed
-from GRID import telegram_message
+from GRID.utils.redis_helpers import get_order_placed, reset_order_placed
 from shared.utils import retry_async
 
 logger = logging.getLogger(__name__)

@@ -1,16 +1,17 @@
-from fastapi import APIRouter, Request, HTTPException, Query
+import asyncio
+import json
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import redis
+from fastapi import APIRouter, HTTPException, Query, Request, WebSocket
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-import redis
-import json
-from datetime import datetime
-from fastapi import WebSocket
-from HYPERRSI.src.trading.models import get_timeframe
-import asyncio
+
 from HYPERRSI.src.core.config import settings
-from pathlib import Path
-import time
-from typing import Dict, Any, List, Optional
+from HYPERRSI.src.trading.models import get_timeframe
 
 router = APIRouter(tags=["chart"])
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
@@ -29,9 +30,9 @@ _last_candle_timestamps: Dict[str, int] = {}
 CACHE_TTL = 60  # 캐시 유효 시간 (초)
 DEFAULT_LIMIT = 100  # 기본 반환 캔들 개수
 
-active_connections = {}
+active_connections: dict[str, list] = {}
 
-async def watch_redis_updates(symbol: str, timeframe: str):
+async def watch_redis_updates(symbol: str, timeframe: str) -> None:
     
     tf_str = get_timeframe(timeframe)
     while True:
@@ -70,7 +71,7 @@ def normalize_okx_symbol(input: str) -> str:
         
     return input
 
-def update_cache_with_new_candle(cache_key: str, new_candle: Dict[str, Any]):
+def update_cache_with_new_candle(cache_key: str, new_candle: Dict[str, Any]) -> None:
     """캐시에 새 캔들 데이터를 추가하고 오래된 캔들 제거"""
     if cache_key not in _candle_cache:
         return
@@ -105,56 +106,297 @@ async def get_chart(request: Request):
         "default_timeframe": "5"
     })
 
-@router.get("/api/candles/{symbol}/{timeframe}", 
-    summary="캔들 데이터 조회",
+@router.get(
+    "/api/candles/{symbol}/{timeframe}",
+    summary="캔들 데이터 조회 (OHLCV + 지표)",
     description="""
-    특정 심볼과 타임프레임에 대한 캔들 데이터를 조회합니다.
-    
-    - **symbol**: 거래 심볼 (예: BTC-USDT-SWAP)
-    - **timeframe**: 시간 간격 (예: 1, 5, 15, 30, 60, 240, 1D)
-    - **limit**: 반환할 캔들 데이터의 최대 개수 (기본값: 100)
-    - **from_timestamp**: 특정 시간 이후의 데이터만 조회 (선택사항)
-    - **to_timestamp**: 특정 시간 이전의 데이터만 조회 (선택사항)
-    
-    응답은 시간순으로 정렬된 캔들 데이터와 메타데이터를 포함합니다.
-    """,
+# 캔들 데이터 조회 (OHLCV + 지표)
+
+특정 심볼과 타임프레임에 대한 캔들 데이터를 조회합니다. OHLCV(시가/고가/저가/종가/거래량)와 함께 계산된 기술적 지표(RSI, EMA, 볼린저 밴드 등)를 포함합니다.
+
+## 경로 파라미터
+
+- **symbol** (string, required): 거래 심볼
+  - OKX 형식: "BTC-USDT-SWAP", "ETH-USDT-SWAP"
+  - 자동 변환: "BTCUSDT" → "BTC-USDT-SWAP"
+  - 예시: "BTC-USDT-SWAP", "ETHUSDT"
+- **timeframe** (string, required): 시간 간격
+  - 지원 형식: 1, 3, 5, 15, 30, 60, 120, 240, 1D
+  - 자동 변환: "5m" → "5", "1h" → "60", "1d" → "1D"
+  - 예시: "5", "15", "60", "1D"
+
+## 쿼리 파라미터
+
+- **limit** (integer, optional): 반환할 캔들 수
+  - 기본값: 100
+  - 범위: 1-1000
+  - 예시: 200, 500
+- **from_timestamp** (integer, optional): 시작 타임스탬프 (밀리초)
+  - 이 시간 이후의 데이터만 조회
+  - 예시: 1648656000000
+- **to_timestamp** (integer, optional): 종료 타임스탬프 (밀리초)
+  - 이 시간 이전의 데이터만 조회
+  - 예시: 1648742400000
+
+## 동작 방식
+
+1. **심볼 정규화**: 입력된 심볼을 OKX 형식으로 변환
+2. **타임프레임 변환**: get_timeframe()으로 표준 형식 변환
+3. **캐시 확인**: 메모리 캐시에서 데이터 조회 (TTL: 60초)
+4. **Redis 조회**: 캐시 미스 시 Redis에서 데이터 로드
+   - 키: `candles_with_indicators:{symbol}:{timeframe}`
+5. **데이터 파싱**: JSON 파싱 및 유효성 검증
+6. **시간순 정렬**: 타임스탬프 기준 오름차순 정렬
+7. **필터링**: from_timestamp, to_timestamp 범위 필터링
+8. **최신순 선택**: limit 개수만큼 최신 데이터 선택
+9. **캐시 업데이트**: 메모리 캐시 및 최신 타임스탬프 갱신
+10. **메타데이터 생성**: 응답 메타정보 구성
+11. **응답 반환**: 캔들 데이터 + 메타데이터
+
+## 반환 데이터 구조
+
+- **data** (array of objects): 캔들 데이터 배열 (오래된 → 최신 순)
+  - **timestamp** (integer): 타임스탬프 (밀리초)
+  - **open** (string): 시가 (USDT)
+  - **high** (string): 고가 (USDT)
+  - **low** (string): 저가 (USDT)
+  - **close** (string): 종가 (USDT)
+  - **volume** (string): 거래량
+  - **rsi** (float, optional): RSI 지표 (0-100)
+  - **ema_short** (float, optional): 단기 EMA
+  - **ema_long** (float, optional): 장기 EMA
+  - **bb_upper** (float, optional): 볼린저 밴드 상단
+  - **bb_middle** (float, optional): 볼린저 밴드 중간
+  - **bb_lower** (float, optional): 볼린저 밴드 하단
+- **meta** (object): 메타데이터
+  - **symbol** (string): 거래 심볼
+  - **timeframe** (string): 시간 간격
+  - **count** (integer): 반환된 캔들 수
+  - **total_available** (integer): 전체 사용 가능한 캔들 수
+  - **oldest_timestamp** (integer): 가장 오래된 캔들 시간
+  - **newest_timestamp** (integer): 가장 최신 캔들 시간
+
+## 캐시 전략
+
+### 메모리 캐시
+- **TTL**: 60초
+- **키 형식**: `candles:{symbol}:{timeframe}`
+- **갱신 조건**:
+  - 캐시 만료
+  - 새로운 캔들 감지 (타임스탬프 변경)
+  - 첫 조회
+
+### Redis 저장소
+- **키 형식**: `candles_with_indicators:{symbol}:{timeframe}`
+- **데이터 타입**: List (JSON 문자열)
+- **업데이트**: 데이터 수집기가 실시간 업데이트
+
+## 사용 시나리오
+
+- 📊 **차트 표시**: 실시간 가격 차트 렌더링
+- 📈 **기술적 분석**: RSI, EMA, 볼린저 밴드 등 지표 활용
+- 🎯 **신호 생성**: 매매 신호 판단 및 전략 실행
+- 📉 **백테스팅**: 과거 데이터로 전략 검증
+- 🔍 **패턴 인식**: 가격 패턴 및 추세 분석
+- ⚡ **실시간 모니터링**: 시장 상황 실시간 추적
+
+## WebSocket 지원
+
+이 API는 WebSocket을 통한 실시간 업데이트를 지원합니다:
+- **WebSocket 엔드포인트**: `ws://localhost:8000/ws/candles`
+- **구독 형식**: `{{"action": "subscribe", "symbol": "BTC-USDT-SWAP", "timeframe": "5"}}`
+- **업데이트 주기**: 새 캔들 생성 시 자동 전송
+- **Redis Pub/Sub**: `latest:{symbol}:{timeframe}` 채널 사용
+
+## 예시 URL
+
+```
+GET /api/candles/BTC-USDT-SWAP/5
+GET /api/candles/ETHUSDT/15?limit=200
+GET /api/candles/BTC-USDT-SWAP/1D?from_timestamp=1648656000000&to_timestamp=1648742400000
+```
+
+## 예시 curl 명령
+
+```bash
+# 최근 100개 5분봉 조회
+curl -X GET "http://localhost:8000/api/candles/BTC-USDT-SWAP/5"
+
+# 최근 200개 15분봉 조회
+curl -X GET "http://localhost:8000/api/candles/BTC-USDT-SWAP/15?limit=200"
+
+# 특정 기간 일봉 조회
+curl -X GET "http://localhost:8000/api/candles/BTC-USDT-SWAP/1D?from_timestamp=1648656000000&to_timestamp=1648742400000"
+```
+""",
     response_description="캔들 데이터와 메타데이터를 포함한 JSON 응답",
     responses={
         200: {
-            "description": "성공적으로 캔들 데이터를 조회함",
+            "description": "✅ 캔들 데이터 조회 성공",
             "content": {
                 "application/json": {
-                    "example": {
-                        "data": [
-                            {
-                                "timestamp": 1648656000000,
-                                "open": "45000.0",
-                                "high": "45100.0",
-                                "low": "44900.0",
-                                "close": "45050.0",
-                                "volume": "100.5"
+                    "examples": {
+                        "btc_5min_with_indicators": {
+                            "summary": "BTC 5분봉 (지표 포함)",
+                            "value": {
+                                "data": [
+                                    {
+                                        "timestamp": 1648656000000,
+                                        "open": "45000.0",
+                                        "high": "45100.0",
+                                        "low": "44900.0",
+                                        "close": "45050.0",
+                                        "volume": "100.5",
+                                        "rsi": 62.5,
+                                        "ema_short": 45020.3,
+                                        "ema_long": 44980.7,
+                                        "bb_upper": 45200.0,
+                                        "bb_middle": 45000.0,
+                                        "bb_lower": 44800.0
+                                    },
+                                    {
+                                        "timestamp": 1648656300000,
+                                        "open": "45050.0",
+                                        "high": "45200.0",
+                                        "low": "45000.0",
+                                        "close": "45150.0",
+                                        "volume": "120.3",
+                                        "rsi": 65.8,
+                                        "ema_short": 45085.5,
+                                        "ema_long": 45010.2,
+                                        "bb_upper": 45300.0,
+                                        "bb_middle": 45100.0,
+                                        "bb_lower": 44900.0
+                                    }
+                                ],
+                                "meta": {
+                                    "symbol": "BTC-USDT-SWAP",
+                                    "timeframe": "5",
+                                    "count": 2,
+                                    "total_available": 1000,
+                                    "oldest_timestamp": 1648656000000,
+                                    "newest_timestamp": 1648656300000
+                                }
                             }
-                        ],
-                        "meta": {
-                            "symbol": "BTC-USDT-SWAP",
-                            "timeframe": "5",
-                            "count": 1,
-                            "total_available": 1000,
-                            "oldest_timestamp": 1648656000000,
-                            "newest_timestamp": 1648656000000
+                        },
+                        "eth_1hour": {
+                            "summary": "ETH 1시간봉",
+                            "value": {
+                                "data": [
+                                    {
+                                        "timestamp": 1648652400000,
+                                        "open": "3500.0",
+                                        "high": "3550.0",
+                                        "low": "3480.0",
+                                        "close": "3520.0",
+                                        "volume": "850.2",
+                                        "rsi": 58.3,
+                                        "ema_short": 3510.5,
+                                        "ema_long": 3495.8
+                                    }
+                                ],
+                                "meta": {
+                                    "symbol": "ETH-USDT-SWAP",
+                                    "timeframe": "60",
+                                    "count": 1,
+                                    "total_available": 720,
+                                    "oldest_timestamp": 1648652400000,
+                                    "newest_timestamp": 1648652400000
+                                }
+                            }
+                        },
+                        "btc_daily": {
+                            "summary": "BTC 일봉",
+                            "value": {
+                                "data": [
+                                    {
+                                        "timestamp": 1648598400000,
+                                        "open": "44500.0",
+                                        "high": "45500.0",
+                                        "low": "44200.0",
+                                        "close": "45200.0",
+                                        "volume": "12500.8",
+                                        "rsi": 61.2,
+                                        "ema_short": 44980.0,
+                                        "ema_long": 44650.0
+                                    }
+                                ],
+                                "meta": {
+                                    "symbol": "BTC-USDT-SWAP",
+                                    "timeframe": "1D",
+                                    "count": 1,
+                                    "total_available": 365,
+                                    "oldest_timestamp": 1648598400000,
+                                    "newest_timestamp": 1648598400000
+                                }
+                            }
                         }
                     }
                 }
             }
         },
         404: {
-            "description": "요청한 심볼과 타임프레임에 대한 데이터를 찾을 수 없음"
-        },
-        503: {
-            "description": "Redis 연결 오류"
+            "description": "🔍 데이터를 찾을 수 없음",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "no_data": {
+                            "summary": "캔들 데이터 없음",
+                            "value": {
+                                "detail": "No data found for BTC-USDT-SWAP 5"
+                            }
+                        },
+                        "invalid_symbol": {
+                            "summary": "잘못된 심볼",
+                            "value": {
+                                "detail": "No data found for INVALID-SYMBOL 5"
+                            }
+                        }
+                    }
+                }
+            }
         },
         500: {
-            "description": "서버 내부 오류"
+            "description": "💥 서버 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "server_error": {
+                            "summary": "서버 내부 오류",
+                            "value": {
+                                "detail": "Unexpected error: Internal server error"
+                            }
+                        },
+                        "json_parse_error": {
+                            "summary": "JSON 파싱 오류",
+                            "value": {
+                                "detail": "Unexpected error: Failed to parse candle data"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        503: {
+            "description": "🔧 서비스 이용 불가",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "redis_error": {
+                            "summary": "Redis 연결 오류",
+                            "value": {
+                                "detail": "Redis connection error: Connection refused"
+                            }
+                        },
+                        "redis_timeout": {
+                            "summary": "Redis 타임아웃",
+                            "value": {
+                                "detail": "Redis connection error: Timeout"
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 )

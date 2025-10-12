@@ -3,40 +3,41 @@ Order Service
 
 일반 주문 관련 비즈니스 로직
 """
-from typing import List, Optional, Dict, Any
 from decimal import Decimal
+from typing import Any, Dict, List, Optional
+
 import ccxt.async_support as ccxt
 from fastapi import HTTPException
 
 from HYPERRSI.src.api.exchange.models import (
+    CancelOrdersResponse,
     OrderResponse,
-    OrderStatus,
     OrderSide,
+    OrderStatus,
     OrderType,
-    CancelOrdersResponse
 )
-from shared.logging import get_logger
-from HYPERRSI.src.core.logger import error_logger
-from shared.utils.type_converters import safe_float
-from ..parsers import parse_order_response
-from ..constants import REGULAR_ORDERS_CHUNK_SIZE, API_ENDPOINTS
-from ..validators import (
-    validate_order_amount,
-    validate_order_price,
-    validate_symbol_format,
-    validate_order_side,
-    validate_order_type
-)
-from ..error_messages import (
-    INVALID_SYMBOL_FORMAT,
+from HYPERRSI.src.api.routes.order.constants import API_ENDPOINTS, REGULAR_ORDERS_CHUNK_SIZE
+from HYPERRSI.src.api.routes.order.error_messages import (
+    INVALID_ORDER_AMOUNT,
     INVALID_ORDER_SIDE,
     INVALID_ORDER_TYPE,
-    INVALID_ORDER_AMOUNT,
+    INVALID_SYMBOL_FORMAT,
     LIMIT_ORDER_REQUIRES_PRICE,
+    NO_ORDERS_TO_CANCEL,
     ORDER_NOT_FOUND,
-    NO_ORDERS_TO_CANCEL
 )
-from .base_service import BaseService
+from HYPERRSI.src.api.routes.order.parsers import parse_order_response
+from HYPERRSI.src.api.routes.order.services.base_service import BaseService
+from HYPERRSI.src.api.routes.order.validators import (
+    validate_order_amount,
+    validate_order_price,
+    validate_order_side,
+    validate_order_type,
+    validate_symbol_format,
+)
+from HYPERRSI.src.core.logger import error_logger
+from shared.logging import get_logger
+from shared.utils.type_converters import safe_float
 
 logger = get_logger(__name__)
 

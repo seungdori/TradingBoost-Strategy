@@ -14,8 +14,8 @@ project_root = Path(__file__).parent.parent.parent.resolve()
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from GRID.services import user_service_pg
 from GRID.infra.database_pg import init_grid_db
+from GRID.services import user_service_pg
 from shared.logging import get_logger
 
 logger = get_logger(__name__)

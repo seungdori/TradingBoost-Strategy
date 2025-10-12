@@ -1,14 +1,7 @@
 from .client import OKXClient
-from .websocket import OKXWebsocket
-from .constants import (
-    BASE_URL,
-    V5_API,
-    WSS_PUBLIC_URL,
-    WSS_PRIVATE_URL,
-    ENDPOINTS,
-    ERROR_CODES
-)
+from .constants import BASE_URL, ENDPOINTS, ERROR_CODES, V5_API, WSS_PRIVATE_URL, WSS_PUBLIC_URL
 from .exceptions import OKXAPIException
+from .websocket import OKXWebsocket
 
 __all__ = [
     'OKXClient',

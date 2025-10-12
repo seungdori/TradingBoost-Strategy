@@ -2,14 +2,16 @@
 
 이 파일은 하위 호환성을 위해 유지되며, shared.exchange를 사용합니다.
 """
-from datetime import datetime, timedelta
-import sys
 import os
+import sys
+from datetime import datetime, timedelta
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncio
+
+from shared.exchange.okx.client import OKXClient
 from shared.exchange_apis import exchange_store
 from shared.helpers.cache_helper import cache_expired
-from shared.exchange.okx.client import OKXClient
 
 CACHE_TIME_SECONDS = 35
 

@@ -8,27 +8,22 @@ import asyncio
 import json
 import os
 import traceback
+from typing import Dict, Optional
+
 import telegram
-from typing import Optional, Dict
+
+from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger
 
-from .utils import MESSAGE_QUEUE_KEY, MESSAGE_PROCESSING_FLAG
+from .utils import MESSAGE_PROCESSING_FLAG, MESSAGE_QUEUE_KEY
 
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 
 
@@ -55,11 +50,11 @@ async def send_telegram_message(message: str, okx_uid: str, debug: bool = False)
 
         # 메시지 큐에 추가
         queue_key = MESSAGE_QUEUE_KEY.format(okx_uid=okx_uid)
-        await _get_redis_client().rpush(queue_key, json.dumps(message_data))
+        await get_redis_client().rpush(queue_key, json.dumps(message_data))
 
         # 메시지 처리 플래그 설정
         processing_flag = MESSAGE_PROCESSING_FLAG.format(okx_uid=okx_uid)
-        await _get_redis_client().set(processing_flag, "1", ex=60)  # 60초 후 만료
+        await get_redis_client().set(processing_flag, "1", ex=60)  # 60초 후 만료
 
         if debug:
             okx_uid = str(587662504768345929)
@@ -85,13 +80,13 @@ async def get_telegram_id_from_okx_uid(okx_uid: str) -> Optional[Dict]:
     try:
         # 모든 사용자 키를 검색하기 위한 패턴
         pattern = "user:*:okx_uid"
-        keys = await _get_redis_client().keys(pattern)
+        keys = await get_redis_client().keys(pattern)
 
         valid_telegram_ids = []
 
         for key in keys:
             # Redis 키에서 저장된 OKX UID 값 가져오기
-            stored_uid = await _get_redis_client().get(key)
+            stored_uid = await get_redis_client().get(key)
 
             # stored_uid 값 처리 (bytes일 수도 있고 str일 수도 있음)
             stored_uid_str = stored_uid.decode() if isinstance(stored_uid, bytes) else stored_uid
@@ -107,7 +102,7 @@ async def get_telegram_id_from_okx_uid(okx_uid: str) -> Optional[Dict]:
                     # 최근 활동 시간 확인 (가능한 경우)
                     last_activity = 0
                     try:
-                        stats = await _get_redis_client().hgetall(f"user:{user_id}:stats")
+                        stats = await get_redis_client().hgetall(f"user:{user_id}:stats")
                         if stats and b'last_trade_date' in stats:
                             last_trade_date = stats[b'last_trade_date'] if isinstance(stats[b'last_trade_date'], bytes) else stats[b'last_trade_date'].encode()
                             last_activity = int(last_trade_date.decode() or '0')
@@ -149,7 +144,7 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> Optional[str]:
     """
     try:
         # 텔레그램 ID로 OKX UID 조회
-        okx_uid = await _get_redis_client().get(f"user:{telegram_id}:okx_uid")
+        okx_uid = await get_redis_client().get(f"user:{telegram_id}:okx_uid")
         if okx_uid:
             return okx_uid.decode() if isinstance(okx_uid, bytes) else okx_uid
         return None
@@ -189,18 +184,18 @@ async def process_telegram_messages(user_id: str):
     try:
         # 처리 중 플래그 확인
         processing_flag = MESSAGE_PROCESSING_FLAG.format(okx_uid=user_id)
-        flag_exists = await _get_redis_client().exists(processing_flag)
+        flag_exists = await get_redis_client().exists(processing_flag)
 
         if not flag_exists:
             return
 
         # 메시지 큐에서 메시지 가져오기
         queue_key = MESSAGE_QUEUE_KEY.format(okx_uid=user_id)
-        message_data = await _get_redis_client().lpop(queue_key)
+        message_data = await get_redis_client().lpop(queue_key)
 
         if not message_data:
             # 큐가 비어있으면 처리 중 플래그 제거
-            await _get_redis_client().delete(processing_flag)
+            await get_redis_client().delete(processing_flag)
             return
 
         # 메시지 데이터 파싱
@@ -254,4 +249,4 @@ async def process_telegram_messages(user_id: str):
 
         # 오류 발생 시 처리 중 플래그 제거
         processing_flag = MESSAGE_PROCESSING_FLAG.format(okx_uid=user_id)
-        await _get_redis_client().delete(processing_flag)
+        await get_redis_client().delete(processing_flag)

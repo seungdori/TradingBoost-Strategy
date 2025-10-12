@@ -4,9 +4,10 @@
 """
 import asyncio
 import logging
-import redis.asyncio as redis
 import os
 import sys
+
+import redis.asyncio as redis
 import requests
 
 # 프로젝트 루트 경로를 sys.path에 추가하여 프로젝트 모듈을 import 할 수 있도록 함

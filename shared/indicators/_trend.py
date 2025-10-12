@@ -2,9 +2,10 @@
 Trend analysis indicators
 """
 import math
+
+from ._bollinger import calc_stddev
 from ._core import crossover, crossunder
 from ._moving_averages import calc_sma, get_ma
-from ._bollinger import calc_stddev
 
 
 def rational_quadratic(series, lookback=30, relative_weight=0.5, start_at_bar=5):

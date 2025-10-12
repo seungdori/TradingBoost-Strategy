@@ -1,18 +1,11 @@
 # src/core/shutdown.py
 
-from HYPERRSI.src.core.config import settings
-
-from shared.logging import get_logger
 import asyncio
 import logging
 
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
+from HYPERRSI.src.core.config import settings
+from shared.database.redis_helper import get_redis_client
+from shared.logging import get_logger
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +15,12 @@ async def deactivate_all_trading():
     """
     try:
         # 모든 사용자의 trading:status를 stopped로 설정
-        user_keys = await _get_redis_client().keys("user:*:trading:status")
+        user_keys = await get_redis_client().keys("user:*:trading:status")
         stop_count = 0
         
         for key in user_keys:
-            if await _get_redis_client().get(key) == "running":
-                await _get_redis_client().set(key, "stopped")
+            if await get_redis_client().get(key) == "running":
+                await get_redis_client().set(key, "stopped")
                 print(f"STOPPED: {key}")
                 stop_count += 1
         

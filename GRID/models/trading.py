@@ -6,15 +6,17 @@ Database models for trading positions, take profit, stop loss, and win rates.
 
 from datetime import datetime
 from typing import Optional
+
 from sqlalchemy import (
+    DateTime,
+    Float,
     Integer,
     String,
-    Float,
-    DateTime,
     Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
+
 from GRID.models.base import Base
 
 

@@ -10,9 +10,9 @@ import json
 import logging
 import os
 import ssl
-import time
-from datetime import datetime, UTC
 import threading
+import time
+from datetime import UTC, datetime
 from typing import Any
 
 import ccxt
@@ -20,10 +20,10 @@ import pytz  # type: ignore[import-untyped]
 import redis
 import websockets
 
-from HYPERRSI.src.core.config import settings
-from shared.logging import get_logger
-from shared.indicators import compute_all_indicators
 from HYPERRSI.src.config import get_settings
+from HYPERRSI.src.core.config import settings
+from shared.indicators import compute_all_indicators
+from shared.logging import get_logger
 
 # 로깅 설정 - 기본 레벨을 INFO로 설정
 logger = get_logger(__name__)
@@ -96,7 +96,7 @@ shutdown_event = threading.Event()
 
 def convert_symbol_format(symbol: str, to_okx_ws: bool = True) -> str:
     """심볼 형식을 웹소켓 양식으로 변환하는 헬퍼 함수"""
-    from shared.utils.symbol_helpers import okx_to_ccxt_symbol, ccxt_to_okx_symbol
+    from shared.utils.symbol_helpers import ccxt_to_okx_symbol, okx_to_ccxt_symbol
     if to_okx_ws:
         return okx_to_ccxt_symbol(symbol)
     else:

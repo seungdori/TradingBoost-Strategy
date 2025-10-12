@@ -1,19 +1,22 @@
-import websockets
-import json
 import asyncio
-import hmac
 import base64
-import time
 import hashlib
-import redis.asyncio as redis
-from typing import Optional, Dict, List, Set
+import hmac
+import json
+import time
 from datetime import datetime
+from typing import Dict, List, Optional, Set
 
-from trading.redis_connection_manager import RedisConnectionManager
 import aiohttp
+import redis.asyncio as redis
+import websockets
+
+from GRID.trading.redis_connection_manager import RedisConnectionManager
+
 redis_manager = RedisConnectionManager()
-import os
 import logging
+import os
+
 
 class OKXWebsocket:
     def __init__(self, api_key: str, secret_key: str, passphrase: str, user_id: int, exchange_name: str):

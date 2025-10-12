@@ -1,7 +1,9 @@
 #src/trading/services/order_wrapper.py
-from typing import Dict, Optional, List
-from shared.logging import get_logger
+from typing import Dict, List, Optional
+
 import ccxt.async_support as ccxt
+
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

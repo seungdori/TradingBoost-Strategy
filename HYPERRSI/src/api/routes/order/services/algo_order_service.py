@@ -3,19 +3,27 @@ Algo Order Service
 
 알고리즘 주문(트리거, 조건부 주문) 관련 비즈니스 로직
 """
-from typing import List, Optional, Dict, Any
 import json
+from typing import Any, Dict, List, Optional
+
 import ccxt.async_support as ccxt
 from fastapi import HTTPException
 
-from HYPERRSI.src.api.exchange.models import OrderResponse, CancelOrdersResponse
-from shared.logging import get_logger
+from HYPERRSI.src.api.exchange.models import CancelOrdersResponse, OrderResponse
+from HYPERRSI.src.api.routes.order.constants import (
+    ALGO_ORDERS_CHUNK_SIZE,
+    API_ENDPOINTS,
+    REGULAR_ORDERS_CHUNK_SIZE,
+)
+from HYPERRSI.src.api.routes.order.error_messages import (
+    INVALID_SYMBOL_FORMAT,
+    NO_ALGO_ORDERS_TO_CANCEL,
+)
+from HYPERRSI.src.api.routes.order.parsers import parse_algo_order_to_order_response
+from HYPERRSI.src.api.routes.order.services.base_service import BaseService
+from HYPERRSI.src.api.routes.order.validators import validate_symbol_format
 from HYPERRSI.src.core.logger import error_logger
-from ..parsers import parse_algo_order_to_order_response
-from ..constants import ALGO_ORDERS_CHUNK_SIZE, API_ENDPOINTS, REGULAR_ORDERS_CHUNK_SIZE
-from ..validators import validate_symbol_format
-from ..error_messages import INVALID_SYMBOL_FORMAT, NO_ALGO_ORDERS_TO_CANCEL
-from .base_service import BaseService
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

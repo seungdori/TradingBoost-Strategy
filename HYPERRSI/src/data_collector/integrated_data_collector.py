@@ -4,18 +4,18 @@
 
 import json
 import logging
-import time
-from datetime import datetime, UTC
 import threading
+import time
+from datetime import UTC, datetime
 
 import ccxt
 import pytz
 import redis
 
+from HYPERRSI.src.config import OKX_API_KEY, OKX_PASSPHRASE, OKX_SECRET_KEY
 from HYPERRSI.src.core.config import settings
-from shared.logging import get_logger
 from shared.indicators import compute_all_indicators
-from HYPERRSI.src.config import OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE
+from shared.logging import get_logger
 
 # 로깅 설정
 logger = get_logger(__name__)
@@ -74,10 +74,11 @@ exchange = ccxt.okx({
 shutdown_event = threading.Event()
 
 # 마지막 캔들 타임스탬프 및 마지막 체크 시간 저장
-last_candle_timestamps = {}
-last_check_times = {}
+last_candle_timestamps: dict[str, int] = {}
+last_check_times: dict[str, float] = {}
 
-from shared.utils.time_helpers import calculate_update_interval, align_timestamp, is_bar_end
+from shared.utils.time_helpers import align_timestamp, calculate_update_interval, is_bar_end
+
 
 def fetch_latest_candles(symbol, timeframe, limit=POLLING_CANDLES, include_current=False):
     """최신 캔들 데이터 가져오기"""

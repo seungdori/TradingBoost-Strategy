@@ -12,13 +12,15 @@ import logging
 import time
 from threading import Lock
 from typing import Any
+
 import redis.asyncio as aioredis
 from redis import Redis, RedisError
-from redis.asyncio import Redis as AsyncRedis, ConnectionPool
-from shared.config import settings
-from shared.errors import RedisException
-from shared.database.pool_monitor import RedisPoolMonitor
+from redis.asyncio import ConnectionPool
+from redis.asyncio import Redis as AsyncRedis
 
+from shared.config import settings
+from shared.database.pool_monitor import RedisPoolMonitor
+from shared.errors import RedisException
 
 logger = logging.getLogger(__name__)
 
@@ -175,13 +177,13 @@ class RedisConnectionManager:
     def ping_sync(self) -> bool:
         """
         동기 Redis 서버 연결 상태 확인
-        
+
         Returns:
             bool: 연결 성공 여부
         """
         try:
             client = self.get_connection()
-            return client.ping()
+            return bool(client.ping())
         except Exception as e:
             logger.error(f"동기 Redis 핑 실패: {str(e)}")
             return False

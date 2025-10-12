@@ -1,11 +1,12 @@
 """
 Grid trading logic and calculations
 """
-import pandas as pd
-import numpy as np
 import logging
 import traceback
-from typing import Tuple, Dict, Union
+from typing import Dict, Tuple, Union
+
+import numpy as np
+import pandas as pd
 
 
 def initialize_orders(df: pd.DataFrame, n_levels: int = 20) -> pd.DataFrame:

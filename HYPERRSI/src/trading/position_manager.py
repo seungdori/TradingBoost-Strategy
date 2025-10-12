@@ -1,38 +1,32 @@
 import asyncio
-import time
 import json
-import traceback
 import logging
+import time
+import traceback
 from datetime import datetime
-from redis import WatchError
-from HYPERRSI.src.trading.models import Position
 
-from shared.logging import get_logger
+from redis import WatchError
+
+from HYPERRSI.src.trading.models import Position
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 from HYPERRSI.telegram_message import send_telegram_message
+from shared.database.redis_helper import get_redis_client
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 
 async def run_with_retry(keys, operation, max_retries=3):
     """Watch-based 트랜잭션 with 재시도"""
     for attempt in range(max_retries):
         try:
-            async with _get_redis_client().pipeline(transaction=True) as pipe:
+            async with get_redis_client().pipeline(transaction=True) as pipe:
                 await pipe.watch(*keys)
                 return await operation(pipe)
         except WatchError:
@@ -99,7 +93,7 @@ class PositionStateManager:
             position_key = self.get_position_key(user_id, symbol, side)
 
             # Redis에 있는 포지션 정보
-            redis_position_data = await _get_redis_client().hgetall(position_key)
+            redis_position_data = await get_redis_client().hgetall(position_key)
             if not redis_position_data:
                 return True
 
@@ -343,7 +337,7 @@ class PositionStateManager:
 
         # transaction 실행 및 결과 저장
         try:
-            result = await _get_redis_client().transaction(update_operation, position_key)
+            result = await get_redis_client().transaction(update_operation, position_key)
             is_valid = await self.validate_position_state(user_id, symbol, side)
 
             if not result or (isinstance(result, list) and len(result) == 0):
@@ -373,7 +367,7 @@ class PositionStateManager:
         """
         try:
             position_key = self.get_position_key(user_id, symbol, side)
-            return await _get_redis_client().hgetall(position_key)
+            return await get_redis_client().hgetall(position_key)
         except Exception as e:
             await send_telegram_message(f"[{user_id}] [get_position_info] error: {e}", debug=True)
             logger.error(f"[get_position_info] error: {e}")

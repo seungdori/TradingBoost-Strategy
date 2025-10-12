@@ -8,22 +8,22 @@ Demonstrates:
 - Structured logging
 """
 
-from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List
-from pathlib import Path
 import json
+from pathlib import Path
+from typing import List
 
-from shared.errors import (
-    ValidationException,
-    DatabaseException,
-    ConfigurationException,
-)
-from shared.validation import sanitize_symbol
-from shared.logging import get_logger
-from shared.database.session import transactional_session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from GRID.dtos.symbol import AccessListDto
 from GRID.repositories.symbol_repository_new import SymbolRepository
+from shared.database.session import transactional_session
+from shared.errors import (
+    ConfigurationException,
+    DatabaseException,
+    ValidationException,
+)
+from shared.logging import get_logger
+from shared.validation import sanitize_symbol
 
 logger = get_logger(__name__)
 

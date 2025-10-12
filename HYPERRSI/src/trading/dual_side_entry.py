@@ -1,24 +1,29 @@
 # src/trading/dual_side_entry.py
 
 import json
-import traceback
-from typing import Optional, Dict, Any
 import os
+import traceback
 from datetime import datetime
+from typing import Any, Dict, Optional
+
 import ccxt
-from shared.utils import contracts_to_qty
-from HYPERRSI.src.trading.trading_service import TradingService
-from shared.utils.redis_type_converter import prepare_for_redis, parse_from_redis, DUAL_SIDE_SETTINGS_SCHEMA
-from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
-from HYPERRSI.src.api.routes.order.order import close_position
-from HYPERRSI.src.bot.telegram_message import send_telegram_message
-from HYPERRSI.src.trading.error_message import map_exchange_error
-from shared.logging import get_logger, log_order
-from HYPERRSI.src.core.logger import log_dual_side_debug
+
 from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
-from HYPERRSI.src.api.routes.order.order import cancel_algo_orders
+from HYPERRSI.src.api.routes.order.order import cancel_algo_orders, close_position
+from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
+from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.error_handler import log_error
+from HYPERRSI.src.core.logger import log_dual_side_debug
 from HYPERRSI.src.services.redis_service import RedisService, redis_client
+from HYPERRSI.src.trading.error_message import map_exchange_error
+from HYPERRSI.src.trading.trading_service import TradingService
+from shared.logging import get_logger, log_order
+from shared.utils import contracts_to_qty
+from shared.utils.redis_type_converter import (
+    DUAL_SIDE_SETTINGS_SCHEMA,
+    parse_from_redis,
+    prepare_for_redis,
+)
 from shared.utils.task_tracker import TaskTracker
 
 logger = get_logger(__name__)
@@ -36,6 +41,7 @@ async def set_default_dual_side_entry_settings(user_id: str) -> bool:
         settings = await get_user_dual_side_settings(user_id)
         if not settings:
             from shared.constants.default_settings import DEFAULT_DUAL_SIDE_ENTRY_SETTINGS
+
             # prepare_for_redis를 사용하여 안전하게 변환
             settings = prepare_for_redis(DEFAULT_DUAL_SIDE_ENTRY_SETTINGS)
             await redis_client.hset(f"user:{user_id}:dual_side", mapping=settings)

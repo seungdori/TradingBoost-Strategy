@@ -1,21 +1,21 @@
 # src/services/websocket_service.py
 #이거, 포지션 정보 잘 작동함. 02 26 10시 확인
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import logging
+import ssl
 import time
+from datetime import datetime
 from typing import Dict, List, Optional, Set, Union
 
 import aiohttp
-import base64
-import hmac
-import hashlib
-from datetime import datetime
-import ssl
 import certifi
 from core.logger import get_logger
-from HYPERRSI.src.bot.telegram_message import send_telegram_message
 
+from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.database import redis_client
 
 logger = get_logger(__name__)
@@ -524,7 +524,7 @@ class OKXWebsocketManager:
         """거래소 API를 사용해 SL(Stop Loss) 가격을 break_even_price로 업데이트"""
         try:
             from HYPERRSI.src.api.routes.order import update_stop_loss_order
-            
+
             # side가 long 또는 buy이면 order_side는 sell, side가 short 또는 sell이면 order_side는 buy
             order_side = "sell" if side == "long" or side == "buy" else "buy"
             

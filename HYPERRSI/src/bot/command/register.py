@@ -1,18 +1,24 @@
 # src/bot/commands/register.py
 
-from aiogram import types, Router, F
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
+import json
 import time
-from shared.constants.default_settings import DEFAULT_TRADING_SETTINGS, DEFAULT_PARAMS_SETTINGS , DEFAULT_DUAL_SIDE_ENTRY_SETTINGS  # 추가
-import pytz
+import traceback
 from datetime import datetime
 
+import pytz
+from aiogram import F, Router, types
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+
 from HYPERRSI.src.bot.states.states import RegisterStates
-from shared.logging import get_logger
 from HYPERRSI.src.utils.check_invitee import get_uid_from_api_keys
-import traceback
-import json
+from shared.constants.default_settings import (  # 추가
+    DEFAULT_DUAL_SIDE_ENTRY_SETTINGS,
+    DEFAULT_PARAMS_SETTINGS,
+    DEFAULT_TRADING_SETTINGS,
+)
+from shared.database.redis_helper import get_redis_client
+from shared.logging import get_logger
 
 permit_uid = [
     '646396755365762614',
@@ -51,14 +57,6 @@ def check_right_invitee(okx_api, okx_secret, okx_parra, user_id= None):
 router = Router()
 logger = get_logger(__name__)
 
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
-
 def get_redis_keys(user_id):
     return {
         'status': f"user:{user_id}:trading:status",
@@ -73,13 +71,13 @@ def is_allowed_user(user_id):
 async def register_command(message: types.Message, state: FSMContext):
     """사용자 등록 시작"""
     user_id = message.from_user.id
-    okx_uid = await _get_redis_client().get(f"user:{user_id}:okx_uid")
+    okx_uid = await get_redis_client().get(f"user:{user_id}:okx_uid")
     if not is_allowed_user(okx_uid):
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
     keys = get_redis_keys(user_id)
     
-    api_keys = await _get_redis_client().hgetall(keys['api_keys'])
+    api_keys = await get_redis_client().hgetall(keys['api_keys'])
     if api_keys:
         await message.reply(
             "⚠️ 이미 등록된 사용자입니다.\n"
@@ -97,7 +95,7 @@ async def register_command(message: types.Message, state: FSMContext):
 async def setapi_command(message: types.Message, state: FSMContext):
     """API 키 설정"""
     user_id = message.from_user.id
-    okx_uid = await _get_redis_client().get(f"user:{user_id}:okx_uid")
+    okx_uid = await get_redis_client().get(f"user:{user_id}:okx_uid")
     if not is_allowed_user(okx_uid):
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
@@ -162,7 +160,7 @@ async def process_passphrase(message: types.Message, state: FSMContext):
     
     try:
         # Redis에 API 키 정보 저장
-        await _get_redis_client().hmset(keys['api_keys'], {
+        await get_redis_client().hmset(keys['api_keys'], {
             'api_key': user_data['api_key'],
             'api_secret': user_data['api_secret'],
             'passphrase': user_data['passphrase'],
@@ -175,23 +173,23 @@ async def process_passphrase(message: types.Message, state: FSMContext):
         
         if not is_update:  # 새 사용자 등록인 경우
             # DEFAULT_TRADING_SETTINGS에서 기본 설정 가져와서 저장
-            await _get_redis_client().hmset(
+            await get_redis_client().hmset(
                 f"user:{user_id}:preferences", 
                 {k: str(v) for k, v in DEFAULT_TRADING_SETTINGS.items()}
             )
-            await _get_redis_client().set(
+            await get_redis_client().set(
                 f"user:{user_id}:settings",
                 json.dumps(DEFAULT_PARAMS_SETTINGS)
             )
-            await _get_redis_client().hmset(
+            await get_redis_client().hmset(
                 f"user:{user_id}:dual_side",
                 {k: str(v) for k, v in DEFAULT_DUAL_SIDE_ENTRY_SETTINGS.items()}
             )
             # 사용자 상태 초기화
-            await _get_redis_client().set(keys['status'], "stopped")
+            await get_redis_client().set(keys['status'], "stopped")
             
             # 트레이딩 통계 초기화
-            await _get_redis_client().hmset(keys['stats'], {
+            await get_redis_client().hmset(keys['stats'], {
                 'total_trades': '0',
                 'entry_trade': '0',
                 'successful_trades': '0',

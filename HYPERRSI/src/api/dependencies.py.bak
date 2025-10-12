@@ -1,7 +1,7 @@
 #src.api.dependencies.py
 
 from fastapi import  HTTPException
-from typing import Optional
+from typing import Optional, Any
 import ccxt.async_support as ccxt
 import time
 from datetime import timedelta
@@ -64,7 +64,7 @@ class ExchangeConnectionPool:
         self._lock = asyncio.Lock()
         self._client_metadata = {}  # 클라이언트 생성 시간과 사용 횟수 추적
 
-    async def _remove_client(self, user_id: str, client):
+    async def _remove_client(self, user_id: str, client: Any) -> None:
         """클라이언트 제거 및 정리"""
         try:
             # 먼저 풀에서 제거 (close 실패 시에도 풀에서는 제거됨)
@@ -83,12 +83,12 @@ class ExchangeConnectionPool:
                 logger.error(f"Error closing client: {e}")
         
         
-    async def get_client(self, user_id: str, retry_count=0) -> ccxt.okx:
+    async def get_client(self, user_id: str, retry_count: int = 0) -> ccxt.okx:
         # 최대 재시도 횟수 제한
         if retry_count >= 3:  # 3회 이상 재시도하면 예외 발생
             logger.error(f"Client pool is full for user {user_id}")
             if HAS_METRICS:
-                pool_metrics['client_error'].labels(
+                pool_metrics['client_error'].labels(  # type: ignore[union-attr]
                     user_id=user_id,
                     error_type='pool_full'
                 ).inc()

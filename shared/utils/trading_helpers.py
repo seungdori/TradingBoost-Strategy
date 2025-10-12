@@ -2,9 +2,10 @@
 import logging
 import math
 import traceback
-import aiohttp
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
-from decimal import Decimal, ROUND_HALF_UP
+
+import aiohttp
 
 logger = logging.getLogger(__name__)
 
@@ -212,8 +213,8 @@ async def get_perpetual_instruments() -> list[dict[str, Any]] | None:
         List[Dict]: Perpetual 종목 정보 리스트 또는 None
     """
     try:
-        from shared.utils.redis_utils import set_redis_data, get_redis_data
         from shared.database.redis import get_redis
+        from shared.utils.redis_utils import get_redis_data, set_redis_data
 
         redis_client = await get_redis()
 
@@ -595,7 +596,7 @@ async def round_to_tick_size(
     Returns:
         float: 반올림된 가격
     """
-    from decimal import Decimal, ROUND_HALF_UP
+    from decimal import ROUND_HALF_UP, Decimal
 
     logger.debug(f"round_to_tick_size - value={value}, current_price={current_price}, symbol={symbol}")
 

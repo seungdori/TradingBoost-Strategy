@@ -3,22 +3,23 @@ Base Service
 
 모든 서비스 클래스의 공통 기능을 제공하는 베이스 클래스
 """
-from typing import Optional, Callable, Any, TypeVar, ParamSpec, Dict
 from functools import wraps
+from typing import Any, Callable, Dict, Optional, ParamSpec, TypeVar
+
 import ccxt.async_support as ccxt
 from fastapi import HTTPException
 
-from shared.logging import get_logger
-from HYPERRSI.src.core.logger import error_logger
-from ..error_messages import (
-    EXCHANGE_NOT_INITIALIZED,
-    EXCHANGE_CONNECTION_ERROR,
+from HYPERRSI.src.api.routes.order.error_messages import (
     EXCHANGE_AUTH_ERROR,
+    EXCHANGE_CONNECTION_ERROR,
+    EXCHANGE_NOT_INITIALIZED,
     INSUFFICIENT_FUNDS,
     INVALID_ORDER,
+    MISSING_REQUIRED_PARAMS,
     ORDER_NOT_FOUND,
-    MISSING_REQUIRED_PARAMS
 )
+from HYPERRSI.src.core.logger import error_logger
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

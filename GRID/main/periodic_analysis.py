@@ -1,62 +1,64 @@
 # -*- coding: utf-8 -*-
 
-import os
-import sys
-from datetime import datetime, timedelta
-import pandas as pd
 import asyncio
-import pytz  # type: ignore[import-untyped]
-import ccxt.async_support as ccxt  # noqa: E402
-import random
-import traceback
-import numpy as np
-from pathlib import Path
-import time
-import logging
-from concurrent.futures import ProcessPoolExecutor
-from GRID.trading.instance_manager import get_exchange_instance
-from dateutil import parser  # type: ignore[import-untyped]
-from collections import defaultdict
-from GRID.database.redis_database import RedisConnectionManager
 import json
+import logging
+import os
+import random
+import sys
+import time
+import traceback
+from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import ccxt.async_support as ccxt  # noqa: E402
+import numpy as np
+import pandas as pd
+import pytz  # type: ignore[import-untyped]
 import redis
+from dateutil import parser  # type: ignore[import-untyped]
+
+from GRID.analysis import (
+    calculate_grid_levels,
+    calculate_ohlcv,
+    execute_trading_logic,
+    initialize_orders,
+    is_data_valid,
+    refetch_data,
+    summarize_trading_results,
+)
+from GRID.data import (
+    get_all_binance_usdt_spot_symbols,
+    get_all_binance_usdt_symbols,
+    get_all_okx_usdt_spot_symbols,
+    get_all_okx_usdt_swap_symbols,
+    get_all_upbit_krw_symbols,
+    get_cache,
+    get_last_timestamp,
+    get_ttl_for_timeframe,
+    set_cache,
+)
+from GRID.database.redis_database import RedisConnectionManager
+from GRID.indicators import (
+    atr,
+    crossover,
+    crossunder,
+    get_indicator_state,
+    map_4h_adx_to_15m,
+    update_adx_state,
+)
+from GRID.trading.instance_manager import get_exchange_instance
+from GRID.utils import (
+    parse_timeframe_to_ms,
+)
 from shared.config import settings  # settings 추가
 
 # Import from new modular structure
 from shared.indicators import (
     calculate_adx,
     compute_mama_fama,
-)
-from GRID.indicators import (
-    get_indicator_state,
-    map_4h_adx_to_15m,
-    update_adx_state,
-    atr,
-    crossover,
-    crossunder,
-)
-from GRID.data import (
-    get_cache,
-    set_cache,
-    get_ttl_for_timeframe,
-    get_last_timestamp,
-    get_all_okx_usdt_swap_symbols,
-    get_all_okx_usdt_spot_symbols,
-    get_all_binance_usdt_symbols,
-    get_all_binance_usdt_spot_symbols,
-    get_all_upbit_krw_symbols
-)
-from GRID.utils import (
-    parse_timeframe_to_ms,
-)
-from GRID.analysis import (
-    calculate_ohlcv,
-    is_data_valid,
-    refetch_data,
-    summarize_trading_results,
-    initialize_orders,
-    calculate_grid_levels,
-    execute_trading_logic,
 )
 
 #================================================================

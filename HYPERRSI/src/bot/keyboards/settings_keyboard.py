@@ -1,5 +1,7 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from typing import List
+
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
 
 def get_tp_value_display(value: float, tp_option: str) -> str:
     if tp_option == "퍼센트 기준":

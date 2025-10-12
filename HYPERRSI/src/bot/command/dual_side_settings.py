@@ -1,28 +1,22 @@
 # src/bot/command/dual_side_settings.py
 
-from aiogram import types, Router, F
+import asyncio
+import json
+from typing import Any, Dict, Optional
+
+import aiohttp
+from aiogram import F, Router, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
 
-from shared.logging import get_logger
-from typing import Optional, Dict, Any
-import json
-import aiohttp
 from HYPERRSI.src.core.config import settings
-import asyncio
+from shared.database.redis_helper import get_redis_client
+from shared.logging import get_logger
 
 router = Router()
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 # API 엔드포인트 설정
 try:
@@ -69,7 +63,7 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> Optional[str]:
     """
     try:
         # 텔레그램 ID로 OKX UID 조회
-        okx_uid = await _get_redis_client().get(f"user:{telegram_id}:okx_uid")
+        okx_uid = await get_redis_client().get(f"user:{telegram_id}:okx_uid")
         if okx_uid:
             return okx_uid.decode() if isinstance(okx_uid, bytes) else okx_uid
         return None
@@ -151,7 +145,7 @@ async def get_dual_side_settings_fallback(user_id: str) -> Dict[str, Any]:
     okx_uid = await get_identifier(str(user_id))
 
     settings_key = f"user:{okx_uid}:dual_side"
-    settings = await _get_redis_client().hgetall(settings_key)
+    settings = await get_redis_client().hgetall(settings_key)
 
     # 문자열 값을 적절한 타입으로 변환
     parsed_settings: Dict[str, Any] = {}
@@ -176,16 +170,16 @@ async def update_dual_side_settings_fallback(user_id: str, settings: dict) -> No
     
     settings_key = f"user:{okx_uid}:dual_side"
     settings_to_save = {k: str(v).lower() if isinstance(v, bool) else str(v) for k, v in settings.items()}
-    await _get_redis_client().hset(settings_key, mapping=settings_to_save)
+    await get_redis_client().hset(settings_key, mapping=settings_to_save)
     
     # JSON 설정에도 use_dual_side_entry 값 동기화
     if 'use_dual_side_entry' in settings:
         settings_key_og = f"user:{okx_uid}:settings"
-        current_settings = await _get_redis_client().get(settings_key_og)
+        current_settings = await get_redis_client().get(settings_key_og)
         if current_settings:
             settings_dict = json.loads(current_settings)
             settings_dict['use_dual_side_entry'] = settings['use_dual_side_entry']
-            await _get_redis_client().set(settings_key_og, json.dumps(settings_dict))
+            await get_redis_client().set(settings_key_og, json.dumps(settings_dict))
 
 # =========================
 # /dual_settings 명령어
@@ -199,7 +193,7 @@ async def dual_side_settings_command(message: types.Message) -> None:
     telegram_id = message.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
-    okx_uid = await _get_redis_client().get(f"user:{user_id}:okx_uid")
+    okx_uid = await get_redis_client().get(f"user:{user_id}:okx_uid")
     if not is_allowed_user(okx_uid):
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
@@ -1042,8 +1036,8 @@ async def initialize_dual_side_settings_fallback(user_id: str) -> None:
         'dual_side_pyramiding_limit': '1',
         'close_main_on_hedge_tp': 'false'  # 기본값으로 메인 포지션 유지
     }
-    await _get_redis_client().delete(settings_key)
-    await _get_redis_client().hset(settings_key, mapping=default_settings)
+    await get_redis_client().delete(settings_key)
+    await get_redis_client().hset(settings_key, mapping=default_settings)
 
 # -------------------------------
 # "파라미딩 제한 설정" 버튼 핸들러

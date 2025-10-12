@@ -2,33 +2,40 @@
 
 HYPERRSI와 GRID 전략에서 공통으로 사용되는 OKX 거래소 API 클라이언트
 """
-from decimal import Decimal
-import hmac
-import base64
-import time
-import aiohttp
 import asyncio
-import json
+import base64
 import hashlib
+import hmac
+import json
 import ssl
+import time
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
+import aiohttp
+
 from shared.config import get_settings
-from shared.logging import get_logger
 from shared.exchange.base import ExchangeBase
+from shared.logging import get_logger
 from shared.models.exchange import (
-    OrderRequest, OrderResponse,
-    OrderSide, PositionSide, OrderStatus, OrderType,
-    CancelOrdersResponse
+    CancelOrdersResponse,
+    OrderRequest,
+    OrderResponse,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    PositionSide,
 )
+
 # HYPERRSI 전용 모델은 HYPERRSI에서 import
 try:
     from HYPERRSI.src.api.exchange.models import Position
 except ImportError:
     # Position이 필요한 경우를 위한 임시 정의
-    from pydantic import BaseModel, Field
     from decimal import Decimal
-    from typing import Optional, List
+    from typing import List, Optional
+
+    from pydantic import BaseModel, Field
 
     class Position(BaseModel):  # type: ignore[no-redef]
         symbol: str
@@ -57,7 +64,7 @@ except ImportError:
 
         class Config:
             arbitrary_types_allowed = True
-from shared.exchange.okx.constants import BASE_URL, V5_API, ENDPOINTS, ERROR_CODES
+from shared.exchange.okx.constants import BASE_URL, ENDPOINTS, ERROR_CODES, V5_API
 from shared.exchange.okx.exceptions import OKXAPIException
 
 logger = get_logger(__name__)

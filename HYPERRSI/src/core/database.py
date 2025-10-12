@@ -6,26 +6,27 @@ Database configuration and connection management with structured logging
 and exception handling.
 """
 
-from sqlalchemy import inspect
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.orm import sessionmaker
-from contextlib import asynccontextmanager
-from typing import List, Optional, Any, Dict, AsyncGenerator, cast
-from .database_dir.base import Base
 import json
+import time
+from contextlib import asynccontextmanager
+from threading import Lock
+from typing import Any, AsyncGenerator, Dict, List, Optional, cast
+
 import redis.asyncio as redis
 from celery import Celery
-from threading import Lock
-import time
 from prometheus_client import Counter, Histogram
 from pydantic_settings import BaseSettings
-
-from shared.database import RedisConnectionManager
-from shared.utils import retry_decorator
-from shared.logging import get_logger
-from shared.errors import DatabaseException, ConfigurationException
+from sqlalchemy import inspect
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
 from HYPERRSI.src.core.config import settings  # <-- 공통 설정 import
+from shared.database import RedisConnectionManager
+from shared.errors import ConfigurationException, DatabaseException
+from shared.logging import get_logger
+from shared.utils import retry_decorator
+
+from .database_dir.base import Base
 
 # 구조화된 로깅 사용
 logger = get_logger(__name__)
@@ -216,19 +217,36 @@ redis_instance = RedisClient()
 # 전역 Redis 클라이언트 캐시 (싱글톤 패턴)
 _global_redis_client = None
 _global_redis_binary_client = None
+_redis_init_lock = None  # asyncio.Lock은 런타임에 생성
+
+def _get_redis_init_lock():
+    """Lazy initialization of async lock"""
+    global _redis_init_lock
+    if _redis_init_lock is None:
+        import asyncio
+        _redis_init_lock = asyncio.Lock()
+    return _redis_init_lock
 
 async def get_redis_client():
-    """Redis 클라이언트 반환 (decode_responses=True) - 싱글톤"""
+    """Redis 클라이언트 반환 (decode_responses=True) - 싱글톤 (async-safe)"""
     global _global_redis_client
     if _global_redis_client is None:
-        _global_redis_client = await redis_instance.get_client()
+        async with _get_redis_init_lock():  # Async lock으로 보호
+            # Double-check locking pattern
+            if _global_redis_client is None:
+                _global_redis_client = await redis_instance.get_client()
+                logger.debug("Global Redis client (decoded) initialized")
     return _global_redis_client
 
 async def get_redis_binary_client():
-    """Redis 바이너리 클라이언트 반환 (decode_responses=False) - 싱글톤"""
+    """Redis 바이너리 클라이언트 반환 (decode_responses=False) - 싱글톤 (async-safe)"""
     global _global_redis_binary_client
     if _global_redis_binary_client is None:
-        _global_redis_binary_client = await redis_instance.get_binary_client()
+        async with _get_redis_init_lock():  # Async lock으로 보호
+            # Double-check locking pattern
+            if _global_redis_binary_client is None:
+                _global_redis_binary_client = await redis_instance.get_binary_client()
+                logger.debug("Global Redis client (binary) initialized")
     return _global_redis_binary_client
 
 async def init_global_redis_clients():

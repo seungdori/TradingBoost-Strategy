@@ -2,16 +2,18 @@
 # Auto-configure PYTHONPATH
 import sys
 from pathlib import Path
+
 project_root = Path(__file__).parent.parent.resolve()
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 import asyncio
 import signal
-from shared.logging import get_logger
+
 from HYPERRSI.src.bot.handlers import setup_bot, shutdown_bot
 from HYPERRSI.src.core.database import init_db
 from HYPERRSI.src.services.redis_service import init_redis
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

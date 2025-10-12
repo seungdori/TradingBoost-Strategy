@@ -1,26 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
-from HYPERRSI.src.utils.check_invitee import get_uid_from_api_keys, check_invitee
-from fastapi.responses import JSONResponse
-import json
-from HYPERRSI.src.api.routes.account import get_balance
-import requests
-import time
-import hmac
 import base64
 import hashlib
+import hmac
+import json
+import time
 from datetime import datetime
 
 import pytz
-from HYPERRSI.src.config import OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE
+import requests
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
+from HYPERRSI.src.api.routes.account import get_balance
+from HYPERRSI.src.config import OKX_API_KEY, OKX_PASSPHRASE, OKX_SECRET_KEY
+from HYPERRSI.src.utils.check_invitee import check_invitee, get_uid_from_api_keys
+from shared.database.redis_helper import get_redis_client
 
 # 고정 API 키 (check_invitee.py에서 가져오기)
 fixed_api_key = '29568592-e1de-4c0d-af89-999018c8c3bf'
@@ -276,7 +270,7 @@ async def check_valid_user(credentials: OkxCredentials):
         if (uid is not None) or uid != "":
             last_updated_time = int(time.time())
             last_update_time_kr = datetime.now(pytz.timezone('Asia/Seoul')).strftime('%Y-%m-%d %H:%M:%S')
-            await _get_redis_client().hset(f"user:{uid}:api:keys", mapping={"api_key": credentials.api_key, "api_secret": credentials.api_secret, "passphrase": credentials.passphrase, "uid": uid, "last_updated_time": last_updated_time, "last_update_time_kr": last_update_time_kr})
+            await get_redis_client().hset(f"user:{uid}:api:keys", mapping={"api_key": credentials.api_key, "api_secret": credentials.api_secret, "passphrase": credentials.passphrase, "uid": uid, "last_updated_time": last_updated_time, "last_update_time_kr": last_update_time_kr})
         
         # 2. 잔고 조회를 통해 API 키 유효성 검사
         has_valid_balance = False
@@ -342,7 +336,7 @@ async def check_valid_user(credentials: OkxCredentials):
             
         # 3. 캐시에서 초대 여부 확인
         cache_key = f"{INVITEE_CACHE_KEY_PREFIX}{uid}"
-        cached_invitee_data = await _get_redis_client().get(cache_key)
+        cached_invitee_data = await get_redis_client().get(cache_key)
         print("================================================")
         print(cached_invitee_data)
         print("================================================")
@@ -376,7 +370,7 @@ async def check_valid_user(credentials: OkxCredentials):
             except Exception as e:
                 print(f"캐시 데이터 파싱 오류: {str(e)}")
                 # 캐시 파싱 오류 시 삭제하고 계속 진행
-                await _get_redis_client().delete(cache_key)
+                await get_redis_client().delete(cache_key)
         
         # 4. 직접 OKX API를 호출하여 초대 여부 확인
         request_path = f'/api/v5/affiliate/invitee/detail'
@@ -404,7 +398,7 @@ async def check_valid_user(credentials: OkxCredentials):
                     'cached_at': int(time.time()),
                     'valid_until': int(time.time()) + INVITEE_CACHE_FALSE_TTL
                 }
-                await _get_redis_client().set(
+                await get_redis_client().set(
                     cache_key,
                     json.dumps(cache_data),
                     ex=INVITEE_CACHE_FALSE_TTL
@@ -457,7 +451,7 @@ async def check_valid_user(credentials: OkxCredentials):
                     'cached_at': int(time.time()),
                     'valid_until': int(time.time()) + INVITEE_CACHE_TRUE_TTL
                 }
-                await _get_redis_client().set(
+                await get_redis_client().set(
                     cache_key,
                     json.dumps(cache_data),
                     ex=INVITEE_CACHE_TRUE_TTL
@@ -485,7 +479,7 @@ async def check_valid_user(credentials: OkxCredentials):
                 'cached_at': int(time.time()),
                 'valid_until': int(time.time()) + INVITEE_CACHE_FALSE_TTL
             }
-            await _get_redis_client().set(
+            await get_redis_client().set(
                 cache_key,
                 json.dumps(cache_data),
                 ex=INVITEE_CACHE_FALSE_TTL

@@ -21,29 +21,29 @@ Usage:
 
 import json
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any, Dict
 
-from HYPERRSI.src.trading.trading_service import TradingService
-from HYPERRSI.src.trading.models import Position, get_timeframe
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
+from HYPERRSI.src.trading.models import Position, get_timeframe
 from HYPERRSI.src.trading.position_manager import PositionStateManager
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
-from shared.logging import get_logger
+from HYPERRSI.src.trading.trading_service import TradingService
+from HYPERRSI.src.trading.utils.position_handler.constants import (
+    MAIN_POSITION_DIRECTION_KEY,
+    POSITION_KEY,
+)
+from HYPERRSI.src.trading.utils.position_handler.core import (
+    calculate_next_candle_time,
+    get_investment_amount,
+    get_redis_client,
+)
 
 # Import public API functions from modules
 from HYPERRSI.src.trading.utils.position_handler.entry import handle_no_position
-from HYPERRSI.src.trading.utils.position_handler.pyramiding import handle_pyramiding
 from HYPERRSI.src.trading.utils.position_handler.exit import handle_trend_reversal_exit
+from HYPERRSI.src.trading.utils.position_handler.pyramiding import handle_pyramiding
 from HYPERRSI.src.trading.utils.position_handler.validation import check_margin_block
-from HYPERRSI.src.trading.utils.position_handler.core import (
-    get_redis_client,
-    calculate_next_candle_time,
-    get_investment_amount
-)
-from HYPERRSI.src.trading.utils.position_handler.constants import (
-    POSITION_KEY,
-    MAIN_POSITION_DIRECTION_KEY
-)
+from shared.logging import get_logger
 
 logger = get_logger(__name__)
 

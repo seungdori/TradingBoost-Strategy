@@ -1,32 +1,45 @@
+import asyncio
+import atexit
+import json
+import logging
 import multiprocessing
 import os
+import platform
+import signal
+import time
 import trace
 import traceback
-import logging
-from h11 import Data
-import redis
-import redis.asyncio as aioredis
-import asyncio
-from GRID.strategies import grid
-from GRID.database.redis_database import update_job_status, update_user_running_status, get_job_status, save_job_id, get_user_keys, update_user_info
-import time
-import platform
-import atexit
-from GRID.database import redis_database
-from shared.config import settings
-import json
 from asyncio import CancelledError
+
 # Redis 연결 설정
 from contextlib import contextmanager
-import signal
+
+import redis
+import redis.asyncio as aioredis
+from h11 import Data
+
+from GRID.database import redis_database
+from GRID.database.redis_database import (
+    get_job_status,
+    get_user_keys,
+    save_job_id,
+    update_job_status,
+    update_user_info,
+    update_user_running_status,
+)
+from GRID.strategies import grid
+from shared.config import settings
+
 # Set the multiprocessing start method to 'spawn' for all platforms
 multiprocessing.set_start_method('spawn', force=True)
 
 # Celery 관련 임포트 추가
 from celery import Celery, states
 from celery.result import AsyncResult
+
 from GRID.jobs.celery_app import app
-from GRID.jobs.celery_tasks import run_grid_trading as celery_run_grid_trading, cancel_grid_tasks, cleanup_tasks
+from GRID.jobs.celery_tasks import cancel_grid_tasks, cleanup_tasks
+from GRID.jobs.celery_tasks import run_grid_trading as celery_run_grid_trading
 
 redis_conn = None
 redis_async = None

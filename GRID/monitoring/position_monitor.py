@@ -8,7 +8,8 @@
 - check_and_close_positions: 포지션 청산 확인
 - manually_close_positions: 수동 청산
 - manually_close_symbol: 심볼별 수동 청산
-- monitor_and_handle_tasks: 태스크 모니터링
+
+Note: monitor_and_handle_tasks moved to task_manager to break circular dependency
 """
 
 # ==================== 표준 라이브러리 ====================
@@ -18,33 +19,34 @@ import logging
 import random
 import traceback
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 # ==================== 외부 라이브러리 ====================
 import ccxt
-from ccxt.async_support import NetworkError, ExchangeError
+from ccxt.async_support import ExchangeError, NetworkError
 
-# ==================== 프로젝트 모듈 ====================
-from GRID.database import redis_database
-from GRID.database.redis_database import update_take_profit_orders_info, update_active_grid
-from GRID.jobs.task_manager import create_recovery_tasks, handle_task_completion
-from GRID.routes.logs_route import add_log_endpoint as add_user_log
-from GRID.strategies import strategy
-from GRID.trading.instance_manager import get_exchange_instance
-from GRID.trading.shared_state import cancel_state, user_keys
 from GRID import telegram_message
-from shared.utils import retry_async
 
 # ==================== Core 모듈 ====================
 from GRID.core.redis import get_redis_connection
+
+# ==================== 프로젝트 모듈 ====================
+from GRID.database import redis_database
+from GRID.database.redis_database import update_active_grid, update_take_profit_orders_info
+
+# Removed circular import: create_recovery_tasks, handle_task_completion moved to task_manager
+from GRID.routes.logs_route import add_log_endpoint as add_user_log
 
 # ==================== Services ====================
 from GRID.services.balance_service import get_all_positions, get_position_size
 from GRID.services.order_service import get_take_profit_orders_info
 from GRID.services.user_management_service import get_user_data
+from GRID.strategies import strategy
+from GRID.trading.instance_manager import get_exchange_instance
+from GRID.trading.shared_state import cancel_state, user_keys
 
 # ==================== Utils ====================
-from shared.utils import parse_bool
+from shared.utils import parse_bool, retry_async
 
 logger = logging.getLogger(__name__)
 
@@ -632,48 +634,7 @@ async def manually_close_symbol(exchange_name, user_id, symbol):
 
 
 
-async def monitor_and_handle_tasks(
-    created_tasks, exchange_name, user_id, symbol_queues, initial_investment, 
-    direction, timeframe, grid_num, leverage, stop_loss, numbers_to_entry, 
-    exchange_instance, custom_stop, user_key, redis
-):
-    while created_tasks:
-        done, pending = await asyncio.wait(created_tasks, return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            task_name = task.get_name()
-            if task_name in created_tasks:
-                is_running = await get_user_data(exchange_name, user_id, "is_running")
-                if not is_running:
-                    print('프로세스가 종료되었습니다.')
-                    return created_tasks
-                
-                # Remove completed task
-                created_tasks.remove(task)
-                await redis.hset(user_key, 'tasks', json.dumps([t.get_name() for t in created_tasks]))
-                
-                # Handle task completion
-                await handle_task_completion(task, task_name, exchange_name, user_id, redis)
-                
-                # Check if still running
-                is_running = await get_user_data(exchange_name, user_id, "is_running")
-                if not is_running:
-                    print('프로세스가 종료되었습니다.')
-                    return created_tasks
-                
-                # Potentially create recovery tasks if necessary
-                if len(created_tasks) <= numbers_to_entry and is_running:
-                    try:
-                        recovery_tasks = await create_recovery_tasks(
-                            user_id, exchange_name, direction, symbol_queues, initial_investment, 
-                            timeframe, grid_num, leverage, stop_loss, numbers_to_entry, custom_stop
-                        )
-                        if recovery_tasks:
-                            created_tasks.extend(recovery_tasks)
-                            await redis.hset(user_key, 'tasks', json.dumps([t.get_name() for t in created_tasks]))
-                    except Exception as e:
-                        print(f"{user_id} : Error during recovery: {e}")
-                        print(traceback.format_exc())
-    return created_tasks
+# monitor_and_handle_tasks moved to GRID.jobs.task_manager to break circular dependency
 
 
 

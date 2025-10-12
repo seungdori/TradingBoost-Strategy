@@ -1,8 +1,8 @@
 """
 ADX (Average Directional Index) indicator
 """
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 
 def calculate_tr(df: pd.DataFrame) -> pd.DataFrame:

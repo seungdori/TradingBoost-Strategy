@@ -5,8 +5,8 @@ All functions are re-exported from trading_data_service_pg for backward compatib
 """
 
 import time
-from GRID.services import trading_data_service_pg
 
+from GRID.services import trading_data_service_pg
 
 # =============================================================================
 # PostgreSQL Re-exports for Backward Compatibility

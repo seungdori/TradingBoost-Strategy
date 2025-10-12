@@ -8,46 +8,42 @@ Exports:
     - Legacy error models (for backward compatibility)
 """
 
-# New structured exception system
-from shared.errors.exceptions import (
-    # Base exceptions
-    TradingException,
-    ErrorCode,
-    # Validation exceptions
-    ValidationException,
-    InvalidSymbolException,
-    # Exchange exceptions
-    ExchangeException,
-    ExchangeUnavailableException,
-    RateLimitExceededException,
-    # Trading exceptions
-    InsufficientBalanceException,
-    OrderFailedException,
-    OrderNotFoundException,
-    # Risk management exceptions
-    RiskLimitExceededException,
-    # Database exceptions
-    DatabaseException,
-    RecordNotFoundException,
-    # Authentication exceptions
-    UnauthorizedException,
-    ForbiddenException,
-    # System exceptions
-    ConfigurationException,
-    RedisException,
+# Legacy error system (for backward compatibility)
+from shared.errors.categories import (
+    ERROR_SEVERITY_MAP,
+    ErrorCategory,
+    ErrorSeverity,
+    classify_error,
 )
 
+# New structured exception system
+from shared.errors.exceptions import (  # Base exceptions; Validation exceptions; Exchange exceptions; Trading exceptions; Risk management exceptions; Database exceptions; Authentication exceptions; System exceptions
+    ConfigurationException,
+    DatabaseException,
+    ErrorCode,
+    ExchangeException,
+    ExchangeUnavailableException,
+    ForbiddenException,
+    InsufficientBalanceException,
+    InvalidSymbolException,
+    OrderFailedException,
+    OrderNotFoundException,
+    RateLimitExceededException,
+    RecordNotFoundException,
+    RedisException,
+    RiskLimitExceededException,
+    TradingException,
+    UnauthorizedException,
+    ValidationException,
+)
 from shared.errors.handlers import (
-    trading_exception_handler,
-    validation_exception_handler,
     database_exception_handler,
     generic_exception_handler,
     register_exception_handlers,
+    trading_exception_handler,
+    validation_exception_handler,
 )
-
-# Legacy error system (for backward compatibility)
-from shared.errors.categories import ErrorCategory, ErrorSeverity, ERROR_SEVERITY_MAP, classify_error
-from shared.errors.models import ErrorInfo, ErrorContext, ErrorResponse
+from shared.errors.models import ErrorContext, ErrorInfo, ErrorResponse
 
 __all__ = [
     # New exception system

@@ -1,9 +1,11 @@
-from okx.api.trade import Trade
-from okx.api.account import Account
-from typing import Dict, Any
 import os
+from typing import Any, Dict
+
 import dotenv
-from HYPERRSI.src.config import OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE
+from okx.api.account import Account
+from okx.api.trade import Trade
+
+from HYPERRSI.src.config import OKX_API_KEY, OKX_PASSPHRASE, OKX_SECRET_KEY
 
 dotenv.load_dotenv()
 

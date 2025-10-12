@@ -1,7 +1,9 @@
 # bot/utils/validators.py
 
-from typing import Tuple, Dict, Any, cast
+from typing import Any, Dict, Tuple, cast
+
 from shared.constants.default_settings import SETTINGS_CONSTRAINTS
+
 
 def validate_setting(setting_type: str, value: float) -> Tuple[bool, str]:
     """

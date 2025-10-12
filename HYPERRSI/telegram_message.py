@@ -4,20 +4,20 @@ HYPERRSI Telegram 메시지 모듈 (하위 호환성 래퍼)
 이 모듈은 하위 호환성을 위해 유지됩니다.
 새로운 코드에서는 shared.notifications.telegram을 직접 사용하세요.
 """
-import os
 import logging
+import os
 
 # shared 모듈에서 모든 기능 import
 from shared.notifications.telegram import (
-    TelegramNotifier,
-    MessageType,
-    get_telegram_id as _get_telegram_id,
-    enqueue_telegram_message as _enqueue_telegram_message,
-    process_telegram_messages as _process_telegram_messages,
-    send_telegram_message as _send_telegram_message,
+    MESSAGE_PROCESSING_FLAG,
     MESSAGE_QUEUE_KEY,
-    MESSAGE_PROCESSING_FLAG
+    MessageType,
+    TelegramNotifier,
 )
+from shared.notifications.telegram import enqueue_telegram_message as _enqueue_telegram_message
+from shared.notifications.telegram import get_telegram_id as _get_telegram_id
+from shared.notifications.telegram import process_telegram_messages as _process_telegram_messages
+from shared.notifications.telegram import send_telegram_message as _send_telegram_message
 
 logger = logging.getLogger(__name__)
 

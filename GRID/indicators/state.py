@@ -3,11 +3,12 @@ Indicator State Management for Incremental Calculations
 """
 import json
 import logging
+from typing import Any, Dict, Optional
+
 import numpy as np
 import redis
-from typing import Dict, Any, Optional
-from shared.config import settings
 
+from shared.config import settings
 
 # Redis 연결 설정
 redis_client = redis.Redis(

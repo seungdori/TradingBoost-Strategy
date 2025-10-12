@@ -4,13 +4,15 @@ Request ID Middleware for Error Correlation
 Provides request ID tracking for correlation across logs and errors.
 """
 
-import uuid
 import time
+import uuid
 from contextvars import ContextVar
 from typing import Callable
+
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
+
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -149,10 +151,11 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
             raise
 
 
+from contextlib import contextmanager
+
 # Context manager for error enrichment
 from contextvars import ContextVar as CV
 from typing import Any
-from contextlib import contextmanager
 
 error_context_var: CV[dict[str, Any]] = CV('error_context', default={})
 

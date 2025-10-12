@@ -1,19 +1,18 @@
+import os
 from operator import is_
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException
-from shared.constants.exchange import Exchange
-from shared.constants.enterstrategy import EnterStrategy
-from shared.dtos.bot_state import BotStateDto, BotStateKeyDto
-
-from GRID.infra import bot_state_store
-from GRID.database import redis_database
-from GRID.trading.shared_state import user_keys
-
 import redis.asyncio as aioredis
+from fastapi import FastAPI, HTTPException
 from redis.exceptions import RedisError
-import os
+
+from GRID.database import redis_database
+from GRID.infra import bot_state_store
+from GRID.trading.shared_state import user_keys
 from shared.config import settings
+from shared.constants.enterstrategy import EnterStrategy
+from shared.constants.exchange import Exchange
+from shared.dtos.bot_state import BotStateDto, BotStateKeyDto
 
 REDIS_PASSWORD = settings.REDIS_PASSWORD
 

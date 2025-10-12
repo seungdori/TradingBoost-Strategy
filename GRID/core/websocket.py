@@ -1,10 +1,11 @@
 """WebSocket 클라이언트 및 유틸리티"""
 
 import asyncio
-import time
 import random
-import websockets
+import time
 from datetime import datetime, timedelta, timezone
+
+import websockets
 
 
 async def log_exception(e):

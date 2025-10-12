@@ -1,6 +1,7 @@
 #src/core/celery_task.py
 # Auto-configure PYTHONPATH for monorepo structure
 from shared.utils.path_config import configure_pythonpath
+
 configure_pythonpath()
 
 #실행 명령어
@@ -14,14 +15,17 @@ configure_pythonpath()
 #celery -A HYPERRSI.src.core.celery_task beat --loglevel=WARNING
 #celery -A HYPERRSI.src.core.celery_task flower --port=5555
 
-import os
-from celery import Celery
 import asyncio
 import logging
-from HYPERRSI.src.core.config import settings
-from celery.signals import worker_ready, worker_init, worker_shutdown, worker_process_init
+import os
 import signal
+
+from celery import Celery
+from celery.signals import worker_init, worker_process_init, worker_ready, worker_shutdown
 from celery.utils.log import get_task_logger
+
+from HYPERRSI.src.core.config import settings
+
 task_logger = get_task_logger('trading_tasks.check_and_execute_trading')
 task_logger.setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -108,6 +112,7 @@ def setup_worker_process(**kwargs):
     # Redis 초기화 (모듈 import 전에 수행)
     try:
         import asyncio
+
         from HYPERRSI.src.core.database import init_global_redis_clients
         loop = asyncio.get_event_loop()
         loop.run_until_complete(init_global_redis_clients())

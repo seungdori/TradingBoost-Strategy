@@ -5,10 +5,11 @@ import json
 import logging
 import time
 import traceback
+
 import pandas as pd
 import redis
-from shared.config import settings
 
+from shared.config import settings
 
 # Redis 연결 설정
 redis_client = redis.Redis(

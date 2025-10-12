@@ -1,8 +1,8 @@
 """비동기 유틸리티 함수"""
 import asyncio
 import logging
-from typing import TypeVar, Callable, Any, Awaitable
 from functools import wraps
+from typing import Any, Awaitable, Callable, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -216,9 +216,10 @@ async def custom_sleep(timeframe: str) -> None:
     Examples:
         >>> await custom_sleep('15m')  # 다음 15분 경계까지 대기
     """
-    from shared.utils.time_helpers import calculate_next_timeframe_start
-    from datetime import datetime
     import random
+    from datetime import datetime
+
+    from shared.utils.time_helpers import calculate_next_timeframe_start
 
     now = datetime.now()
     next_timeframe_start = calculate_next_timeframe_start(now, timeframe)

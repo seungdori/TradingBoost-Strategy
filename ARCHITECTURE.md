@@ -263,6 +263,90 @@ from shared.logging import get_logger, setup_json_logger
 
 ## Component Breakdown
 
+### Position-Order Service (Microservice)
+
+Event-driven microservice for advanced position and order management.
+
+#### Directory Structure
+
+```
+position-order-service/
+├── api/                        # API layer
+│   ├── routes.py              # FastAPI endpoints
+│   └── schemas.py             # Request/response schemas
+│
+├── core/                       # Core functionality
+│   ├── event_types.py         # Event definitions
+│   ├── pubsub_manager.py      # Redis Pub/Sub manager
+│   └── websocket_manager.py   # WebSocket coordination
+│
+├── managers/                   # Business logic
+│   ├── order_tracker.py       # Order state tracking
+│   ├── position_tracker.py    # Position monitoring
+│   ├── trailing_stop_manager.py # Trailing stop logic
+│   └── conditional_cancellation.py # Conditional orders
+│
+├── workers/                    # Background workers
+│   ├── active_user_manager.py # Active user tracking
+│   └── user_tracker.py        # User session management
+│
+├── integrations/               # Strategy adapters
+│   ├── hyperrsi_adapter.py    # HYPERRSI integration
+│   └── grid_adapter.py        # GRID integration
+│
+├── database/                   # Database layer
+│   ├── models.py              # SQLAlchemy models
+│   ├── connection.py          # Database connection
+│   └── repository.py          # Data access layer
+│
+├── scripts/                    # Utility scripts
+│   ├── setup.sh              # Environment setup
+│   ├── init_db.sh            # Database initialization
+│   └── start.sh              # Service startup
+│
+├── main.py                     # Service entry point
+├── README.md                   # Service documentation
+└── requirements.txt            # Python dependencies
+```
+
+#### Key Features
+
+**1. Event-Driven Architecture**
+- Redis Pub/Sub for real-time event distribution
+- WebSocket integration for live updates
+- Decoupled strategy adapters for HYPERRSI and GRID
+
+**2. Advanced Order Management**
+- Trailing stop loss with dynamic adjustment
+- Conditional order cancellation
+- Multi-strategy order coordination
+
+**3. Position Tracking**
+- Real-time position monitoring
+- P&L calculation and updates
+- Risk management integration
+
+**4. Worker System**
+- Active user session tracking
+- Background monitoring jobs
+- Graceful shutdown handling
+
+**5. Strategy Integration**
+- Adapter pattern for strategy-specific logic
+- Unified interface for both HYPERRSI and GRID
+- Event-based communication protocol
+
+### Documentation
+
+The `docs/` directory contains architecture and design documentation:
+
+```
+docs/
+└── MICROSERVICES_ARCHITECTURE_KR.md   # Microservice architecture (Korean)
+```
+
+This documentation covers the evolution towards microservice architecture and design decisions for the position-order service.
+
 ### HYPERRSI Strategy Module
 
 RSI-based trading strategy with trend analysis and momentum indicators.
@@ -553,7 +637,8 @@ shared/
 ├── database/                   # Database utilities
 │   ├── session.py             # Async session management
 │   ├── transactions.py        # Transaction support
-│   ├── redis.py               # Redis client
+│   ├── redis.py               # Redis client with connection pooling
+│   ├── redis_schemas.py       # Redis key patterns and serializers
 │   ├── pool_monitor.py        # Connection pool monitoring
 │   └── __init__.py
 │
@@ -608,11 +693,23 @@ shared/
 │   └── __init__.py
 │
 ├── models/                     # Data models
-│   └── exchange.py            # Exchange models
+│   ├── exchange.py            # Exchange models
+│   └── trading.py             # Unified Position/Order models
 │
 ├── notifications/              # Notification services
 │   ├── telegram.py            # Telegram integration
 │   └── __init__.py
+│
+├── services/                   # Business services
+│   ├── position_manager.py    # Position lifecycle management
+│   ├── order_manager.py       # Order execution and tracking
+│   └── position_order_service/ # Microservice architecture
+│       ├── core/              # Core event system
+│       ├── managers/          # Order/position tracking
+│       ├── workers/           # Background workers
+│       ├── integrations/      # Strategy adapters
+│       ├── api/               # API routes and schemas
+│       └── database/          # Service-specific DB
 │
 ├── utils/                      # Utility functions
 │   ├── async_helpers.py       # Async utilities (retry logic)
@@ -691,6 +788,28 @@ shared/
 - Trading-specific validators
 - Symbol validation
 - Data cleaning utilities
+
+**9. Unified Trading Models** (`models/trading.py`)
+- **Position Model**: Standardized position representation across strategies
+- **Order Model**: Unified order lifecycle management
+- **Pydantic V2 Models**: Type-safe with computed fields and validators
+- **Exchange Agnostic**: Works with all supported exchanges
+- **Strategy Compatible**: Supports both HYPERRSI and GRID strategies
+
+**10. Redis Schema Management** (`database/redis_schemas.py`)
+- **RedisKeys**: Centralized key pattern generator
+- **RedisSerializer**: Position/Order serialization helpers
+- **GRID Compatibility**: Backward compatible key patterns
+- **Type-Safe**: Conversion between Pydantic models and Redis hashes
+
+**11. Position/Order Services** (`services/`)
+- **Position Manager**: Centralized position lifecycle management
+- **Order Manager**: Order execution and state tracking
+- **Position-Order Service**: Microservice architecture for advanced workflows
+  - Event-driven architecture with Pub/Sub
+  - WebSocket integration for real-time updates
+  - Strategy-agnostic adapters (HYPERRSI/GRID)
+  - Trailing stop and conditional order management
 
 ---
 
@@ -839,36 +958,37 @@ Application State
 ## Technology Stack
 
 ### Language & Runtime
-- **Python 3.12**: Modern Python with latest performance improvements
+- **Python 3.12.8**: Modern Python with latest performance improvements
 - **AsyncIO**: Native async/await for non-blocking I/O
 - **Type Hints**: Comprehensive type annotations for type safety
 
 ### Web Framework
-- **FastAPI 0.115.6**: Modern async web framework
+- **FastAPI 0.109.0**: Modern async web framework
   - Automatic OpenAPI documentation
   - Pydantic V2 integration for validation
   - WebSocket support
   - Dependency injection system
   - Lifespan context managers
-- **Uvicorn 0.34.0**: ASGI server with high performance
+- **Uvicorn**: ASGI server with high performance
 - **Starlette**: Underlying ASGI framework
 
 ### Database Layer
-- **SQLAlchemy 2.0.37**: ORM with async support
+- **SQLAlchemy 2.0.23**: ORM with async support
   - Declarative models
   - Async sessions
   - Connection pooling with monitoring
   - Transaction management
-- **PostgreSQL**: Production database (via asyncpg 0.30.0)
+- **PostgreSQL**: Production database (via asyncpg)
 - **SQLite**: Development database
-- **Redis 5.2.1**: Caching and message broker
+- **Redis 5.0.1**: Caching and message broker
   - Pub/Sub for real-time events
   - Session storage
   - Task queue backend (Celery)
   - Worker state management (GRID)
+  - Unified schema management (RedisKeys, RedisSerializer)
 
 ### Task Queue & Background Processing
-- **Celery 5.4.0**: Distributed task queue (HYPERRSI)
+- **Celery 5.3.4**: Distributed task queue (HYPERRSI)
   - Redis as broker and result backend
   - Scheduled tasks with Celery Beat
   - Task monitoring with Flower
@@ -878,22 +998,22 @@ Application State
   - Worker lifecycle management
 
 ### Exchange Integration
-- **ccxt 4.4.50**: Unified cryptocurrency exchange API
+- **ccxt**: Unified cryptocurrency exchange API
   - 100+ exchange support
   - Standardized API interface
   - Async support
-- **WebSockets 13.1**: WebSocket client library
-- **aiohttp 3.10.11**: Async HTTP client
+- **WebSockets**: WebSocket client library
+- **aiohttp**: Async HTTP client
 
 ### Data Processing
-- **pandas 2.2.3**: Data manipulation and analysis
-- **numpy 2.2.2**: Numerical computations
-- **scipy 1.15.1**: Scientific computing
+- **pandas 2.1.4**: Data manipulation and analysis
+- **numpy 1.26.2**: Numerical computations
+- **scipy**: Scientific computing
 
 ### Validation & Configuration
-- **Pydantic 2.10.5**: Data validation using Python type hints
-- **pydantic-settings 2.7.1**: Settings management from environment
-- **python-dotenv 1.0.1**: Environment variable loading
+- **Pydantic 2.5.3**: Data validation using Python type hints
+- **pydantic-settings 2.1.0**: Settings management from environment
+- **python-dotenv**: Environment variable loading
 
 ### Notifications
 - **python-telegram-bot 21.10**: Telegram Bot API wrapper
@@ -908,7 +1028,7 @@ Application State
 - **Task Tracking**: Background task lifecycle management
 
 ### Development Tools
-- **mypy**: Static type checking (configured in GRID)
+- **mypy**: Static type checking (configured via mypy.ini)
 - **pytest**: Testing framework (to be expanded)
 - **black**: Code formatting (to be added)
 - **ruff**: Fast linting (to be added)
@@ -1135,7 +1255,85 @@ configure_pythonpath()
 - ✅ Monorepo-friendly
 - ✅ Consistent import patterns
 
-### 10. Task Tracking for Graceful Shutdown
+### 10. Unified Trading Models
+
+**Decision**: Centralized Position and Order models using Pydantic V2
+
+**Implementation**:
+```python
+# shared/models/trading.py
+class Position(BaseModel):
+    """Unified Position Model across all strategies"""
+    id: UUID
+    user_id: str
+    exchange: Exchange
+    symbol: str
+    side: PositionSide
+    size: Decimal
+    entry_price: Decimal
+    pnl_info: PnLInfo
+    grid_level: Optional[int]  # GRID compatibility
+
+    @computed_field
+    def notional_value(self) -> Decimal:
+        """Calculate notional value"""
+        return self.size * (self.current_price or self.entry_price)
+
+class Order(BaseModel):
+    """Unified Order Model for all order types"""
+    id: UUID
+    user_id: str
+    exchange: Exchange
+    symbol: str
+    side: OrderSide
+    order_type: OrderType
+    quantity: Decimal
+    status: OrderStatus
+    grid_level: Optional[int]  # GRID compatibility
+
+    @computed_field
+    def remaining_qty(self) -> Decimal:
+        """Calculate remaining quantity"""
+        return max(Decimal("0"), self.quantity - self.filled_qty)
+```
+
+**Benefits**:
+- ✅ Single source of truth for position/order data
+- ✅ Type-safe with Pydantic V2 validation
+- ✅ Strategy-agnostic design (HYPERRSI + GRID)
+- ✅ Computed fields for derived properties
+- ✅ Exchange-agnostic interface
+
+**Redis Schema Integration**:
+```python
+# shared/database/redis_schemas.py
+class RedisKeys:
+    """Centralized key pattern generator"""
+    @staticmethod
+    def position(user_id: str, exchange: str, symbol: str, side: str) -> str:
+        return f"positions:{user_id}:{exchange}:{symbol}:{side}"
+
+class RedisSerializer:
+    """Type-safe Position/Order serialization"""
+    @staticmethod
+    def position_to_dict(position: Position) -> Dict[str, str]:
+        """Convert Position to Redis hash"""
+        ...
+
+    @staticmethod
+    def dict_to_position(data: Dict[str, str]) -> Position:
+        """Convert Redis hash to Position"""
+        ...
+```
+
+**Trade-offs**:
+- ✅ Consistent data model across strategies
+- ✅ Easier testing and validation
+- ✅ Simplified integration with new strategies
+- ⚠️ Migration effort for legacy code
+- ⚠️ Schema evolution requires coordination
+
+### 11. Task Tracking for Graceful Shutdown
 
 **Decision**: Centralized task tracking with proper cancellation
 
@@ -1596,7 +1794,7 @@ async def create_order(symbol: str, ...):
 
 ## Conclusion
 
-The TradingBoost-Strategy platform demonstrates a solid, production-ready foundation with modern Python technologies and clear architectural patterns. The monorepo structure with shared infrastructure has successfully reduced code duplication by ~40% while maintaining strategy independence. The async-first approach, combined with appropriate background processing (Celery for HYPERRSI, multiprocessing for GRID), provides a scalable foundation for cryptocurrency trading operations.
+The TradingBoost-Strategy platform demonstrates a solid, production-ready foundation with modern Python technologies and clear architectural patterns. The monorepo structure with shared infrastructure has successfully reduced code duplication by ~40% while maintaining strategy independence. The async-first approach, combined with appropriate background processing (Celery for HYPERRSI, multiprocessing for GRID), provides a scalable foundation for cryptocurrency trading operations. Recent additions include unified trading models, centralized Redis schema management, and an event-driven position-order microservice that demonstrates the platform's evolution towards a more modular, service-oriented architecture.
 
 ### Key Strengths
 
@@ -1605,6 +1803,8 @@ The TradingBoost-Strategy platform demonstrates a solid, production-ready founda
 - ✅ Centralized shared infrastructure reducing code duplication
 - ✅ Modern async/await patterns throughout the codebase
 - ✅ Proper dependency injection and lifecycle management
+- ✅ Event-driven microservice architecture (position-order-service)
+- ✅ Unified trading models with Pydantic V2 for type safety
 
 **Infrastructure & Reliability**:
 - ✅ Production-ready database layer with connection pooling and monitoring
@@ -1612,18 +1812,22 @@ The TradingBoost-Strategy platform demonstrates a solid, production-ready founda
 - ✅ JSON structured logging for observability
 - ✅ Graceful shutdown with task tracking
 - ✅ Automatic PYTHONPATH configuration for monorepo
+- ✅ Redis schema standardization with type-safe serialization
+- ✅ Static type checking with mypy
 
 **Integration & Exchange Support**:
 - ✅ Multi-exchange support through unified interface
 - ✅ Shared exchange helpers for consistency
 - ✅ Real-time capabilities with WebSocket
 - ✅ Retry logic with exponential backoff
+- ✅ Strategy-agnostic adapters for HYPERRSI and GRID
 
 **Code Quality**:
 - ✅ Type hints for better IDE support and type safety
 - ✅ Modular design with single responsibility principle
 - ✅ Comprehensive validation with Pydantic V2
 - ✅ Configuration management with environment-based settings
+- ✅ Centralized position/order models for consistency
 
 ### Areas for Improvement
 
@@ -1657,11 +1861,38 @@ Implementing the recommended improvements will significantly enhance the platfor
 
 ---
 
-**Document Version**: 2.0
-**Last Updated**: 2025-10-08
+**Document Version**: 2.2
+**Last Updated**: 2025-01-12
 **Maintained By**: Architecture Team
 
-**Recent Architectural Changes**:
+**Recent Architectural Changes (Phase 1-3 Refactoring)**:
+
+**Phase 1: Infrastructure Centralization (Completed)**
+- ✅ Centralized Redis client management with singleton pattern in `shared/database/redis_helper.py`
+- ✅ Converted all `user_id` fields from `int` to `str` for consistency across HYPERRSI and GRID
+- ✅ Unified database session management with proper connection pooling
+- ✅ Standardized error handling and logging infrastructure
+
+**Phase 2: Dependency Resolution (Completed)**
+- ✅ Eliminated 85.7% of circular dependencies (28 → 4 cycles)
+- ✅ Fixed critical bidirectional cycle in GRID (task_manager ↔ position_monitor)
+- ✅ Resolved indirect import cycles in grid_monitoring and grid_periodic_logic
+- ✅ Remaining 4 cycles are non-critical with lazy imports
+
+**Phase 3: Import Structure Optimization (Completed)**
+- ✅ Standardized import ordering with isort across 329 files
+- ✅ Configured isort with black profile and project-specific settings
+- ✅ Fixed missing imports in `__getattr__` functions (22 files)
+- ✅ Added APScheduler to requirements.txt for HYPERRSI tick_checker.py
+- ✅ Cleaned up temporary refactoring scripts
+
+**Previous Major Changes**:
+- Added unified trading models (Position, Order) in shared/models/trading.py with Pydantic V2
+- Implemented Redis schema management with centralized key patterns and serializers
+- Created position/order management services in shared/services/
+- Developed microservice architecture for position-order-service with event-driven design
+- Added mypy static type checking configuration (mypy.ini)
+- Enhanced Redis connection management with health checks and connection pooling
 - Migrated to shared infrastructure layer (error handling, logging, database)
 - Implemented structured exception system with request tracking
 - Added connection pool monitoring and health checks

@@ -1,22 +1,15 @@
 # HYPERRSI/src/trading/modules/trading_utils.py
 """
+from shared.database.redis_helper import get_redis_client
 Trading Utility Functions
 
 트레이딩 관련 유틸리티 함수들
 """
 
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
-
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 
 
@@ -46,21 +39,21 @@ async def init_user_position_data(user_id: str, symbol: str, side: str, is_first
 
     if is_first_init:
         min_size_key = f"user:{user_id}:position:{symbol}:min_sustain_contract_size"
-        await _get_redis_client().delete(min_size_key)
+        await get_redis_client().delete(min_size_key)
         main_position_direction_key = f"user:{user_id}:position:{symbol}:main_position_direction"
-        await _get_redis_client().delete(main_position_direction_key)
+        await get_redis_client().delete(main_position_direction_key)
 
     tp_state = f"user:{user_id}:position:{symbol}:{side}:tp_state"
     hedging_direction_key = f"user:{user_id}:position:{symbol}:hedging_direction"
     entry_fail_count_key = f"user:{user_id}:entry_fail_count"
     initial_size_key = f"user:{user_id}:position:{symbol}:{side}:initial_size"
 
-    await _get_redis_client().delete(position_state_key)
-    await _get_redis_client().delete(tp_data_key)
-    await _get_redis_client().delete(dca_count_key)
-    await _get_redis_client().delete(dca_levels_key)
-    await _get_redis_client().delete(position_key)
-    await _get_redis_client().delete(initial_size_key)
-    await _get_redis_client().delete(tp_state)
-    await _get_redis_client().delete(entry_fail_count_key)
-    await _get_redis_client().delete(hedging_direction_key)
+    await get_redis_client().delete(position_state_key)
+    await get_redis_client().delete(tp_data_key)
+    await get_redis_client().delete(dca_count_key)
+    await get_redis_client().delete(dca_levels_key)
+    await get_redis_client().delete(position_key)
+    await get_redis_client().delete(initial_size_key)
+    await get_redis_client().delete(tp_state)
+    await get_redis_client().delete(entry_fail_count_key)
+    await get_redis_client().delete(hedging_direction_key)

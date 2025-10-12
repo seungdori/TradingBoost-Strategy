@@ -6,7 +6,8 @@ including entries, DCA/pyramiding, and exits.
 """
 
 import json
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
+
 from shared.logging import get_logger
 
 logger = get_logger(__name__)

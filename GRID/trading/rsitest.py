@@ -1,9 +1,12 @@
-import os
 import asyncio
-import pandas as pd
-import numpy as np
+import os
 from datetime import datetime, timedelta
+
+import numpy as np
+import pandas as pd
+
 from shared.indicators import calc_rsi
+
 
 async def analyze_and_scan(timeframe, entry_option, tp_option, profit_perc1, profit_perc2, profit_perc3, reverse=False):
     print(f"현재 작업 디렉토리: {os.getcwd()}")

@@ -2,9 +2,10 @@
 
 GRID와 HYPERRSI 프로젝트에서 공통으로 사용하는 트레이딩 관련 데이터 모델
 """
-from typing import Optional, List
-from pydantic import BaseModel, Field, field_validator, ValidationInfo
 from enum import Enum
+from typing import List, Optional
+
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 
 class PositionSide(str, Enum):

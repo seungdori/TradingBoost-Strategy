@@ -3,10 +3,11 @@
 이 파일은 shared.exchange.helpers를 사용하도록 업데이트되었습니다.
 """
 from datetime import datetime, timedelta
+from typing import Any
+
+from shared.exchange.helpers.wallet_helper import extract_upbit_wallet_info
 from shared.exchange_apis import exchange_store
 from shared.helpers.cache_helper import cache_expired
-from shared.exchange.helpers.wallet_helper import extract_upbit_wallet_info
-from typing import Any
 
 CACHE_TIME_SECONDS = 30
 AVG_PRICE_CACHE_TIME_SECONDS = 30

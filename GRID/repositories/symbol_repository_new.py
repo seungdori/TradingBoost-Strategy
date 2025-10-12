@@ -9,11 +9,10 @@ from typing import List
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from shared.errors import DatabaseException, ValidationException
-from shared.validation import sanitize_symbol
-from shared.logging import get_logger
-
 from GRID.repositories.symbol_list_repository_pg import SymbolListRepositoryPG
+from shared.errors import DatabaseException, ValidationException
+from shared.logging import get_logger
+from shared.validation import sanitize_symbol
 
 logger = get_logger(__name__)
 

@@ -1,34 +1,51 @@
 # Auto-configure PYTHONPATH for monorepo structure
 from shared.utils.path_config import configure_pythonpath
+
 configure_pythonpath()
 
-from fastapi.staticfiles import StaticFiles
+import asyncio
+import logging
+import os
+import signal
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from HYPERRSI.src.api.routes import trading, account, order, position, telegram, chart, trading_log, settings, stats, status, user, okx
-from HYPERRSI.src.api.middleware import setup_middlewares
-from shared.logging import get_logger
-from fastapi.middleware.cors import CORSMiddleware
+from typing import Set
 
-# New infrastructure imports
-from shared.config import settings as app_settings
-from shared.errors import register_exception_handlers
-from shared.errors.middleware import RequestIDMiddleware
-from shared.database.session import init_db as init_new_db, close_db
-from shared.database.redis import init_redis as init_new_redis, close_redis
-from shared.logging import setup_json_logger
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from HYPERRSI.src.api.middleware import setup_middlewares
+from HYPERRSI.src.api.routes import (
+    account,
+    chart,
+    okx,
+    order,
+    position,
+    settings,
+    stats,
+    status,
+    telegram,
+    trading,
+    trading_log,
+    user,
+)
 
 # Legacy imports (for backward compatibility)
 from HYPERRSI.src.core.database import init_db, init_global_redis_clients
-from HYPERRSI.src.services.redis_service import init_redis
 from HYPERRSI.src.core.error_handler import log_error
+from HYPERRSI.src.services.redis_service import init_redis
 
-import asyncio
-import os
-import signal
-import logging
-from typing import Set
+# New infrastructure imports
+from shared.config import settings as app_settings
+from shared.database.redis import close_redis
+from shared.database.redis import init_redis as init_new_redis
+from shared.database.session import close_db
+from shared.database.session import init_db as init_new_db
+from shared.docs.openapi import attach_standard_error_examples
+from shared.errors import register_exception_handlers
+from shared.errors.middleware import RequestIDMiddleware
+from shared.logging import get_logger, setup_json_logger
 
 # Task tracking utility
 from shared.utils.task_tracker import TaskTracker
@@ -162,13 +179,106 @@ async def lifespan(app: FastAPI):
 # FastAPI 앱 설정
 app = FastAPI(
     title="HYPERRSI Trading Strategy API",
-    description="RSI-based trading strategy with trend analysis",
+    description="""
+# HYPERRSI Trading Strategy API
+
+RSI 및 트렌드 분석 기반의 자동화된 거래 API입니다.
+
+## 주요 기능
+
+- **RSI 기반 진입**: Relative Strength Index를 활용한 과매수/과매도 진입 전략
+- **트렌드 분석**: 이동평균선 및 추세 지표를 활용한 시장 방향성 판단
+- **자동 주문 실행**: 지정가, 시장가, 조건부 주문 자동 실행
+- **포지션 관리**: 자동 손절매, 익절, 포지션 사이징
+- **실시간 모니터링**: 계좌 잔고, 포지션, 주문 상태 실시간 조회
+- **텔레그램 알림**: 중요 이벤트에 대한 실시간 알림
+
+## 시작하기
+
+1. 계좌 설정: `/api/account` 엔드포인트에서 거래소 계정 정보를 확인하세요
+2. 거래 활성화: `/api/trading/activate` 엔드포인트로 자동 거래를 시작하세요
+3. 포지션 모니터링: `/api/position` 엔드포인트에서 현재 포지션을 확인하세요
+
+## 지원 거래소
+
+- OKX (선물)
+- Binance (선물)
+- Bybit (선물)
+
+## 보안 주의사항
+
+- API 키는 안전하게 저장되며 암호화됩니다
+- 프로덕션 환경에서는 반드시 HTTPS를 사용하세요
+- 2FA 인증을 활성화하는 것을 권장합니다
+""",
     version="1.0.0",
+    contact={
+        "name": "TradingBoost Support",
+        "url": "https://tradingboost.io",
+        "email": "support@tradingboost.io"
+    },
+    license_info={
+        "name": "Proprietary",
+        "url": "https://tradingboost.io/license"
+    },
+    terms_of_service="https://tradingboost.io/terms",
     debug=app_settings.DEBUG,
     lifespan=lifespan,
     proxy_headers=True,
-    forwarded_allow_ips="127.0.0.1"
+    forwarded_allow_ips="127.0.0.1",
+    openapi_tags=[
+        {
+            "name": "trading",
+            "description": "거래 관리 및 실행 엔드포인트 (활성화, 비활성화, 상태 조회)"
+        },
+        {
+            "name": "account",
+            "description": "계좌 정보 조회 (잔고, 레버리지, 마진 등)"
+        },
+        {
+            "name": "order",
+            "description": "주문 관리 (생성, 취소, 조회, 히스토리)"
+        },
+        {
+            "name": "position",
+            "description": "포지션 관리 및 조회"
+        },
+        {
+            "name": "telegram",
+            "description": "텔레그램 알림 설정 및 관리"
+        },
+        {
+            "name": "chart",
+            "description": "차트 데이터 및 시각화"
+        },
+        {
+            "name": "trading_log",
+            "description": "거래 로그 및 히스토리"
+        },
+        {
+            "name": "settings",
+            "description": "전략 설정 및 파라미터 관리"
+        },
+        {
+            "name": "stats",
+            "description": "통계 및 성과 분석"
+        },
+        {
+            "name": "status",
+            "description": "시스템 상태 및 헬스체크"
+        },
+        {
+            "name": "user",
+            "description": "사용자 정보 및 관리"
+        },
+        {
+            "name": "okx",
+            "description": "OKX 거래소 전용 엔드포인트"
+        }
+    ]
 )
+
+attach_standard_error_examples(app)
 
 # Register exception handlers (new infrastructure)
 register_exception_handlers(app)

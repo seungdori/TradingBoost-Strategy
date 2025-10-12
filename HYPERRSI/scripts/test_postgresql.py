@@ -14,11 +14,15 @@ project_root = Path(__file__).parent.parent.parent.resolve()
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from HYPERRSI.src.core.database import get_async_session, engine
+from sqlalchemy import delete, select
+
+from HYPERRSI.src.core.database import engine, get_async_session
 from HYPERRSI.src.core.models.database import (
-    UserModel, ExchangeKeysModel, UserPreferencesModel, UserStateModel
+    ExchangeKeysModel,
+    UserModel,
+    UserPreferencesModel,
+    UserStateModel,
 )
-from sqlalchemy import select, delete
 from shared.logging import get_logger
 
 logger = get_logger(__name__)

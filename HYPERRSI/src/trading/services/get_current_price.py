@@ -1,25 +1,20 @@
 
-from HYPERRSI.src.trading.models import get_timeframe
+import json
+
 import ccxt.async_support as ccxt
 
-from shared.utils import safe_float
+from HYPERRSI.src.trading.models import get_timeframe
+from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger
-import json
+from shared.utils import safe_float
+
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 
 
@@ -48,7 +43,7 @@ async def get_current_price(symbol: str, timeframe: str = "1m", exchange: ccxt.E
         
         # Redis에서 latest 데이터 조회
         latest_key = f"latest:{symbol}:{tf_str}"
-        latest_data = await _get_redis_client().get(latest_key)
+        latest_data = await get_redis_client().get(latest_key)
         
         if not latest_data:
             logger.warning(f"Redis에서 현재가를 찾을 수 없습니다: {latest_key}")

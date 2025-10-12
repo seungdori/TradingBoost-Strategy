@@ -8,30 +8,23 @@ Market Data Service
 import json
 import traceback
 from typing import Optional
-import pandas as pd
-import httpx
 
+import httpx
+import pandas as pd
 
 from HYPERRSI.src.trading.models import get_timeframe
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
-from shared.utils import safe_float
+from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger
+from shared.utils import safe_float
 
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 API_BASE_URL = "/api"
 
@@ -55,7 +48,7 @@ class MarketDataService:
         try:
             tf_str = get_timeframe(timeframe)
             candle_key = f"candles_with_indicators:{symbol}:{tf_str}"
-            candle_data = await _get_redis_client().lindex(candle_key, -1)
+            candle_data = await get_redis_client().lindex(candle_key, -1)
             if candle_data:
                 candle_json = json.loads(candle_data)
                 atr_value = float(candle_json.get('atr14', 0.0))
@@ -73,7 +66,7 @@ class MarketDataService:
         try:
             tf_str = get_timeframe(timeframe)
             candles_key = f"candles_with_indicators:{symbol}:{tf_str}"
-            cached_data = await _get_redis_client().lrange(candles_key, -limit, -1)
+            cached_data = await get_redis_client().lrange(candles_key, -limit, -1)
             if cached_data:
                 df = pd.DataFrame([
                     {
@@ -192,7 +185,7 @@ class MarketDataService:
         """
         try:
             # 1. 계약 사양 정보 조회
-            specs_json = await _get_redis_client().get("symbol_info:contract_specifications")
+            specs_json = await get_redis_client().get("symbol_info:contract_specifications")
             if not specs_json:
                 if not user_id:
                     print("user_id가 없어서 계약사항 새로운 정보를 조회하지 않습니다.")
@@ -209,7 +202,7 @@ class MarketDataService:
                     if response.status_code != 200:
                         raise ValueError("계약 사양 정보 조회 실패")
 
-                    specs_json = await _get_redis_client().get(f"symbol_info:contract_specifications")
+                    specs_json = await get_redis_client().get(f"symbol_info:contract_specifications")
                     if not specs_json:
                         raise ValueError(f"계약 사양 정보를 찾을 수 없습니다: {symbol}")
 

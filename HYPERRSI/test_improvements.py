@@ -8,8 +8,8 @@
 """
 
 import asyncio
-import time
 import sys
+import time
 from pathlib import Path
 
 # PYTHONPATH 설정
@@ -191,11 +191,7 @@ async def test_type_improvements():
     print("="*60)
 
     try:
-        from HYPERRSI.src.utils.types import (
-            OrderParams,
-            UserSettings,
-            OrderResult
-        )
+        from HYPERRSI.src.utils.types import OrderParams, OrderResult, UserSettings
 
         print("✓ 타입 정의 모듈이 추가되었습니다!")
         print("\n제공되는 타입:")

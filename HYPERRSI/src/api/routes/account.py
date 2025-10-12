@@ -1,25 +1,21 @@
 #src/api/routes/account.py
 
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
-from typing import List, Optional
+import hmac
+import json
 import logging
-
-from datetime import datetime, timedelta, date
-from HYPERRSI.src.api.dependencies import get_exchange_client
-from contextlib import asynccontextmanager
-import ccxt.async_support as ccxt
-
 import os
 import time
-import hmac
+from contextlib import asynccontextmanager
+from datetime import date, datetime, timedelta
+from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+import ccxt.async_support as ccxt
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
+from HYPERRSI.src.api.dependencies import get_exchange_client
+from shared.database.redis_helper import get_redis_client
 
-
-
-import json
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/account", tags=["Account Management"])
@@ -147,15 +143,9 @@ def get_redis_keys(user_id: str):
 router = APIRouter(prefix="/account", tags=["Account Management"])
 
 # 환경 변수나 별도의 설정 파일에서 가져오는 방식을 권장합니다.
-from HYPERRSI.src.config import OKX_API_KEY as API_KEY, OKX_SECRET_KEY as API_SECRET, OKX_PASSPHRASE as API_PASSPHRASE
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
+from HYPERRSI.src.config import OKX_API_KEY as API_KEY
+from HYPERRSI.src.config import OKX_PASSPHRASE as API_PASSPHRASE
+from HYPERRSI.src.config import OKX_SECRET_KEY as API_SECRET
 
 BASE_URL = "https://www.okx.com"
 
@@ -167,7 +157,7 @@ async def update_contract_specifications(user_id: str):
     """
     try:
         # 마지막 업데이트 시간 확인
-        last_update = await _get_redis_client().get("symbol_info:contract_specs_last_update")
+        last_update = await get_redis_client().get("symbol_info:contract_specs_last_update")
         current_time = int(time.time())
         
         if not last_update or (current_time - int(last_update)) > 86400:
@@ -190,13 +180,13 @@ async def update_contract_specifications(user_id: str):
                     }
                 
                 # Redis에 저장 (만료시간 없이)
-                await _get_redis_client().set("symbol_info:contract_specifications", json.dumps(specs_dict))
-                await _get_redis_client().set("symbol_info:contract_specs_last_update", str(current_time))
+                await get_redis_client().set("symbol_info:contract_specifications", json.dumps(specs_dict))
+                await get_redis_client().set("symbol_info:contract_specs_last_update", str(current_time))
                 
                 return specs_dict
         
         # 기존 데이터 반환
-        specs = await _get_redis_client().get("symbol_info:contract_specifications")
+        specs = await get_redis_client().get("symbol_info:contract_specifications")
         return json.loads(specs) if specs else {}
         
     except Exception as e:
@@ -220,14 +210,14 @@ async def get_contract_specifications(
     try:
         if force_update:
             # Redis 데이터 삭제 후 새로 조회
-            await _get_redis_client().delete("symbol_info:contract_specifications")
-            await _get_redis_client().delete("symbol_info:contract_specs_last_update")
+            await get_redis_client().delete("symbol_info:contract_specifications")
+            await get_redis_client().delete("symbol_info:contract_specs_last_update")
             
         specs_dict = await update_contract_specifications(user_id)
         return {
             "success": True,
             "data": specs_dict,
-            "last_update": await _get_redis_client().get("symbol_info:contract_specs_last_update")
+            "last_update": await get_redis_client().get("symbol_info:contract_specs_last_update")
         }
     
     except Exception as e:
@@ -241,49 +231,246 @@ async def get_contract_specifications(
 @router.get(
     "/balance",
     response_model=Balance,
-    summary="사용자 잔고 조회",
-    description="현재 사용자 계정의 잔고(총자산, 가용 마진, 사용 중인 마진, 마진 비율)와 보유 포지션을 조회합니다.",
+    summary="계정 잔고 및 포지션 조회",
+    description="""
+# 계정 잔고 및 포지션 조회
+
+사용자 계정의 전체 잔고 정보(총자산, 가용 마진, 사용 중인 마진, 마진 비율)와 현재 보유 중인 모든 포지션을 조회합니다.
+
+## 쿼리 파라미터
+
+- **user_id** (string, required): 사용자 식별자
+  - OKX UID (18자리) 또는 텔레그램 ID
+  - 텔레그램 ID인 경우 자동으로 OKX UID로 변환
+
+## 동작 방식
+
+1. **사용자 인증**: Redis에서 API 키 조회
+2. **CCXT 클라이언트 생성**: OKX API 접근 준비
+3. **잔고 조회**: fetch_balance()로 계정 잔고 가져오기
+4. **포지션 조회**: private_get_account_positions()로 활성 포지션 가져오기
+5. **계약 사양 동기화**: update_contract_specifications()로 최신 계약 정보 업데이트
+6. **데이터 파싱**: USDT 잔고 추출 및 포지션 정보 변환
+7. **응답 반환**: 잔고 및 포지션 메타데이터
+
+## 반환 정보 (Balance)
+
+### 잔고 정보
+
+- **total_equity** (float): 총자산 (USDT)
+  - 계정의 총 가치 (보유 자산 + 미실현 손익)
+- **available_margin** (float): 가용 마진 (USDT)
+  - 새로운 포지션 진입에 사용 가능한 마진
+- **used_margin** (float): 사용 중인 마진 (USDT)
+  - 현재 포지션 유지에 사용 중인 마진
+- **currency** (string): 기축통화 (항상 "USDT")
+- **margin_ratio** (float): 마진 비율
+  - 사용 중인 마진 / 총자산
+  - 높을수록 청산 리스크 증가
+- **update_time** (datetime): 조회 시간 (UTC)
+
+### 포지션 정보
+
+- **positions** (array): 현재 보유 포지션 목록
+  - **instrument** (string): 거래 심볼 (예: "BTC-USDT-SWAP")
+  - **size** (float): 포지션 크기 (기준 화폐 단위)
+  - **side** (string): 포지션 방향 ("long" 또는 "short")
+  - **entry_price** (float): 평균 진입가
+  - **mark_price** (float): 현재 마크 가격
+  - **unrealized_pnl** (float): 미실현 손익 (USDT)
+  - **margin_ratio** (float): 포지션별 마진 비율
+  - **leverage** (float): 레버리지
+  - **liquidation_price** (float): 청산가
+  - **margin** (float): 포지션 마진 (USDT)
+
+## 사용 시나리오
+
+- 💰 **자산 확인**: 총자산 및 가용 마진 모니터링
+- 📊 **포지션 관리**: 모든 활성 포지션 한눈에 확인
+- ⚠️ **리스크 체크**: 마진 비율 및 청산가 모니터링
+- 📈 **손익 추적**: 미실현 손익 실시간 확인
+- 🎯 **거래 계획**: 가용 마진 기반 신규 포지션 계획
+
+## 계약 사양 자동 업데이트
+
+이 엔드포인트는 내부적으로 `update_contract_specifications()`를 호출하여:
+- 24시간마다 자동으로 계약 사양 업데이트
+- 계약 크기, 최소 주문 수량, 최대 레버리지 등 동기화
+- Redis에 캐싱하여 성능 최적화
+
+## 예시 URL
+
+```
+GET /account/balance?user_id=518796558012178692
+GET /account/balance?user_id=1709556958
+```
+""",
     responses={
         200: {
-            "description": "성공적으로 잔고 정보를 조회했습니다.",
+            "description": "✅ 잔고 조회 성공",
             "content": {
                 "application/json": {
-                    "example": {
-                        "total_equity": 1000.0,
-                        "available_margin": 900.0,
-                        "used_margin": 100.0,
-                        "currency": "USDT",
-                        "margin_ratio": 0.1,
-                        "update_time": "2025-01-01T12:00:00Z",
-                        "positions": [
-                            {
-                                "instrument": "BTC-USDT-SWAP",
-                                "size": 0.001,
-                                "side": "long",
-                                "entry_price": 30000.0,
-                                "mark_price": 31000.0,
-                                "unrealized_pnl": 10.0,
-                                "margin_ratio": 0.02,
-                                "leverage": 10.0,
-                                "liquidation_price": 25000.0,
-                                "margin": 30.0,
+                    "examples": {
+                        "balance_with_positions": {
+                            "summary": "포지션 보유 중",
+                            "value": {
+                                "total_equity": 1000.0,
+                                "available_margin": 850.0,
+                                "used_margin": 150.0,
+                                "currency": "USDT",
+                                "margin_ratio": 0.15,
+                                "update_time": "2025-01-12T16:30:00Z",
+                                "positions": [
+                                    {
+                                        "instrument": "BTC-USDT-SWAP",
+                                        "size": 0.1,
+                                        "side": "long",
+                                        "entry_price": 92000.0,
+                                        "mark_price": 92500.0,
+                                        "unrealized_pnl": 50.0,
+                                        "margin_ratio": 0.08,
+                                        "leverage": 10.0,
+                                        "liquidation_price": 83000.0,
+                                        "margin": 920.0
+                                    }
+                                ]
                             }
-                        ]
+                        },
+                        "balance_without_positions": {
+                            "summary": "포지션 없음",
+                            "value": {
+                                "total_equity": 2000.0,
+                                "available_margin": 2000.0,
+                                "used_margin": 0.0,
+                                "currency": "USDT",
+                                "margin_ratio": 0.0,
+                                "update_time": "2025-01-12T16:35:00Z",
+                                "positions": []
+                            }
+                        },
+                        "multiple_positions": {
+                            "summary": "여러 포지션 보유",
+                            "value": {
+                                "total_equity": 5000.0,
+                                "available_margin": 4200.0,
+                                "used_margin": 800.0,
+                                "currency": "USDT",
+                                "margin_ratio": 0.16,
+                                "update_time": "2025-01-12T16:40:00Z",
+                                "positions": [
+                                    {
+                                        "instrument": "BTC-USDT-SWAP",
+                                        "size": 0.1,
+                                        "side": "long",
+                                        "entry_price": 92000.0,
+                                        "unrealized_pnl": 50.0
+                                    },
+                                    {
+                                        "instrument": "ETH-USDT-SWAP",
+                                        "size": 2.0,
+                                        "side": "short",
+                                        "entry_price": 2650.0,
+                                        "unrealized_pnl": -20.0
+                                    }
+                                ]
+                            }
+                        }
                     }
                 }
             },
         },
         400: {
-            "description": "잘못된 요청(거래소 오류 등)",
+            "description": "❌ 잘못된 요청 - 거래소 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "exchange_error": {
+                            "summary": "거래소 오류",
+                            "value": {
+                                "detail": "거래소 오류: Invalid request"
+                            }
+                        }
+                    }
+                }
+            }
         },
         401: {
-            "description": "인증 오류(각종 Key 문제)",
+            "description": "🔒 인증 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "authentication_error": {
+                            "summary": "인증 실패",
+                            "value": {
+                                "detail": "인증 오류가 발생했습니다"
+                            }
+                        },
+                        "invalid_api_keys": {
+                            "summary": "잘못된 API 키",
+                            "value": {
+                                "detail": "Invalid API credentials"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "🔍 API 키를 찾을 수 없음",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "api_keys_not_found": {
+                            "summary": "API 키 미등록",
+                            "value": {
+                                "detail": "API 키가 등록되지 않았습니다. API 키를 먼저 등록해주세요."
+                            }
+                        }
+                    }
+                }
+            }
         },
         503: {
-            "description": "거래소 연결 오류",
+            "description": "🔧 서비스 이용 불가 - 거래소 연결 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "network_error": {
+                            "summary": "네트워크 오류",
+                            "value": {
+                                "detail": "거래소 연결 오류가 발생했습니다"
+                            }
+                        },
+                        "exchange_maintenance": {
+                            "summary": "거래소 점검",
+                            "value": {
+                                "detail": "거래소가 점검 중입니다"
+                            }
+                        }
+                    }
+                }
+            }
         },
         500: {
-            "description": "잔고 조회 중 서버 오류",
+            "description": "💥 서버 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "server_error": {
+                            "summary": "서버 내부 오류",
+                            "value": {
+                                "detail": "잔고 조회 중 오류가 발생했습니다"
+                            }
+                        },
+                        "redis_error": {
+                            "summary": "Redis 오류",
+                            "value": {
+                                "detail": "Failed to update contract specifications"
+                            }
+                        }
+                    }
+                }
+            }
         },
     }
 )
@@ -454,14 +641,14 @@ async def get_history(
     - 청산 유형(TP/SL/Manual) 구분
     """
     keys = get_redis_keys(user_id)
-    api_keys = await _get_redis_client().hgetall(keys['api_keys'])
+    api_keys = await get_redis_client().hgetall(keys['api_keys'])
     
     if not api_keys:
         raise HTTPException(status_code=400, detail="등록되지 않은 사용자입니다.")
         
     try:
         async with get_exchange_context(str(user_id)) as exchange:
-            history_list = await _get_redis_client().lrange(keys['history'], 0, limit - 1)
+            history_list = await get_redis_client().lrange(keys['history'], 0, limit - 1)
             if not history_list:
                 return []
                 
@@ -514,7 +701,7 @@ async def get_history(
                                 trade_info['close_type'] = 'Manual'
                             
                             # Redis 업데이트
-                            await _get_redis_client().lset(
+                            await get_redis_client().lset(
                                 keys['history'],
                                 history_list.index(trade_data),
                                 json.dumps(trade_info)
@@ -535,43 +722,226 @@ async def get_history(
     "/positions/summary",
     response_model=PositionsResponse,
     summary="활성 포지션 요약 조회",
-    description="현재 보유 중인 선물 포지션의 요약 정보를 조회합니다. 사용자마다 instId, 포지션 방향, 미실현손익 등을 반환합니다.",
+    description="""
+# 활성 포지션 요약 조회
+
+현재 보유 중인 선물 포지션의 요약 정보를 간소화된 형태로 조회합니다. 모든 활성 포지션의 미실현 손익 합계를 포함합니다.
+
+## 쿼리 파라미터
+
+- **user_id** (string, required): 사용자 식별자
+  - OKX UID (18자리) 또는 텔레그램 ID
+  - 텔레그램 ID인 경우 자동으로 OKX UID로 변환
+
+## 동작 방식
+
+1. **사용자 인증**: Redis에서 API 키 조회
+2. **CCXT 클라이언트 생성**: OKX API 접근 준비
+3. **포지션 조회**: private_get_account_positions()로 SWAP 포지션 조회
+4. **계약 사양 로드**: update_contract_specifications()로 계약 정보 가져오기
+5. **데이터 변환**: 원본 데이터를 SimplePosition 형태로 변환
+6. **손익 집계**: 모든 포지션의 미실현 손익 합산
+7. **응답 반환**: 간소화된 포지션 요약 정보
+
+## 반환 정보 (PositionsResponse)
+
+- **positions** (array): 활성 포지션 목록 (SimplePosition)
+  - **symbol** (string): 거래 심볼 (예: "BTC-USDT-SWAP")
+  - **direction** (string): 포지션 방향 ("long" 또는 "short")
+  - **size** (float): 포지션 크기 (기준 화폐 단위)
+  - **entry_price** (float): 평균 진입가
+  - **mark_price** (float): 현재 마크 가격
+  - **unrealized_pnl** (float): 미실현 손익 (USDT)
+  - **leverage** (int): 레버리지
+  - **margin** (float): 포지션 마진 (USDT)
+  - **liquidation_price** (float): 청산가
+- **total_unrealized_pnl** (float): 전체 미실현 손익 합계
+- **update_time** (datetime): 조회 시간 (UTC)
+
+## 사용 시나리오
+
+- 📊 **대시보드**: 포지션 현황 한눈에 파악
+- 💰 **손익 모니터링**: 전체 미실현 손익 실시간 추적
+- ⚠️ **리스크 관리**: 청산가 대비 현재가 모니터링
+- 📈 **포트폴리오 분석**: 심볼별 포지션 분포 확인
+- 🎯 **거래 전략**: 포지션 밸런스 최적화
+
+## GET /balance와의 차이점
+
+### GET /balance
+- 전체 계정 잔고 정보 포함
+- 총자산, 가용 마진, 사용 마진 제공
+- 포지션 정보는 부가 데이터
+- 계정 전체 상태 확인에 적합
+
+### GET /positions/summary
+- 포지션 정보에만 집중
+- 간소화된 포지션 데이터 구조
+- 전체 미실현 손익 집계
+- 빠른 포지션 현황 파악에 적합
+
+## 예시 URL
+
+```
+GET /account/positions/summary?user_id=518796558012178692
+GET /account/positions/summary?user_id=1709556958
+```
+""",
     responses={
         200: {
-            "description": "성공적으로 포지션 요약을 조회했습니다.",
+            "description": "✅ 포지션 요약 조회 성공",
             "content": {
                 "application/json": {
-                    "example": {
-                        "positions": [
-                            {
-                                "symbol": "XRP-USDT-SWAP",
-                                "direction": "long",
-                                "size": 100.0,
-                                "entry_price": 0.5,
-                                "mark_price": 0.51,
-                                "unrealized_pnl": 1.0,
-                                "leverage": 10,
-                                "margin": 5.0,
-                                "liquidation_price": 0.4
+                    "examples": {
+                        "single_long_position": {
+                            "summary": "롱 포지션 1개",
+                            "value": {
+                                "positions": [
+                                    {
+                                        "symbol": "BTC-USDT-SWAP",
+                                        "direction": "long",
+                                        "size": 0.1,
+                                        "entry_price": 92000.0,
+                                        "mark_price": 92500.0,
+                                        "unrealized_pnl": 50.0,
+                                        "leverage": 10,
+                                        "margin": 920.0,
+                                        "liquidation_price": 83000.0
+                                    }
+                                ],
+                                "total_unrealized_pnl": 50.0,
+                                "update_time": "2025-01-12T17:00:00Z"
                             }
-                        ],
-                        "total_unrealized_pnl": 1.0,
-                        "update_time": "2025-01-01T12:00:00Z"
+                        },
+                        "multiple_positions_profit": {
+                            "summary": "여러 포지션 (수익)",
+                            "value": {
+                                "positions": [
+                                    {
+                                        "symbol": "BTC-USDT-SWAP",
+                                        "direction": "long",
+                                        "size": 0.1,
+                                        "entry_price": 92000.0,
+                                        "mark_price": 93000.0,
+                                        "unrealized_pnl": 100.0,
+                                        "leverage": 10,
+                                        "margin": 920.0,
+                                        "liquidation_price": 83000.0
+                                    },
+                                    {
+                                        "symbol": "ETH-USDT-SWAP",
+                                        "direction": "long",
+                                        "size": 2.0,
+                                        "entry_price": 2600.0,
+                                        "mark_price": 2650.0,
+                                        "unrealized_pnl": 100.0,
+                                        "leverage": 10,
+                                        "margin": 520.0,
+                                        "liquidation_price": 2340.0
+                                    }
+                                ],
+                                "total_unrealized_pnl": 200.0,
+                                "update_time": "2025-01-12T17:05:00Z"
+                            }
+                        },
+                        "mixed_positions": {
+                            "summary": "롱/숏 혼합 (손익 혼재)",
+                            "value": {
+                                "positions": [
+                                    {
+                                        "symbol": "BTC-USDT-SWAP",
+                                        "direction": "long",
+                                        "size": 0.1,
+                                        "entry_price": 92000.0,
+                                        "mark_price": 91000.0,
+                                        "unrealized_pnl": -100.0,
+                                        "leverage": 10
+                                    },
+                                    {
+                                        "symbol": "ETH-USDT-SWAP",
+                                        "direction": "short",
+                                        "size": 2.0,
+                                        "entry_price": 2650.0,
+                                        "mark_price": 2600.0,
+                                        "unrealized_pnl": 100.0,
+                                        "leverage": 10
+                                    }
+                                ],
+                                "total_unrealized_pnl": 0.0,
+                                "update_time": "2025-01-12T17:10:00Z"
+                            }
+                        },
+                        "no_positions": {
+                            "summary": "포지션 없음",
+                            "value": {
+                                "positions": [],
+                                "total_unrealized_pnl": 0.0,
+                                "update_time": "2025-01-12T17:15:00Z"
+                            }
+                        }
                     }
                 }
             },
         },
         400: {
-            "description": "거래소 오류",
+            "description": "❌ 잘못된 요청 - 거래소 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "exchange_error": {
+                            "summary": "거래소 오류",
+                            "value": {
+                                "detail": "거래소 오류: Invalid request"
+                            }
+                        }
+                    }
+                }
+            }
         },
         401: {
-            "description": "인증 오류",
+            "description": "🔒 인증 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "authentication_error": {
+                            "summary": "인증 실패",
+                            "value": {
+                                "detail": "인증 오류가 발생했습니다"
+                            }
+                        }
+                    }
+                }
+            }
         },
         503: {
-            "description": "거래소 연결 오류",
+            "description": "🔧 서비스 이용 불가 - 거래소 연결 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "network_error": {
+                            "summary": "네트워크 오류",
+                            "value": {
+                                "detail": "거래소 연결 오류가 발생했습니다"
+                            }
+                        }
+                    }
+                }
+            }
         },
         500: {
-            "description": "포지션 조회 중 서버 오류",
+            "description": "💥 서버 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "server_error": {
+                            "summary": "서버 내부 오류",
+                            "value": {
+                                "detail": "포지션 조회 중 오류가 발생했습니다"
+                            }
+                        }
+                    }
+                }
+            }
         },
     }
 )
@@ -642,28 +1012,190 @@ async def get_positions_summary(
 @router.get(
     "/volume/month",
     response_model=TradeVolume,
-    summary="이번달 거래량 조회",
-    description="사용자의 이번달 총 거래량(거래금액)과 수수료를 조회합니다. bills API를 사용합니다.",
+    summary="이번달 거래량 조회 (Bills 기준)",
+    description="""
+# 이번달 거래량 조회 (Bills 기준)
+
+사용자의 이번달 총 거래량(거래금액)과 수수료를 bills API를 통해 조회합니다. 모든 거래 활동(포지션 진입/청산)이 포함됩니다.
+
+## 쿼리 파라미터
+
+- **user_id** (string, required): 사용자 식별자
+  - OKX UID (18자리) 또는 텔레그램 ID
+  - 텔레그램 ID인 경우 자동으로 OKX UID로 변환
+
+## 동작 방식
+
+1. **사용자 인증**: Redis에서 API 키 조회
+2. **CCXT 클라이언트 생성**: OKX API 접근 준비
+3. **기간 설정**: 이번달 1일 ~ 오늘까지
+4. **Bills 조회**: private_get_account_bills()로 거래 내역 조회
+5. **데이터 집계**:
+   - 거래 타입 필터링 (type='2', subType in ['3','4','5','6'])
+   - 거래량 = size × price
+   - 수수료 합산 (절대값)
+   - 계약 수량 합산
+6. **응답 반환**: 집계된 거래량 및 수수료 정보
+
+## 반환 정보 (TradeVolume)
+
+- **total_volume** (float): 총 거래량 (USDT)
+  - 포지션 진입 + 청산의 총 거래금액
+  - 계산: Σ(size × price)
+- **total_fee** (float): 총 수수료 (USDT)
+  - 거래소에 지불한 수수료 합계
+  - 메이커/테이커 수수료 모두 포함
+- **currency** (string): 기축통화 (항상 "USDT")
+- **start_date** (string): 조회 시작일 (이번달 1일)
+  - 형식: "YYYY-MM-DD"
+- **end_date** (string): 조회 종료일 (오늘)
+  - 형식: "YYYY-MM-DD"
+- **total_contracts** (float): 총 계약 수량
+  - 거래한 계약 수의 합계
+
+## 사용 시나리오
+
+- 📊 **월간 통계**: 이번달 거래 활동 분석
+- 💰 **수수료 계산**: 거래 비용 추적 및 최적화
+- 📈 **활동 모니터링**: 거래량 추이 파악
+- 🎯 **VIP 등급**: 거래소 VIP 등급 산정 기준 확인
+- 💼 **세무 자료**: 월별 거래 내역 정리
+
+## Bills API vs Orders API
+
+### GET /volume/month (Bills 기준) - 현재 엔드포인트
+- **데이터 소스**: Account bills (계정 입출금 내역)
+- **포함 범위**: 모든 거래 활동
+- **장점**: 정확한 수수료 반영, 포괄적인 데이터
+- **용도**: 공식적인 거래량 산정
+
+### GET /volume/month/orders (Orders 기준)
+- **데이터 소스**: Trade fills (체결 내역)
+- **포함 범위**: 체결된 주문만
+- **장점**: 주문별 상세 정보
+- **용도**: 세부 거래 분석
+
+## 예시 URL
+
+```
+GET /account/volume/month?user_id=518796558012178692
+GET /account/volume/month?user_id=1709556958
+```
+""",
     responses={
         200: {
-            "description": "성공적으로 거래량 정보를 조회했습니다.",
+            "description": "✅ 거래량 조회 성공",
             "content": {
                 "application/json": {
-                    "example": {
-                        "total_volume": 1000.0,
-                        "total_fee": 2.5,
-                        "currency": "USDT",
-                        "start_date": "2024-05-01",
-                        "end_date": "2024-05-31",
-                        "total_contracts": 0.1
+                    "examples": {
+                        "active_trader": {
+                            "summary": "활발한 거래 (고거래량)",
+                            "value": {
+                                "total_volume": 50000.0,
+                                "total_fee": 25.0,
+                                "currency": "USDT",
+                                "start_date": "2025-01-01",
+                                "end_date": "2025-01-12",
+                                "total_contracts": 5.5
+                            }
+                        },
+                        "moderate_trader": {
+                            "summary": "중간 수준 거래",
+                            "value": {
+                                "total_volume": 10000.0,
+                                "total_fee": 5.0,
+                                "currency": "USDT",
+                                "start_date": "2025-01-01",
+                                "end_date": "2025-01-12",
+                                "total_contracts": 1.1
+                            }
+                        },
+                        "low_activity": {
+                            "summary": "낮은 활동",
+                            "value": {
+                                "total_volume": 1000.0,
+                                "total_fee": 0.5,
+                                "currency": "USDT",
+                                "start_date": "2025-01-01",
+                                "end_date": "2025-01-12",
+                                "total_contracts": 0.1
+                            }
+                        },
+                        "no_trades": {
+                            "summary": "거래 없음",
+                            "value": {
+                                "total_volume": 0.0,
+                                "total_fee": 0.0,
+                                "currency": "USDT",
+                                "start_date": "2025-01-01",
+                                "end_date": "2025-01-12",
+                                "total_contracts": 0.0
+                            }
+                        }
                     }
                 }
             }
         },
-        400: {"description": "거래소 오류"},
-        401: {"description": "인증 오류"},
-        503: {"description": "거래소 연결 오류"},
-        500: {"description": "거래량 조회 중 서버 오류"}
+        400: {
+            "description": "❌ 잘못된 요청 - 거래소 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "exchange_error": {
+                            "summary": "거래소 오류",
+                            "value": {
+                                "detail": "거래소 오류: Invalid request"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        401: {
+            "description": "🔒 인증 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "authentication_error": {
+                            "summary": "인증 실패",
+                            "value": {
+                                "detail": "인증 오류가 발생했습니다"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        503: {
+            "description": "🔧 서비스 이용 불가 - 거래소 연결 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "network_error": {
+                            "summary": "네트워크 오류",
+                            "value": {
+                                "detail": "거래소 연결 오류가 발생했습니다"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "💥 서버 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "server_error": {
+                            "summary": "서버 내부 오류",
+                            "value": {
+                                "detail": "거래량 조회 중 오류가 발생했습니다"
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 )
 async def get_monthly_volume(
@@ -830,7 +1362,6 @@ async def get_monthly_volume_from_orders(
                 end_date=end_date.strftime('%Y-%m-%d'),
                 total_contracts=total_contracts
             )
-            ㅋ
         except Exception as e:
             logger.error(f"Failed to fetch monthly volume from orders for user {user_id}: {str(e)}", exc_info=True)
             if isinstance(e, ccxt.NetworkError):

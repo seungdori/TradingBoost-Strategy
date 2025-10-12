@@ -6,8 +6,10 @@ Handles all database operations related to Celery jobs.
 
 from datetime import datetime
 from typing import Optional, Tuple
-from sqlalchemy import select, update, delete
+
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from GRID.models.user import Job
 from shared.logging import get_logger
 

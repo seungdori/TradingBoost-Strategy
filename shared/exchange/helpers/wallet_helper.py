@@ -3,6 +3,7 @@
 거래소 지갑 정보 조회 및 처리를 위한 공통 함수
 """
 from typing import Dict, Tuple
+
 from shared.logging import get_logger
 
 logger = get_logger(__name__)

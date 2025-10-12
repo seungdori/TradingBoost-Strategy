@@ -1,10 +1,12 @@
 import asyncio
-import redis.asyncio as aioredis    
-from datetime import datetime, timezone
-import ccxt.pro as ccxt
+import json
 import logging
 import os
-import json
+from datetime import datetime, timezone
+
+import ccxt.pro as ccxt
+import redis.asyncio as aioredis
+
 from shared.config import settings
 
 REDIS_PASSWORD = settings.REDIS_PASSWORD

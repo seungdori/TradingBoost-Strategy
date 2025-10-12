@@ -6,10 +6,12 @@ Handles all database operations related to GRID users.
 
 import json
 from datetime import datetime
-from typing import Optional, Dict, Any, List
-from sqlalchemy import select, update, delete
+from typing import Any, Dict, List, Optional
+
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from GRID.models.user import User, TelegramID
+
+from GRID.models.user import TelegramID, User
 from shared.logging import get_logger
 
 logger = get_logger(__name__)

@@ -1,20 +1,21 @@
-import os
 import asyncio
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
 import logging
-from trend import analyze_trend, getMA
-from celery import Celery
 import multiprocessing
+import os
+import signal
 import subprocess
 import sys
-import time
-import signal
 import threading
-from pathlib import Path
-from celery.signals import task_success, task_failure
+import time
+from datetime import datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from celery import Celery
+from celery.signals import task_failure, task_success
+from trend import analyze_trend, getMA
 
 from GRID.main import periodic_analysis
 from shared.utils import path_helper

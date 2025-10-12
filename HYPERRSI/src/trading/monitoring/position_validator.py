@@ -7,31 +7,31 @@
 import asyncio
 import json
 import traceback
-from typing import Tuple, Dict
-from shared.logging import get_logger, log_order
+from typing import Dict, Tuple
 
 from HYPERRSI.src.api.dependencies import get_exchange_context
-from HYPERRSI.src.api.routes.order import close_position, ClosePositionRequest
-from .telegram_service import get_identifier, send_telegram_message
-from .utils import SUPPORTED_SYMBOLS, get_actual_order_type, add_recent_symbol, get_recent_symbols, convert_to_trading_symbol
-from .order_monitor import check_order_status, update_order_status
+from HYPERRSI.src.api.routes.order import ClosePositionRequest, close_position
+from shared.database.redis_helper import get_redis_client
+from shared.logging import get_logger, log_order
+
 from .break_even_handler import process_break_even_settings
+from .order_monitor import check_order_status, update_order_status
+from .telegram_service import get_identifier, send_telegram_message
+from .utils import (
+    SUPPORTED_SYMBOLS,
+    add_recent_symbol,
+    convert_to_trading_symbol,
+    get_actual_order_type,
+    get_recent_symbols,
+)
 
 logger = get_logger(__name__)
-
-# Dynamic redis_client access
-def _get_redis_client():
-    """Get redis_client dynamically to avoid import-time errors"""
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
-
-# redis_client = _get_redis_client()  # Removed - causes import-time error
 
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
-        return _get_redis_client()
+        return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
 
 
@@ -120,7 +120,7 @@ async def verify_and_handle_position_closure(user_id: str, symbol: str, directio
             
             # 남은 포지션 강제 종료 (break even 로직과 동일)
             try:
-                from HYPERRSI.src.api.routes.order import close_position, ClosePositionRequest
+                from HYPERRSI.src.api.routes.order import ClosePositionRequest, close_position
                 
                 close_request = ClosePositionRequest(
                     close_type="market",
@@ -163,22 +163,22 @@ async def check_position_change(user_id: str, symbol: str, direction: str, curre
     """
     try:
         import json
-        
+
         # 메인 및 백업 키 설정
         position_tracking_key = f"user:{user_id}:position_tracking:{symbol}:{direction}"
         position_backup_key = f"user:{user_id}:position_backup:{symbol}:{direction}"
         
         # 이전 포지션 정보 조회 (메인 먼저, 없으면 백업)
-        previous_position_str = await _get_redis_client().get(position_tracking_key)
-        backup_position_str = await _get_redis_client().get(position_backup_key)
+        previous_position_str = await get_redis_client().get(position_tracking_key)
+        backup_position_str = await get_redis_client().get(position_backup_key)
         
         # 현재 포지션 정보 저장
         current_position_str = json.dumps(current_position_info)
         
         # 메인 키 (24시간 TTL)
-        await _get_redis_client().set(position_tracking_key, current_position_str, ex=86400)
+        await get_redis_client().set(position_tracking_key, current_position_str, ex=86400)
         # 백업 키 (TTL 없음 - 영구 보관)
-        await _get_redis_client().set(position_backup_key, current_position_str)
+        await get_redis_client().set(position_backup_key, current_position_str)
         
         # TTL 만료로 메인이 없지만 백업이 있는 경우
         if not previous_position_str and backup_position_str:
@@ -194,7 +194,7 @@ async def check_position_change(user_id: str, symbol: str, direction: str, curre
                 logger.info(f"크기={current_position_info.get('size')}, 진입가={current_position_info.get('entry_price')}")
                 
                 # 메인키를 다시 생성 (24시간 TTL로 추적 재개)
-                await _get_redis_client().set(position_tracking_key, current_position_str, ex=86400)
+                await get_redis_client().set(position_tracking_key, current_position_str, ex=86400)
                 logger.info(f"메인 추적키 복구 완료: {position_tracking_key}")
                 return  # 추적 재개, 알림 없음
             else:
@@ -248,10 +248,10 @@ async def handle_position_replacement(user_id: str, symbol: str, direction: str)
     try:
         # 이전 포지션 종료 알림 전송
         closure_alert_key = f"closure_alert:user:{user_id}:{symbol}:{direction}"
-        alert_sent = await _get_redis_client().get(closure_alert_key)
+        alert_sent = await get_redis_client().get(closure_alert_key)
         
         if not alert_sent:
-            await _get_redis_client().set(closure_alert_key, "1", ex=3600)
+            await get_redis_client().set(closure_alert_key, "1", ex=3600)
         
         # 새 포지션을 위한 데이터 초기화
         from HYPERRSI.src.api.routes.order import init_user_position_data
@@ -283,12 +283,12 @@ async def check_and_cleanup_orders(user_id: str, symbol: str, direction: str):
             
         # 포지션 종료 알림 중복 방지 체크
         closure_alert_key = f"closure_alert:user:{user_id}:{symbol}:{direction}"
-        alert_sent = await _get_redis_client().get(closure_alert_key)
+        alert_sent = await get_redis_client().get(closure_alert_key)
         
         if not alert_sent:
             # 포지션 종료 알림 전송
             # 중복 방지를 위해 1시간 동안 플래그 설정
-            await _get_redis_client().set(closure_alert_key, "1", ex=3600)
+            await get_redis_client().set(closure_alert_key, "1", ex=3600)
         
         # 포지션이 없으면 해당 방향의 모든 주문 확인
         logger.info(f"사용자 {user_id}의 {symbol} {direction} 포지션이 없어 모니터링 데이터 정리 시작")
@@ -296,11 +296,11 @@ async def check_and_cleanup_orders(user_id: str, symbol: str, direction: str):
 
         # 1. 해당 방향의 모니터링 중인 모든 주문 가져오기
         pattern = f"monitor:user:{user_id}:{symbol}:order:*"
-        order_keys = await _get_redis_client().keys(pattern)
+        order_keys = await get_redis_client().keys(pattern)
         orders_to_check = []
         
         for key in order_keys:
-            order_data = await _get_redis_client().hgetall(key)
+            order_data = await get_redis_client().hgetall(key)
             if not order_data:
                 continue
                 
@@ -379,7 +379,7 @@ async def check_and_cleanup_orders(user_id: str, symbol: str, direction: str):
                     tp_level = order_type.replace('tp', '').replace('take_profit', '')
                     if tp_level.isdigit():
                         tp_flag_key = f"user:{user_id}:position:{symbol}:{direction}:get_tp{tp_level}"
-                        tp_already_processed = await _get_redis_client().get(tp_flag_key)
+                        tp_already_processed = await get_redis_client().get(tp_flag_key)
                         
                         if tp_already_processed == "true":
                             logger.info(f"TP{tp_level} 이미 처리됨, 중복 처리 방지: {user_id} {symbol} {direction}")
@@ -464,9 +464,9 @@ async def check_and_cleanup_orders(user_id: str, symbol: str, direction: str):
         
         # 4. 포지션 데이터 정리
         position_key = f"user:{user_id}:position:{symbol}:{direction}"
-        if await _get_redis_client().exists(position_key):
+        if await get_redis_client().exists(position_key):
             logger.info(f"포지션이 없어 Redis에서 포지션 데이터 삭제: {position_key}")
-            await _get_redis_client().delete(position_key)
+            await get_redis_client().delete(position_key)
             
         logger.info(f"사용자 {user_id}의 {symbol} {direction} 모니터링 데이터 정리 완료")
         await asyncio.sleep(1)

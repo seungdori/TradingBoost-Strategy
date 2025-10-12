@@ -1,9 +1,11 @@
+import datetime
+import json
 from dataclasses import dataclass
 from token import OP
 from typing import List, Optional
-import datetime
-import json
+
 from pydantic import BaseModel
+
 
 #TODO : BASEMODEL로 변경
 @dataclass

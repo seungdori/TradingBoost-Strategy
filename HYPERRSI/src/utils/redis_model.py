@@ -3,9 +3,10 @@ Redis 모델 베이스 클래스
 더 나은 Redis 데이터 관리를 위한 추상화
 """
 import json
-from typing import Dict, Any, Optional, Type, TypeVar
-from redis.asyncio import Redis
+from typing import Any, Dict, Optional, Type, TypeVar
+
 from pydantic import BaseModel
+from redis.asyncio import Redis
 
 T = TypeVar('T', bound='RedisModel')
 

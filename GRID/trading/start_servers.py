@@ -1,6 +1,7 @@
 import subprocess
 import time
 
+
 def start_server(port):
     # This function starts the server on the specified port
     subprocess.Popen(["python3", "main.py", "--port", str(port)])
