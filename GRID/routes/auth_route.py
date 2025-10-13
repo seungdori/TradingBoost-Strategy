@@ -92,8 +92,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 - 👤 **신규 사용자 등록**: 최초 회원가입 시 API 자격증명 등록
 - 🔐 **거래소 연동**: 자동 매매를 위한 거래소 API 연결 설정
 - 🏢 **다중 거래소 지원**: 여러 거래소 계정 등록 및 관리
-- 🔄 **API 키 변경**: 기존 사용자가 새로운 API 키로 재등록
-- 📱 **모바일 앱**: 모바일 애플리케이션에서 사용자 계정 생성
+-  **API 키 변경**: 기존 사용자가 새로운 API 키로 재등록
+-  **모바일 앱**: 모바일 애플리케이션에서 사용자 계정 생성
 
 ## 워크플로우
 
@@ -141,7 +141,7 @@ curl -X POST "http://localhost:8012/auth/signup" \\
 """,
     responses={
         200: {
-            "description": "✅ 회원가입 성공",
+            "description": " 회원가입 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -189,7 +189,7 @@ curl -X POST "http://localhost:8012/auth/signup" \\
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 유효성 검증 실패",
+            "description": " 잘못된 요청 - 유효성 검증 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -241,7 +241,7 @@ curl -X POST "http://localhost:8012/auth/signup" \\
             }
         },
         409: {
-            "description": "⚠️ 중복된 사용자 ID",
+            "description": " 중복된 사용자 ID",
             "content": {
                 "application/json": {
                     "examples": {
@@ -305,7 +305,7 @@ curl -X POST "http://localhost:8012/auth/signup" \\
             }
         },
         500: {
-            "description": "💥 서버 오류 - 데이터베이스 또는 암호화 실패",
+            "description": " 서버 오류 - 데이터베이스 또는 암호화 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -360,7 +360,7 @@ curl -X POST "http://localhost:8012/auth/signup" \\
             }
         },
         503: {
-            "description": "🔧 서비스 이용 불가 - PostgreSQL 다운타임",
+            "description": " 서비스 이용 불가 - PostgreSQL 다운타임",
             "content": {
                 "application/json": {
                     "examples": {

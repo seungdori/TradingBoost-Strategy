@@ -33,6 +33,7 @@ async def get_current_price(symbol: str, timeframe: str = "1m", exchange: ccxt.E
             ValueError: 유효하지 않은 시간단위나 현재가일 경우
         """
     try:
+        redis = await get_redis_client()
         # 시간단위 매핑 확
         # 
         #print(f"timeframe: {timeframe}")
@@ -43,7 +44,7 @@ async def get_current_price(symbol: str, timeframe: str = "1m", exchange: ccxt.E
         
         # Redis에서 latest 데이터 조회
         latest_key = f"latest:{symbol}:{tf_str}"
-        latest_data = await get_redis_client().get(latest_key)
+        latest_data = await redis.get(latest_key)
         
         if not latest_data:
             logger.warning(f"Redis에서 현재가를 찾을 수 없습니다: {latest_key}")

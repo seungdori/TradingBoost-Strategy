@@ -20,6 +20,11 @@ from shared.utils import get_contract_size
 
 logger = get_logger(__name__)
 
+# API 서버 URL 설정
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+
+router = Router()
+
 async def get_okx_uid_from_telegram_id(telegram_id: str) -> str:
     """
     텔레그램 ID를 OKX UID로 변환하는 함수
@@ -31,8 +36,9 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> str:
         str: OKX UID
     """
     try:
+        redis = await get_redis_client()
         # 텔레그램 ID로 OKX UID 조회
-        okx_uid = await get_redis_client().get(f"user:{telegram_id}:okx_uid")
+        okx_uid = await redis.get(f"user:{telegram_id}:okx_uid")
         if okx_uid:
             return okx_uid.decode() if isinstance(okx_uid, bytes) else okx_uid
         return None
@@ -56,19 +62,21 @@ def format_size(size: float, symbol: str) -> str:
         return f"{size:.5f} {symbol}"
     else:
         return f"{size:.4g} {symbol}"
-allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267"]
+allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267","586156710277369942"]
 def is_allowed_user(user_id):
     """허용된 사용자인지 확인"""
     return str(user_id) in allowed_uid
 @router.message(Command("balance"))
 async def balance_command(message: types.Message):
     """계좌 잔고 확인"""
+    redis = await get_redis_client()
     telegram_id = str(message.from_user.id)
-    okx_uid = await get_redis_client().get(f"user:{telegram_id}:okx_uid")
+    okx_uid = await redis.get(f"user:{telegram_id}:okx_uid")
     
     # 텔레그램 ID를 OKX UID로 변환
     okx_uid = await get_okx_uid_from_telegram_id(telegram_id)
     if not is_allowed_user(okx_uid):
+        print("okx_uid", okx_uid)
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
     if not okx_uid:
@@ -81,7 +89,7 @@ async def balance_command(message: types.Message):
         return
         
     keys = get_redis_keys(okx_uid)
-    api_keys = await get_redis_client().hgetall(keys['api_keys'])
+    api_keys = await redis.hgetall(keys['api_keys'])
     
     if not api_keys:
         await message.reply(
@@ -97,7 +105,7 @@ async def balance_command(message: types.Message):
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
-                    f"{API_BASE_URL}/account/balance",
+                    f"{API_BASE_URL}/api/account/balance",
                     params={"user_id": okx_uid}  # OKX UID 사용
                 )
                 # 401 에러 명시적 처리
@@ -191,14 +199,17 @@ async def balance_command(message: types.Message):
 
     
 @router.message(Command("history"))
+
 async def history_command(message: types.Message):
     """거래 내역 조회"""
+    redis = await get_redis_client()
     telegram_id = str(message.from_user.id)
     
     # 텔레그램 ID를 OKX UID로 변환
     okx_uid = await get_okx_uid_from_telegram_id(telegram_id)
     
     if not is_allowed_user(okx_uid):
+        print("okx_uid", okx_uid)
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
 
@@ -214,7 +225,7 @@ async def history_command(message: types.Message):
     keys = get_redis_keys(okx_uid)
     trade_history_as_exchange = False
     # API 키 확인
-    api_keys = await get_redis_client().hgetall(keys['api_keys'])
+    api_keys = await redis.hgetall(keys['api_keys'])
     if not api_keys:
         await message.reply(
             "⚠️ 등록되지 않은 사용자입니다.\n"
@@ -358,3 +369,4 @@ async def history_command(message: types.Message):
     except Exception as e:
         logger.error(f"Error fetching trade history: {str(e)}")
         await message.reply("⚠️ 거래 내역 조회 중 오류가 발생했습니다.")
+        redis = await get_redis_client()

@@ -28,8 +28,8 @@ async def get_okx_uid_from_telegram(telegram_id: str) -> Optional[str]:
         "518796558012178692"
     """
     try:
-        redis_client = get_redis_client()
-        okx_uid = await redis_client.get(f"user:{telegram_id}:okx_uid")
+        redis = await get_redis_client()
+        okx_uid = await redis.get(f"user:{telegram_id}:okx_uid")
 
         if okx_uid:
             # bytes 타입인 경우에만 decode 수행
@@ -72,16 +72,16 @@ async def get_telegram_id_from_okx_uid(okx_uid: str, timescale_service: Any = No
         return None
 
     okx_uid_str = str(okx_uid)
-    redis_client = get_redis_client()
+    redis = await get_redis_client()
 
     # --- 1. 주요 방식: Redis 패턴 스캔으로 user:*:okx_uid 키 조회 ---
     try:
         pattern = "user:*:okx_uid"
-        keys = await redis_client.keys(pattern)
+        keys = await redis.keys(pattern)
 
         for key in keys:
             key_str = key.decode() if isinstance(key, bytes) else str(key)
-            stored_uid = await redis_client.get(key)
+            stored_uid = await redis.get(key)
 
             if not stored_uid:
                 continue
@@ -103,7 +103,7 @@ async def get_telegram_id_from_okx_uid(okx_uid: str, timescale_service: Any = No
     # --- 2. 예비 방식: 직접 역방향 키 조회 ---
     try:
         fallback_key = f"okx_uid_to_telegram:{okx_uid_str}"
-        telegram_id_bytes = await redis_client.get(fallback_key)
+        telegram_id_bytes = await redis.get(fallback_key)
 
         if telegram_id_bytes:
             telegram_id = telegram_id_bytes.decode() if isinstance(telegram_id_bytes, bytes) else str(telegram_id_bytes)
@@ -112,7 +112,7 @@ async def get_telegram_id_from_okx_uid(okx_uid: str, timescale_service: Any = No
                 return telegram_id
             else:
                 # 잘못된 데이터 정리
-                await redis_client.delete(fallback_key)
+                await redis.delete(fallback_key)
 
     except Exception as e:
         logger.error(f"Error during fallback method for OKX UID {okx_uid_str}: {str(e)}")
@@ -135,7 +135,7 @@ async def get_telegram_id_from_okx_uid(okx_uid: str, timescale_service: Any = No
                 if telegram_id and telegram_id.isdigit() and 6 <= len(telegram_id) < 15:
                     logger.info(f"Found telegram_id={telegram_id} in TimescaleDB for okx_uid={okx_uid_str}")
                     # Redis에 캐싱
-                    await redis_client.set(f"okx_uid_to_telegram:{okx_uid_str}", telegram_id)
+                    await redis.set(f"okx_uid_to_telegram:{okx_uid_str}", telegram_id)
                     return telegram_id
 
         except Exception as e:
@@ -159,13 +159,13 @@ async def store_user_id_mapping(telegram_id: str, okx_uid: str) -> None:
         >>> await store_user_id_mapping("1234567890", "518796558012178692")
     """
     try:
-        redis_client = get_redis_client()
+        redis = await get_redis_client()
 
         # 텔레그램 ID → OKX UID 매핑
-        await redis_client.set(f"user:{telegram_id}:okx_uid", okx_uid)
+        await redis.set(f"user:{telegram_id}:okx_uid", okx_uid)
 
         # OKX UID → 텔레그램 ID 역방향 매핑
-        await redis_client.set(f"okx_uid_to_telegram:{okx_uid}", telegram_id)
+        await redis.set(f"okx_uid_to_telegram:{okx_uid}", telegram_id)
 
         logger.debug(f"Stored mapping: telegram_id={telegram_id} <-> okx_uid={okx_uid}")
 

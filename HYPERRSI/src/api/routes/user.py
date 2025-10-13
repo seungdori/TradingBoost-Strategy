@@ -132,7 +132,7 @@ OKX API 자격증명을 사용하여 새로운 사용자를 등록하고 초기 
 - 🆕 **신규 가입**: 첫 사용자 등록 및 초기화
 - 🔑 **API 연동**: OKX 거래소 계정 연결
 - ⚙️ **자동 설정**: 기본 설정 자동 생성
-- 🔄 **UID 매핑**: 텔레그램 ID ↔ OKX UID 연결
+-  **UID 매핑**: 텔레그램 ID ↔ OKX UID 연결
 
 ## 예시 URL
 
@@ -155,7 +155,7 @@ curl -X POST "http://localhost:8000/user/register" \\
 """,
     responses={
         200: {
-            "description": "✅ 사용자 등록 성공",
+            "description": " 사용자 등록 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -182,7 +182,7 @@ curl -X POST "http://localhost:8000/user/register" \\
             }
         },
         400: {
-            "description": "❌ 등록 실패",
+            "description": " 등록 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -275,7 +275,7 @@ async def register_user(
                 {k: str(v) for k, v in DEFAULT_TRADING_SETTINGS.items()}
             )
             await get_redis_client().hmset(f"user:{okx_uid}:trading:status", "stopped")
-            print("❤️‍🔥❤️‍🔥❤️‍🔥❤️‍🔥 ")
+            print("❤️‍❤️‍❤️‍❤️‍ ")
         
 
         
@@ -346,12 +346,12 @@ async def register_user(
 ## 사용 시나리오
 
 - 👤 **프로필 조회**: 사용자 기본 정보 확인
-- 📊 **상태 확인**: 현재 트레이딩 상태 모니터링
-- 🔍 **존재 여부 확인**: 사용자 등록 상태 검증
+-  **상태 확인**: 현재 트레이딩 상태 모니터링
+-  **존재 여부 확인**: 사용자 등록 상태 검증
 """,
     responses={
         200: {
-            "description": "✅ 사용자 정보 조회 성공",
+            "description": " 사용자 정보 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -369,7 +369,7 @@ async def register_user(
             }
         },
         404: {
-            "description": "🔍 사용자를 찾을 수 없음",
+            "description": " 사용자를 찾을 수 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -406,7 +406,7 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
         status_str = status.decode() if isinstance(status, bytes) else status
         if not status_str:
             status_str = "stopped"
-            print("❤️‍🔥❤️‍🔥❤️‍🔥❤️‍🔥 !!!")
+            print("❤️‍❤️‍❤️‍❤️‍ !!!")
 
         # registration_date 처리 - bytes일 수도 있고 str일 수도 있음
         registration_date_bytes = stats.get(b'registration_date', b'0')
@@ -455,7 +455,7 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
 """,
     responses={
         200: {
-            "description": "✅ OKX UID 조회 성공",
+            "description": " OKX UID 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -472,7 +472,7 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
             }
         },
         404: {
-            "description": "🔍 OKX UID를 찾을 수 없음"
+            "description": " OKX UID를 찾을 수 없음"
         }
     }
 )
@@ -556,7 +556,7 @@ async def get_okx_uid(user_id: str, db: Session = Depends(get_db)):
 """,
     responses={
         200: {
-            "description": "✅ OKX UID 설정 성공",
+            "description": " OKX UID 설정 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -573,7 +573,7 @@ async def get_okx_uid(user_id: str, db: Session = Depends(get_db)):
             }
         },
         404: {
-            "description": "🔍 사용자를 찾을 수 없음"
+            "description": " 사용자를 찾을 수 없음"
         }
     }
 )
@@ -634,13 +634,13 @@ OKX UID에 매핑된 텔레그램 ID를 역방향으로 조회합니다. 여러 
 
 ## 사용 시나리오
 
-- 🔄 **계정 통합**: 동일 OKX 계정 사용하는 여러 텔레그램 계정 확인
-- 🔍 **UID 추적**: OKX UID로 사용자 식별
-- 📊 **다중 계정 관리**: 한 OKX 계정의 모든 연결된 계정 조회
+-  **계정 통합**: 동일 OKX 계정 사용하는 여러 텔레그램 계정 확인
+-  **UID 추적**: OKX UID로 사용자 식별
+-  **다중 계정 관리**: 한 OKX 계정의 모든 연결된 계정 조회
 """,
     responses={
         200: {
-            "description": "✅ 텔레그램 ID 조회 성공",
+            "description": " 텔레그램 ID 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -665,7 +665,7 @@ OKX UID에 매핑된 텔레그램 ID를 역방향으로 조회합니다. 여러 
             }
         },
         404: {
-            "description": "🔍 OKX UID에 매핑된 텔레그램 ID 없음",
+            "description": " OKX UID에 매핑된 텔레그램 ID 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -701,9 +701,9 @@ async def get_telegram_id_from_okx_uid(okx_uid: str):
                 # user:123456789:okx_uid 형식에서 user_id(텔레그램 ID) 추출
                 user_key = key.decode() if isinstance(key, bytes) else key
                 user_id = user_key.split(':')[1]
-                
-                # 숫자로 시작하는 텔레그램 ID만 추가 (OKX UID는 일반적으로 매우 긴 숫자)
-                if user_id.isdigit() and len(user_id) < 15:
+
+                # 숫자로 시작하는 텔레그램 ID만 추가 (13자리 미만은 텔레그램 ID)
+                if user_id.isdigit() and len(user_id) < 13:
                     # 최근 활동 시간 확인 (가능한 경우)
                     last_activity = 0
                     try:

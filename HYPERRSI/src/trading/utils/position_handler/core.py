@@ -152,7 +152,7 @@ async def set_position_lock(
     """
     from HYPERRSI.src.trading.utils.position_handler.constants import POSITION_LOCK_KEY
 
-    redis_client = get_redis_client()
+    redis = await get_redis_client()
     tf_str = get_timeframe(timeframe)
 
     # Calculate expiry time if not provided
@@ -168,7 +168,7 @@ async def set_position_lock(
         timeframe=tf_str
     )
 
-    await redis_client.setex(lock_key, expire_seconds, "1")
+    await redis.setex(lock_key, expire_seconds, "1")
     logger.debug(f"[{user_id}] Position lock set: {lock_key} for {expire_seconds}s")
 
 
@@ -195,7 +195,7 @@ async def calculate_min_sustain_contract_size(
     """
     from HYPERRSI.src.trading.utils.position_handler.constants import MIN_SUSTAIN_CONTRACT_SIZE_KEY
 
-    redis_client = get_redis_client()
+    redis = await get_redis_client()
 
     # Calculate based on TP ratio configuration
     tp_sum = (
@@ -216,7 +216,7 @@ async def calculate_min_sustain_contract_size(
         user_id=user_id,
         symbol=symbol
     )
-    await redis_client.set(min_size_key, min_size)
+    await redis.set(min_size_key, min_size)
 
     return min_size
 
@@ -236,13 +236,13 @@ async def get_atr_value(symbol: str, timeframe: str) -> float:
 
     from HYPERRSI.src.trading.utils.position_handler.constants import CANDLES_WITH_INDICATORS_KEY
 
-    redis_client = get_redis_client()
+    redis = await get_redis_client()
     tf_str = get_timeframe(timeframe)
 
     key = CANDLES_WITH_INDICATORS_KEY.format(symbol=symbol, timeframe=tf_str)
 
     try:
-        candle = await redis_client.lindex(key, -1)
+        candle = await redis.lindex(key, -1)
         if candle:
             candle_data = json.loads(candle)
             return float(candle_data.get('atr14', 0.0))

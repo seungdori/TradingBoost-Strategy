@@ -13,6 +13,7 @@ from shared.database.redis_helper import get_redis_client
 
 router = Router()
 logger = logging.getLogger(__name__)
+redis = None
 
 def get_redis_keys(user_id):
     return {
@@ -22,7 +23,7 @@ def get_redis_keys(user_id):
     }
 
 
-allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267"]
+allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267","586156710277369942"]
 
 def is_allowed_user(user_id):
     """허용된 사용자인지 확인"""
@@ -31,14 +32,18 @@ def is_allowed_user(user_id):
 @router.message(Command("start"))
 async def start_command(message: types.Message, state: FSMContext) -> None:
     """시작 명령어 처리"""
+    global redis
+    if redis is None:
+        redis = await get_redis_client()
+
     if not message.from_user:
         return
     user_id = message.from_user.id
-    
+
     telegram_uid_key = f"user:{user_id}:okx_uid"
    
     # 이미 등록된 UID가 있는지 확인
-    okx_uid = await get_redis_client().get(telegram_uid_key)
+    okx_uid = await redis.get(telegram_uid_key)
 
     if okx_uid:
         if isinstance(okx_uid, bytes):
@@ -78,6 +83,9 @@ async def start_command(message: types.Message, state: FSMContext) -> None:
 @router.message(StateFilter("waiting_for_uid"))
 async def process_uid(message: types.Message, state: FSMContext) -> None:
     """UID 입력 처리"""
+    global redis
+    if redis is None:
+        redis = await get_redis_client()
     if not message.from_user or not message.text:
         return
     user_id = message.from_user.id
@@ -92,7 +100,7 @@ async def process_uid(message: types.Message, state: FSMContext) -> None:
         okx_uid_int = int(okx_uid)
         
         # Redis에 UID 저장
-        await get_redis_client().set(telegram_uid_key, okx_uid)
+        await redis.set(telegram_uid_key, okx_uid)
         
         display_name = " ".join(filter(None, [message.from_user.first_name, message.from_user.last_name])).strip()
         username = message.from_user.username
@@ -134,7 +142,7 @@ async def process_uid(message: types.Message, state: FSMContext) -> None:
             default_dual_settings = {k: v for k, v in DEFAULT_DUAL_SIDE_ENTRY_SETTINGS.items()}
             settings_key = f"user:{okx_uid}:dual_side"
             settings_to_save = {k: str(v).lower() if isinstance(v, bool) else str(v) for k, v in default_dual_settings.items()}
-            await get_redis_client().hset(settings_key, mapping=settings_to_save)
+            await redis.hset(settings_key, mapping=settings_to_save)
             
             await message.reply(
                 f"✅ UID ({okx_uid}) 등록 완료!\n"
@@ -157,6 +165,9 @@ async def process_uid(message: types.Message, state: FSMContext) -> None:
 @router.message(Command("reset"))
 async def reset_command(message: types.Message) -> None:
     """UID 리셋 명령어 처리"""
+    global redis
+    if redis is None:
+        redis = await get_redis_client()
     if not message.from_user:
         return
     user_id = message.from_user.id
@@ -164,7 +175,7 @@ async def reset_command(message: types.Message) -> None:
     telegram_uid_key = f"user:{user_id}:okx_uid"
     
     # 등록된 UID 확인
-    okx_uid = await get_redis_client().get(telegram_uid_key)
+    okx_uid = await redis.get(telegram_uid_key)
     
     if not okx_uid:
         await message.reply(
@@ -174,7 +185,7 @@ async def reset_command(message: types.Message) -> None:
         return
     
     # Redis에서 UID 삭제
-    await get_redis_client().delete(telegram_uid_key)
+    await redis.delete(telegram_uid_key)
     
     # TimescaleDB에서 사용자 상태 업데이트
     okx_uid_str = okx_uid.decode() if isinstance(okx_uid, bytes) else str(okx_uid)
@@ -193,42 +204,13 @@ async def reset_command(message: types.Message) -> None:
     if timescale_status and timescale_status != "✅ 텔레그램 연결 해제됨":
         await message.reply(timescale_status)
 
-#@router.message(Command("check"))
-#async def check_command(message: types.Message):
-#    """현재 UID 확인 명령어 처리"""
-#    user_id = message.from_user.id
-    
-#    # 허용된 사용자만 사용 가능
-#    if not is_allowed_user(user_id):
-#        await message.reply("⛔ 접근 권한이 없습니다.")
-#        return
-        
-#    telegram_uid_key = f"user:{user_id}:okx_uid"
-    
-#    # 등록된 UID 확인
-#    okx_uid = await redis_client.get(telegram_uid_key)
-    
-#    if okx_uid:
-#        await message.reply(
-#            f"✅ 연동 상태: 활성화\n\n"
-#            f"연동된 UID: {okx_uid}"
-#        )
-#    else:
-#        await message.reply(
-#            "❌ 연동 상태: 미연동\n\n"
-#            "UID 등록이 필요합니다.\n"
-#            "/start 명령어를 통해 UID를 등록해주세요."
-#        )
-
 @router.message(Command("cancel"), StateFilter(any_state))
 async def cancel_command(message: types.Message, state: FSMContext) -> None:
     """현재 진행 중인 상태/명령어 취소"""
     if not message.from_user:
         return
     user_id = message.from_user.id
-    
 
-        
     current_state = await state.get_state()
     
     if current_state is None:
@@ -251,48 +233,102 @@ async def cancel_command(message: types.Message, state: FSMContext) -> None:
 
 @router.message(Command("help"))
 async def help_command(message: types.Message) -> None:
-   """도움말 표시"""
-   if not message.from_user:
-       return
-   user_id = message.from_user.id
-   
-   okx_uid = await get_redis_client().get(f"user:{user_id}:okx_uid")
-   if not is_allowed_user(okx_uid):
-       await message.reply("⛔ 접근 권한이 없습니다.")
-       return
-   
-   keys = get_redis_keys(user_id)
-   api_keys = await get_redis_client().hgetall(keys['api_keys'])
-   is_registered = bool(api_keys)
+    """도움말 표시"""
+    global redis
+    if redis is None:
+        redis = await get_redis_client()
 
-   basic_commands = (
-       "🎯 명령어\n"
-       "├ 🚀 /trade - 봇 시작하기\n"
-       "├ 📊 /status - 실시간 포지션 및 수익 현황\n"
-       "├ 💰 /balance - 포지션 + 계좌 잔고 확인\n"
-       "├ 📜 /history - 거래 내역 조회\n"
-       "├ 📊 /stats - 트레이딩 통계\n"
-       "├ ⚙️ /settings - 트레이딩 설정\n"
-       "├ 🔄 /dual_settings - 양방향 매매 설정\n" 
-       "├ ❓ /help - 도움말 보기\n"
-       "└ ⛔ /stop - 봇 종료\n"
-   )
+    if not message.from_user:
+        return
+    user_id = message.from_user.id
 
-   if not is_registered:
-       commands = (
-           f"{basic_commands}\n"
-           "🔐 계정 설정\n"
-           "└ 📝 /register - 새 사용자 등록 (API 키 설정)\n"
-           "\n⚠️ 트레이딩을 시작하려면 먼저 등록이 필요합니다."
-       )
-   else:
-       trading_status = await get_redis_client().get(keys['status'])
-       is_trading = trading_status == "running"
-       commands = (
-           f"{basic_commands}"
-       )
+    okx_uid = await redis.get(f"user:{user_id}:okx_uid")
+    if not is_allowed_user(okx_uid):
+        print("okx_uid", okx_uid)
+        await message.reply("⛔ 접근 권한이 없습니다.")
+        return
 
-       status_text = "🟢 활성화" if is_trading else "🔴 비활성화"
-       commands += f"\n\n📡 현재 트레이딩 상태: {status_text}"
+    keys = get_redis_keys(user_id)
+    api_keys = await redis.hgetall(keys['api_keys'])
+    is_registered = bool(api_keys)
 
-   await message.reply(commands)
+    basic_commands = (
+        "🎯 명령어\n"
+        "├ 🚀 /trade - 봇 시작하기\n"
+        "├ 📊 /status - 실시간 포지션 및 수익 현황\n"
+        "├ 💰 /balance - 포지션 + 계좌 잔고 확인\n"
+        "├ 📜 /history - 거래 내역 조회\n"
+        "├ 📊 /stats - 트레이딩 통계\n"
+        "├ ⚙️ /settings - 트레이딩 설정\n"
+        "├ 🔄 /dual_settings - 양방향 매매 설정\n"
+        "├ ❓ /help - 도움말 보기\n"
+        "└ ⛔ /stop - 봇 종료\n"
+    )
+
+    if not is_registered:
+        commands = (
+            f"{basic_commands}\n"
+            "🔐 계정 설정\n"
+            "└ 📝 /register - 새 사용자 등록 (API 키 설정)\n"
+            "\n⚠️ 트레이딩을 시작하려면 먼저 등록이 필요합니다."
+        )
+    else:
+        trading_status = await redis.get(keys['status'])
+        is_trading = trading_status == "running"
+        commands = (
+            f"{basic_commands}"
+        )
+
+        status_text = "🟢 활성화" if is_trading else "🔴 비활성화"
+        commands += f"\n\n📡 현재 트레이딩 상태: {status_text}"
+
+    await message.reply(commands)
+
+@router.message(Command("commands"))
+async def commands_command(message: types.Message) -> None:
+    """전체 명령어 목록 표시 (권한 체크 없음)"""
+    if not message.from_user:
+        return
+
+    commands_text = (
+        "📋 HYPERRSI 트레이딩 봇 명령어 목록\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        "🔧 기본 설정\n"
+        "├ /start - 계정 연동 (UID 등록)\n"
+        "├ /reset - 계정 연동 해제\n"
+        "├ /cancel - 진행 중인 작업 취소\n"
+        "└ /commands - 명령어 목록 보기\n\n"
+
+        "🚀 트레이딩 제어\n"
+        "├ /trade - 트레이딩 시작/중지\n"
+        "├ /stop - 트레이딩 강제 중지\n"
+        "└ /settings - 트레이딩 설정 변경\n\n"
+
+        "📊 정보 조회\n"
+        "├ /status - 포지션 및 수익 현황\n"
+        "├ /balance - 계좌 잔고 확인\n"
+        "├ /history - 거래 내역 조회\n"
+        "└ /stats - 트레이딩 통계\n\n"
+
+        "⚙️ 고급 설정\n"
+        "├ /dual_settings - 양방향 매매 설정\n"
+        "├ /sl - 손절가(Stop Loss) 설정\n"
+        "└ /tp - 익절가(Take Profit) 설정\n\n"
+
+        "❓ 도움말\n"
+        "└ /help - 상세 도움말\n\n"
+
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 처음 사용하시나요?\n"
+        "1️⃣ /start 로 계정 연동\n"
+        "2️⃣ /settings 로 설정 확인\n"
+        "3️⃣ /trade 로 트레이딩 시작!"
+    )
+
+    await message.reply(commands_text)
+
+@router.message(Command("menu"))
+async def menu_command(message: types.Message) -> None:
+    """명령어 목록 표시 (commands와 동일)"""
+    await commands_command(message)

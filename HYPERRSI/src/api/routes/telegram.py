@@ -25,7 +25,7 @@ except ImportError:
 
 logger = get_logger(__name__)
 
-# ✅ FastAPI 라우터 설정
+#  FastAPI 라우터 설정
 router = APIRouter(prefix="/telegram", tags=["Telegram Message"])
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -125,11 +125,11 @@ semaphore = asyncio.Semaphore(3)
 
 ## 사용 시나리오
 
-- 📨 **거래 알림**: 진입/청산 신호 전송
-- 📊 **통계 리포트**: 일일/주간 수익 보고서
-- ⚠️ **에러 알림**: API 키 만료, 잔액 부족 등
-- 🎯 **목표 달성**: TP/SL 도달 알림
-- 🔔 **봇 상태**: 시작/중지 알림
+-  **거래 알림**: 진입/청산 신호 전송
+-  **통계 리포트**: 일일/주간 수익 보고서
+-  **에러 알림**: API 키 만료, 잔액 부족 등
+-  **목표 달성**: TP/SL 도달 알림
+-  **봇 상태**: 시작/중지 알림
 
 ## 예시 요청
 
@@ -140,7 +140,7 @@ curl -X POST "http://localhost:8000/telegram/messages/1709556958?message=거래�
 """,
     responses={
         200: {
-            "description": "✅ 메시지 전송 성공",
+            "description": " 메시지 전송 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -163,7 +163,7 @@ curl -X POST "http://localhost:8000/telegram/messages/1709556958?message=거래�
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 메시지 검증 실패",
+            "description": " 잘못된 요청 - 메시지 검증 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -196,7 +196,7 @@ curl -X POST "http://localhost:8000/telegram/messages/1709556958?message=거래�
             }
         },
         404: {
-            "description": "🔍 사용자 텔레그램 ID를 찾을 수 없음",
+            "description": " 사용자 텔레그램 ID를 찾을 수 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -232,7 +232,7 @@ curl -X POST "http://localhost:8000/telegram/messages/1709556958?message=거래�
             }
         },
         500: {
-            "description": "💥 서버 내부 오류 - 설정 또는 재시도 실패",
+            "description": " 서버 내부 오류 - 설정 또는 재시도 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -409,11 +409,11 @@ async def send_message(
 
 ## 사용 시나리오
 
-- 📜 **거래 이력**: 진입/청산 메시지 로그 확인
-- 🔍 **에러 추적**: 실패한 메시지 원인 분석
-- 📊 **통계 분석**: 카테고리별 메시지 빈도 확인
-- 🎯 **성과 검증**: TP/SL 도달 이벤트 추적
-- 🔔 **알림 이력**: 봇 상태 변경 로그 확인
+-  **거래 이력**: 진입/청산 메시지 로그 확인
+-  **에러 추적**: 실패한 메시지 원인 분석
+-  **통계 분석**: 카테고리별 메시지 빈도 확인
+-  **성과 검증**: TP/SL 도달 이벤트 추적
+-  **알림 이력**: 봇 상태 변경 로그 확인
 
 ## 예시 요청
 
@@ -433,7 +433,7 @@ curl "http://localhost:8000/telegram/logs/1709556958?limit=100&offset=100"
 """,
     responses={
         200: {
-            "description": "✅ 로그 조회 성공",
+            "description": " 로그 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -449,7 +449,7 @@ curl "http://localhost:8000/telegram/logs/1709556958?limit=100&offset=100"
                                         "status": "sent",
                                         "category": "entry",
                                         "strategy_type": "HyperRSI",
-                                        "content": "🔥 롱 진입 신호 발생\n심볼: BTC-USDT-SWAP\n가격: $92,000",
+                                        "content": " 롱 진입 신호 발생\n심볼: BTC-USDT-SWAP\n가격: $92,000",
                                         "message_id": 123456,
                                         "error_message": None
                                     },
@@ -461,7 +461,7 @@ curl "http://localhost:8000/telegram/logs/1709556958?limit=100&offset=100"
                                         "status": "sent",
                                         "category": "tp",
                                         "strategy_type": "HyperRSI",
-                                        "content": "✅ TP1 도달\n심볼: BTC-USDT-SWAP\n수익: +2.5%",
+                                        "content": " TP1 도달\n심볼: BTC-USDT-SWAP\n수익: +2.5%",
                                         "message_id": 123457,
                                         "error_message": None
                                     }
@@ -481,7 +481,7 @@ curl "http://localhost:8000/telegram/logs/1709556958?limit=100&offset=100"
                                         "status": "sent",
                                         "category": "start",
                                         "strategy_type": "HyperRSI",
-                                        "content": "🚀 HyperRSI 봇 시작\n레버리지: 10x\n방향: 롱숏",
+                                        "content": " HyperRSI 봇 시작\n레버리지: 10x\n방향: 롱숏",
                                         "message_id": 123450,
                                         "error_message": None
                                     }
@@ -501,7 +501,7 @@ curl "http://localhost:8000/telegram/logs/1709556958?limit=100&offset=100"
             }
         },
         404: {
-            "description": "🔍 사용자 로그 없음",
+            "description": " 사용자 로그 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -516,7 +516,7 @@ curl "http://localhost:8000/telegram/logs/1709556958?limit=100&offset=100"
             }
         },
         500: {
-            "description": "💥 서버 내부 오류",
+            "description": " 서버 내부 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -806,11 +806,11 @@ OKX UID를 직접 사용하여 텔레그램 메시지 로그를 조회합니다.
 
 ## 사용 시나리오
 
-- 📊 **실시간 모니터링**: 최근 100개 로그로 거래 현황 파악
-- 📈 **성과 분석**: TP/SL 로그로 수익률 분석
-- 🔍 **문제 진단**: error 카테고리로 실패 원인 추적
-- 📅 **이력 조회**: offset 조정으로 과거 로그 탐색
-- 🎯 **전략 비교**: strategy_type으로 전략별 성과 분리
+-  **실시간 모니터링**: 최근 100개 로그로 거래 현황 파악
+-  **성과 분석**: TP/SL 로그로 수익률 분석
+-  **문제 진단**: error 카테고리로 실패 원인 추적
+-  **이력 조회**: offset 조정으로 과거 로그 탐색
+-  **전략 비교**: strategy_type으로 전략별 성과 분리
 
 ## 예시 요청
 
@@ -833,7 +833,7 @@ curl "http://localhost:8000/telegram/logs/by_okx_uid/646396755365762614?category
 """,
     responses={
         200: {
-            "description": "✅ 로그 조회 성공",
+            "description": " 로그 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -849,7 +849,7 @@ curl "http://localhost:8000/telegram/logs/by_okx_uid/646396755365762614?category
                                         "status": "sent",
                                         "category": "entry",
                                         "strategy_type": "HyperRSI",
-                                        "content": "🔥 롱 진입 신호\n심볼: BTC-USDT-SWAP\n가격: $92,000\nRSI: 35",
+                                        "content": " 롱 진입 신호\n심볼: BTC-USDT-SWAP\n가격: $92,000\nRSI: 35",
                                         "message_id": 123456,
                                         "error_message": None
                                     },
@@ -861,7 +861,7 @@ curl "http://localhost:8000/telegram/logs/by_okx_uid/646396755365762614?category
                                         "status": "sent",
                                         "category": "tp",
                                         "strategy_type": "HyperRSI",
-                                        "content": "✅ TP1 도달\n심볼: ETH-USDT-SWAP\n수익: +2.5%",
+                                        "content": " TP1 도달\n심볼: ETH-USDT-SWAP\n수익: +2.5%",
                                         "message_id": 123455,
                                         "error_message": None
                                     }
@@ -881,7 +881,7 @@ curl "http://localhost:8000/telegram/logs/by_okx_uid/646396755365762614?category
                                         "status": "sent",
                                         "category": "entry",
                                         "strategy_type": "HyperRSI",
-                                        "content": "🔥 롱 진입 신호",
+                                        "content": " 롱 진입 신호",
                                         "message_id": 123456,
                                         "error_message": None
                                     }
@@ -901,7 +901,7 @@ curl "http://localhost:8000/telegram/logs/by_okx_uid/646396755365762614?category
             }
         },
         500: {
-            "description": "💥 서버 내부 오류",
+            "description": " 서버 내부 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1146,11 +1146,11 @@ telegram:stats:{okx_uid}
 
 ## 사용 시나리오
 
-- 📊 **성과 대시보드**: 전체 메시지 통계 한눈에 확인
-- 📈 **성공률 모니터링**: 메시지 전송 안정성 추적
-- 🎯 **카테고리 분석**: 어떤 알림이 가장 많은지 확인
-- ⚠️ **실패율 추적**: failed_count로 문제 조기 감지
-- 🔍 **전략 효율성**: 진입/청산 빈도로 전략 활동성 측정
+-  **성과 대시보드**: 전체 메시지 통계 한눈에 확인
+-  **성공률 모니터링**: 메시지 전송 안정성 추적
+-  **카테고리 분석**: 어떤 알림이 가장 많은지 확인
+-  **실패율 추적**: failed_count로 문제 조기 감지
+-  **전략 효율성**: 진입/청산 빈도로 전략 활동성 측정
 
 ## 예시 요청
 
@@ -1164,7 +1164,7 @@ curl "http://localhost:8000/telegram/stats/646396755365762614"
 """,
     responses={
         200: {
-            "description": "✅ 통계 조회 성공",
+            "description": " 통계 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1238,7 +1238,7 @@ curl "http://localhost:8000/telegram/stats/646396755365762614"
             }
         },
         500: {
-            "description": "💥 서버 내부 오류",
+            "description": " 서버 내부 오류",
             "content": {
                 "application/json": {
                     "examples": {

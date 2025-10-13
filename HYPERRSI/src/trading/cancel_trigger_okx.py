@@ -183,6 +183,7 @@ class TriggerCancelClient:
         side 파라미터가 주어지면, 해당 side("buy" 혹은 "sell")의 주문만 취소합니다.
         """
         try:
+            redis = await get_redis_client()
             
             order_side = side
             if side == "long":
@@ -243,7 +244,7 @@ class TriggerCancelClient:
             
             for order in algo_orders:
                 monitor_key = f"monitor:user:{user_id}:{inst_id}:{order['algoId']}"
-                await get_redis_client().delete(monitor_key)
+                await redis.delete(monitor_key)
 
 
             # Send cancellation request

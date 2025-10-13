@@ -16,6 +16,7 @@ import redis.asyncio as aioredis
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_redoc_html
 
 import GRID.strategies.grid_process
 from GRID.dtos.feature import StartFeatureDto
@@ -332,6 +333,13 @@ app = FastAPI(
     terms_of_service="https://tradingboost.io/terms",
     debug=settings.DEBUG,
     lifespan=lifespan,
+    swagger_ui_parameters={
+        "filter": True,  # 검색 필터 활성화
+        "tryItOutEnabled": True,  # Try it out 기본 활성화
+        "persistAuthorization": True,  # 인증 정보 유지
+        "displayOperationId": False,
+        "displayRequestDuration": True,  # 요청 시간 표시
+    },
     openapi_tags=[
         {
             "name": "feature",
@@ -414,3 +422,16 @@ app.include_router(router=telegram_route.router)
 @app.get("/test-cors")
 async def test_cors():
     return {"message": "CORS is working"}
+
+# Custom ReDoc endpoint with enhanced search
+@app.get("/redoc", include_in_schema=False)
+async def redoc_html():
+    """
+    ReDoc documentation with enhanced search capabilities.
+    ReDoc provides better search functionality than Swagger UI.
+    """
+    return get_redoc_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} - ReDoc",
+        redoc_js_url="https://cdn.jsdelivr.net/npm/redoc@latest/bundles/redoc.standalone.js",
+    )

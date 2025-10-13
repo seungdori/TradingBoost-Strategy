@@ -31,6 +31,8 @@ async def init_user_position_data(user_id: str, symbol: str, side: str, is_first
         side: 포지션 방향 ('long' or 'short')
         is_first_init: 첫 초기화 여부
     """
+
+    redis = await get_redis_client()
     position_state_key = f"user:{user_id}:position:{symbol}:position_state"
     tp_data_key = f"user:{user_id}:position:{symbol}:{side}:tp_data"
     dca_count_key = f"user:{user_id}:position:{symbol}:{side}:dca_count"
@@ -39,21 +41,21 @@ async def init_user_position_data(user_id: str, symbol: str, side: str, is_first
 
     if is_first_init:
         min_size_key = f"user:{user_id}:position:{symbol}:min_sustain_contract_size"
-        await get_redis_client().delete(min_size_key)
+        await redis.delete(min_size_key)
         main_position_direction_key = f"user:{user_id}:position:{symbol}:main_position_direction"
-        await get_redis_client().delete(main_position_direction_key)
+        await redis.delete(main_position_direction_key)
 
     tp_state = f"user:{user_id}:position:{symbol}:{side}:tp_state"
     hedging_direction_key = f"user:{user_id}:position:{symbol}:hedging_direction"
     entry_fail_count_key = f"user:{user_id}:entry_fail_count"
     initial_size_key = f"user:{user_id}:position:{symbol}:{side}:initial_size"
 
-    await get_redis_client().delete(position_state_key)
-    await get_redis_client().delete(tp_data_key)
-    await get_redis_client().delete(dca_count_key)
-    await get_redis_client().delete(dca_levels_key)
-    await get_redis_client().delete(position_key)
-    await get_redis_client().delete(initial_size_key)
-    await get_redis_client().delete(tp_state)
-    await get_redis_client().delete(entry_fail_count_key)
-    await get_redis_client().delete(hedging_direction_key)
+    await redis.delete(position_state_key)
+    await redis.delete(tp_data_key)
+    await redis.delete(dca_count_key)
+    await redis.delete(dca_levels_key)
+    await redis.delete(position_key)
+    await redis.delete(initial_size_key)
+    await redis.delete(tp_state)
+    await redis.delete(entry_fail_count_key)
+    await redis.delete(hedging_direction_key)

@@ -216,9 +216,11 @@ async def store_okx_uid(telegram_id, okx_uid):
         okx_uid: 사용자의 OKX UID
     """
     # telegram_id를 키로 사용하여 okx_uid 저장
-    await get_redis_client().set(f"user:{telegram_id}:okx_uid", okx_uid)
+
+    redis = await get_redis_client()
+    await redis.set(f"user:{telegram_id}:okx_uid", okx_uid)
     # 역방향 매핑도 저장 (선택 사항)
-    await get_redis_client().set(f"okx_uid_to_telegram:{okx_uid}", telegram_id)
+    await redis.set(f"okx_uid_to_telegram:{okx_uid}", telegram_id)
     
 async def get_okx_uid_from_telegram(telegram_id):
     """
@@ -231,7 +233,9 @@ async def get_okx_uid_from_telegram(telegram_id):
     Returns:
         str or None: 저장된 OKX UID 또는 None
     """
-    okx_uid = await get_redis_client().get(f"user:{telegram_id}:okx_uid")
+
+    redis = await get_redis_client()
+    okx_uid = await redis.get(f"user:{telegram_id}:okx_uid")
     if okx_uid:
         if isinstance(okx_uid, bytes):
             return okx_uid.decode()
@@ -249,7 +253,9 @@ async def get_telegram_id_from_okx_uid(okx_uid):
     Returns:
         str or None: 저장된 텔레그램 ID 또는 None
     """
-    telegram_id = await get_redis_client().get(f"okx_uid_to_telegram:{okx_uid}")
+
+    redis = await get_redis_client()
+    telegram_id = await redis.get(f"okx_uid_to_telegram:{okx_uid}")
     if telegram_id:
         if isinstance(telegram_id, bytes):
             return telegram_id.decode()

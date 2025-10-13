@@ -128,6 +128,9 @@ API_ENDPOINTS = {
 
 logger = get_logger(__name__)
 
+# APIRouter 인스턴스 생성
+router = APIRouter(tags=["order"])
+
 # get_identifier는 shared.helpers.user_id_converter에서 import했으므로 래퍼 함수 생성
 async def get_identifier(user_id: str) -> str:
     """
@@ -140,6 +143,7 @@ async def get_identifier(user_id: str) -> str:
     Returns:
         str: OKX UID
     """
+    redis_client = get_redis_client()
     okx_uid = await get_okx_uid_identifier(redis_client, user_id)
     if not okx_uid:
         raise HTTPException(status_code=404, detail=f"사용자 ID {user_id}에 대한 OKX UID를 찾을 수 없습니다")
@@ -248,15 +252,15 @@ async def handle_exchange_error(e: Exception) -> None:
 
 ## 사용 시나리오
 
-- 📊 **포지션 관리**: 현재 미체결 주문 현황 파악
-- 🔍 **주문 확인**: 특정 심볼의 활성 주문 조회
-- 📈 **대시보드**: 전체 미체결 주문 모니터링
+-  **포지션 관리**: 현재 미체결 주문 현황 파악
+-  **주문 확인**: 특정 심볼의 활성 주문 조회
+-  **대시보드**: 전체 미체결 주문 모니터링
 - ⏰ **알림**: 미체결 주문 수 체크
-- 🎯 **전략 검증**: 주문 실행 여부 확인
+-  **전략 검증**: 주문 실행 여부 확인
 """,
     responses={
         200: {
-            "description": "✅ 주문 목록 조회 성공",
+            "description": " 주문 목록 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -333,7 +337,7 @@ async def handle_exchange_error(e: Exception) -> None:
             }
         },
         401: {
-            "description": "🔒 인증 오류 - API 키 문제",
+            "description": " 인증 오류 - API 키 문제",
             "content": {
                 "application/json": {
                     "examples": {
@@ -346,7 +350,7 @@ async def handle_exchange_error(e: Exception) -> None:
             }
         },
         404: {
-            "description": "🔍 사용자 정보 없음",
+            "description": " 사용자 정보 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -462,7 +466,7 @@ async def get_open_orders(
 
 
 # ------------------------------------------------------
-# ✅ (2) 새로운 라우트: 주문 상세 조회 (일반 or 알고주문)
+#  (2) 새로운 라우트: 주문 상세 조회 (일반 or 알고주문)
 # ------------------------------------------------------
 @router.get(
     "/detail/{order_id}",
@@ -535,12 +539,12 @@ async def get_open_orders(
 
 ## 사용 시나리오
 
-- 📊 **주문 추적**: 특정 주문의 현재 상태 확인
-- 💰 **손익 계산**: 체결된 주문의 PNL 조회
-- 🔍 **디버깅**: 주문 실행 문제 진단
-- 📈 **보고서**: 거래 내역 상세 분석
+-  **주문 추적**: 특정 주문의 현재 상태 확인
+-  **손익 계산**: 체결된 주문의 PNL 조회
+-  **디버깅**: 주문 실행 문제 진단
+-  **보고서**: 거래 내역 상세 분석
 - ⏰ **알림**: 주문 상태 변경 감지
-- 🎯 **전략 검증**: 알고주문 트리거 확인
+-  **전략 검증**: 알고주문 트리거 확인
 
 ## 예시 요청
 
@@ -557,7 +561,7 @@ GET /order/detail/123456789?user_id=1709556958&symbol=ETH-USDT-SWAP&is_algo=true
 """,
     responses={
         200: {
-            "description": "✅ 주문 조회 성공",
+            "description": " 주문 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -650,7 +654,7 @@ GET /order/detail/123456789?user_id=1709556958&symbol=ETH-USDT-SWAP&is_algo=true
             }
         },
         404: {
-            "description": "🔍 주문을 찾을 수 없음",
+            "description": " 주문을 찾을 수 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -671,7 +675,7 @@ GET /order/detail/123456789?user_id=1709556958&symbol=ETH-USDT-SWAP&is_algo=true
             }
         },
         401: {
-            "description": "🔒 인증 오류 - API 키 문제",
+            "description": " 인증 오류 - API 키 문제",
             "content": {
                 "application/json": {
                     "examples": {
@@ -705,7 +709,7 @@ GET /order/detail/123456789?user_id=1709556958&symbol=ETH-USDT-SWAP&is_algo=true
             }
         },
         500: {
-            "description": "💥 서버 내부 오류",
+            "description": " 서버 내부 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -909,10 +913,10 @@ async def get_order_detail(
 
 ## 사용 시나리오
 
-- 📈 **진입 주문**: 새로운 포지션 진입
-- 🔄 **청산 주문**: 기존 포지션 청산
-- 💰 **익절/손절**: Take Profit / Stop Loss 주문
-- 🎯 **전략 실행**: 자동매매 전략의 주문 생성
+-  **진입 주문**: 새로운 포지션 진입
+-  **청산 주문**: 기존 포지션 청산
+-  **익절/손절**: Take Profit / Stop Loss 주문
+-  **전략 실행**: 자동매매 전략의 주문 생성
 - ⚖️ **레버리지 조정**: 주문과 동시에 레버리지 설정
 
 ## 예시 요청
@@ -941,7 +945,7 @@ POST /order/
 """,
     responses={
         200: {
-            "description": "✅ 주문 생성 성공",
+            "description": " 주문 생성 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -992,7 +996,7 @@ POST /order/
             }
         },
         400: {
-            "description": "❌ 잘못된 요청",
+            "description": " 잘못된 요청",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1017,7 +1021,7 @@ POST /order/
             }
         },
         401: {
-            "description": "🔒 인증 오류 - API 키 문제",
+            "description": " 인증 오류 - API 키 문제",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1043,7 +1047,7 @@ POST /order/
             }
         },
         500: {
-            "description": "💥 서버 내부 오류",
+            "description": " 서버 내부 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1189,12 +1193,12 @@ async def create_order(
 
 ## 사용 시나리오
 
-- 📊 **전체 청산**: close_percent=100 (기본값) → 포지션 완전 종료
-- 💰 **일부 익절**: close_percent=50 → 수익의 절반 실현, 나머지 보유
-- ⚠️ **손절 실행**: close_type="market" → 즉시 시장가로 손실 제한
-- 📈 **지정가 익절**: close_type="limit", price=목표가 → 목표가 도달 시 청산
-- 🎯 **단계적 청산**: 여러 번 호출하여 점진적으로 포지션 축소
-- 🔄 **리스크 관리**: 변동성 증가 시 포지션 크기 줄이기
+-  **전체 청산**: close_percent=100 (기본값) → 포지션 완전 종료
+-  **일부 익절**: close_percent=50 → 수익의 절반 실현, 나머지 보유
+-  **손절 실행**: close_type="market" → 즉시 시장가로 손실 제한
+-  **지정가 익절**: close_type="limit", price=목표가 → 목표가 도달 시 청산
+-  **단계적 청산**: 여러 번 호출하여 점진적으로 포지션 축소
+-  **리스크 관리**: 변동성 증가 시 포지션 크기 줄이기
 
 ## 예시 요청
 
@@ -1227,7 +1231,7 @@ curl -X POST "http://localhost:8000/order/position/close/SOL-USDT-SWAP?user_id=1
 """,
     responses={
         200: {
-            "description": "✅ 포지션 종료 성공 - 청산 주문 생성됨",
+            "description": " 포지션 종료 성공 - 청산 주문 생성됨",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1299,7 +1303,7 @@ curl -X POST "http://localhost:8000/order/position/close/SOL-USDT-SWAP?user_id=1
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 유효성 검증 실패",
+            "description": " 잘못된 요청 - 유효성 검증 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1345,7 +1349,7 @@ curl -X POST "http://localhost:8000/order/position/close/SOL-USDT-SWAP?user_id=1
             }
         },
         401: {
-            "description": "🔒 인증 오류 - API 키 없음 또는 만료됨",
+            "description": " 인증 오류 - API 키 없음 또는 만료됨",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1370,7 +1374,7 @@ curl -X POST "http://localhost:8000/order/position/close/SOL-USDT-SWAP?user_id=1
             }
         },
         404: {
-            "description": "🔍 포지션 없음 - 해당 심볼에 활성 포지션 없음",
+            "description": " 포지션 없음 - 해당 심볼에 활성 포지션 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1424,7 +1428,7 @@ curl -X POST "http://localhost:8000/order/position/close/SOL-USDT-SWAP?user_id=1
             }
         },
         500: {
-            "description": "💥 서버 내부 오류 - 청산 처리 실패",
+            "description": " 서버 내부 오류 - 청산 처리 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1474,6 +1478,9 @@ async def close_position(
     # user_id를 OKX UID로 변환
     okx_uid = await get_identifier(user_id)
 
+    # Redis 클라이언트 초기화
+    redis_client = get_redis_client()
+
     # PositionService를 사용하여 포지션 종료 처리
     async with get_exchange_context(okx_uid) as exchange:
         return await PositionService.close_position(
@@ -1489,7 +1496,7 @@ async def close_position(
 
 
 # ------------------------------------------------------
-# ✅ (1) 알고주문 조회를 위한 헬퍼 함수
+#  (1) 알고주문 조회를 위한 헬퍼 함수
 # ------------------------------------------------------
 async def fetch_algo_order_by_id(exchange_or_wrapper: Any, order_id: str, symbol: Optional[str] = None, algo_type : Optional[str] = "trigger") -> Optional[Dict[str, Any]]:
     
@@ -1830,12 +1837,12 @@ async def update_stop_loss_order_redis(
 
 ## 사용 시나리오
 
-- 🎯 **SL 가격 조정**: 시장 상황에 따라 손실 제한 가격 변경
-- 📈 **손익분기점 이동**: 수익 발생 시 SL을 진입가로 이동 (break_even)
-- ⚠️ **긴급 손절**: Invalid한 SL 입력 시 자동 시장가 청산
-- 🔄 **트레일링 스탑**: 가격 상승 시 SL을 따라 올리기
-- 🛡️ **리스크 관리**: 변동성 증가 시 SL을 더 가깝게 설정
-- 📊 **자동 SL 업데이트**: 전략 봇이 자동으로 SL 조정
+-  **SL 가격 조정**: 시장 상황에 따라 손실 제한 가격 변경
+-  **손익분기점 이동**: 수익 발생 시 SL을 진입가로 이동 (break_even)
+-  **긴급 손절**: Invalid한 SL 입력 시 자동 시장가 청산
+-  **트레일링 스탑**: 가격 상승 시 SL을 따라 올리기
+-  **리스크 관리**: 변동성 증가 시 SL을 더 가깝게 설정
+-  **자동 SL 업데이트**: 전략 봇이 자동으로 SL 조정
 
 ## 예시 요청
 
@@ -1858,7 +1865,7 @@ curl -X POST "http://localhost:8000/order/position/sl" \\
 """,
     responses={
         200: {
-            "description": "✅ 스탑로스 업데이트 성공 - 새로운 SL 주문 생성됨",
+            "description": " 스탑로스 업데이트 성공 - 새로운 SL 주문 생성됨",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1902,7 +1909,7 @@ curl -X POST "http://localhost:8000/order/position/sl" \\
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 유효성 검증 실패",
+            "description": " 잘못된 요청 - 유효성 검증 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1939,7 +1946,7 @@ curl -X POST "http://localhost:8000/order/position/sl" \\
             }
         },
         401: {
-            "description": "🔒 인증 오류 - API 키 없음 또는 만료됨",
+            "description": " 인증 오류 - API 키 없음 또는 만료됨",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1956,7 +1963,7 @@ curl -X POST "http://localhost:8000/order/position/sl" \\
             }
         },
         404: {
-            "description": "🔍 포지션 없음 - 활성 포지션 조회 불가",
+            "description": " 포지션 없음 - 활성 포지션 조회 불가",
             "content": {
                 "application/json": {
                     "examples": {
@@ -2001,7 +2008,7 @@ curl -X POST "http://localhost:8000/order/position/sl" \\
             }
         },
         500: {
-            "description": "💥 서버 내부 오류 - SL 주문 생성 실패",
+            "description": " 서버 내부 오류 - SL 주문 생성 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -2096,6 +2103,9 @@ async def update_stop_loss_order(
 
     # user_id를 OKX UID로 변환
     okx_uid = await get_identifier(user_id)
+
+    # Redis 클라이언트 초기화
+    redis_client = get_redis_client()
 
     async with get_exchange_context(okx_uid) as exchange:
         try:
@@ -2339,12 +2349,12 @@ async def update_stop_loss_order(
 
 ## 사용 시나리오
 
-- ❌ **주문 정정**: 가격/수량 변경 필요 시 기존 주문 취소 후 재생성
+-  **주문 정정**: 가격/수량 변경 필요 시 기존 주문 취소 후 재생성
 - ⏱️ **타임아웃 방지**: 긴 시간 대기 중인 지정가 주문 취소
-- 📊 **전략 변경**: 시장 상황 변화에 따른 대기 주문 취소
-- 🎯 **정확한 취소**: symbol 제공으로 빠른 취소 실행
-- 🔄 **재주문**: 실수로 잘못 생성한 주문 즉시 취소
-- 🛡️ **리스크 관리**: 위험한 대기 주문 긴급 취소
+-  **전략 변경**: 시장 상황 변화에 따른 대기 주문 취소
+-  **정확한 취소**: symbol 제공으로 빠른 취소 실행
+-  **재주문**: 실수로 잘못 생성한 주문 즉시 취소
+-  **리스크 관리**: 위험한 대기 주문 긴급 취소
 
 ## 예시 요청
 
@@ -2361,7 +2371,7 @@ curl -X DELETE "http://localhost:8000/order/780912345678901234?user_id=170955695
 """,
     responses={
         200: {
-            "description": "✅ 주문 취소 성공",
+            "description": " 주문 취소 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -2394,7 +2404,7 @@ curl -X DELETE "http://localhost:8000/order/780912345678901234?user_id=170955695
             }
         },
         400: {
-            "description": "❌ 주문 취소 실패 - 취소 불가능한 상태",
+            "description": " 주문 취소 실패 - 취소 불가능한 상태",
             "content": {
                 "application/json": {
                     "examples": {
@@ -2432,7 +2442,7 @@ curl -X DELETE "http://localhost:8000/order/780912345678901234?user_id=170955695
             }
         },
         401: {
-            "description": "🔒 인증 오류 - API 키 없음 또는 만료됨",
+            "description": " 인증 오류 - API 키 없음 또는 만료됨",
             "content": {
                 "application/json": {
                     "examples": {
@@ -2449,7 +2459,7 @@ curl -X DELETE "http://localhost:8000/order/780912345678901234?user_id=170955695
             }
         },
         404: {
-            "description": "🔍 주문 없음 - 주문 ID 조회 불가",
+            "description": " 주문 없음 - 주문 ID 조회 불가",
             "content": {
                 "application/json": {
                     "examples": {
@@ -2506,7 +2516,7 @@ curl -X DELETE "http://localhost:8000/order/780912345678901234?user_id=170955695
             }
         },
         500: {
-            "description": "💥 서버 내부 오류 - 취소 처리 실패",
+            "description": " 서버 내부 오류 - 취소 처리 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -2657,11 +2667,11 @@ async def cancel_order(
 ## 사용 시나리오
 
 - 🧹 **전체 정리**: 거래쌍의 모든 대기 주문 일괄 취소
-- 🎯 **포지션별 정리**: 롱/숏 포지션 관련 주문만 선택적 취소
-- ⚠️ **긴급 청산 준비**: 포지션 청산 전 모든 관련 주문 정리
-- 📊 **전략 변경**: 새로운 전략 적용 전 기존 주문 전체 취소
-- 🔄 **재시작**: 봇 재시작 시 기존 주문 정리
-- 🛡️ **리스크 관리**: 시장 변동성 증가 시 대기 주문 일괄 제거
+-  **포지션별 정리**: 롱/숏 포지션 관련 주문만 선택적 취소
+-  **긴급 청산 준비**: 포지션 청산 전 모든 관련 주문 정리
+-  **전략 변경**: 새로운 전략 적용 전 기존 주문 전체 취소
+-  **재시작**: 봇 재시작 시 기존 주문 정리
+-  **리스크 관리**: 시장 변동성 증가 시 대기 주문 일괄 제거
 
 ## 예시 요청
 
@@ -2678,7 +2688,7 @@ curl -X DELETE "http://localhost:8000/order/cancel-all/SOL-USDT-SWAP?user_id=170
 """,
     responses={
         200: {
-            "description": "✅ 주문 취소 성공",
+            "description": " 주문 취소 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -2736,7 +2746,7 @@ curl -X DELETE "http://localhost:8000/order/cancel-all/SOL-USDT-SWAP?user_id=170
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 유효성 검증 실패",
+            "description": " 잘못된 요청 - 유효성 검증 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -2763,7 +2773,7 @@ curl -X DELETE "http://localhost:8000/order/cancel-all/SOL-USDT-SWAP?user_id=170
             }
         },
         401: {
-            "description": "🔒 인증 오류 - API 키 없음 또는 만료됨",
+            "description": " 인증 오류 - API 키 없음 또는 만료됨",
             "content": {
                 "application/json": {
                     "examples": {
@@ -2780,7 +2790,7 @@ curl -X DELETE "http://localhost:8000/order/cancel-all/SOL-USDT-SWAP?user_id=170
             }
         },
         404: {
-            "description": "🔍 주문 없음 - 취소할 주문이 없음",
+            "description": " 주문 없음 - 취소할 주문이 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -2817,7 +2827,7 @@ curl -X DELETE "http://localhost:8000/order/cancel-all/SOL-USDT-SWAP?user_id=170
             }
         },
         500: {
-            "description": "💥 서버 내부 오류 - 일괄 취소 실패",
+            "description": " 서버 내부 오류 - 일괄 취소 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -3055,11 +3065,11 @@ async def cancel_all_orders(
 ## 사용 시나리오
 
 - 🧹 **전체 알고주문 정리**: 특정 심볼의 모든 SL/TP 주문 취소
-- 🎯 **포지션별 정리**: 롱 또는 숏 포지션 알고주문만 선택적 취소
-- ⚠️ **긴급 정리**: 시장 급변 시 모든 자동 주문 제거
-- 📊 **전략 변경**: 새로운 SL/TP 설정 전 기존 알고주문 제거
-- 🔄 **재설정**: 알고주문 재생성 전 기존 주문 정리
-- 🛡️ **리스크 관리**: 변동성 증가 시 자동 손절/익절 주문 제거
+-  **포지션별 정리**: 롱 또는 숏 포지션 알고주문만 선택적 취소
+-  **긴급 정리**: 시장 급변 시 모든 자동 주문 제거
+-  **전략 변경**: 새로운 SL/TP 설정 전 기존 알고주문 제거
+-  **재설정**: 알고주문 재생성 전 기존 주문 정리
+-  **리스크 관리**: 변동성 증가 시 자동 손절/익절 주문 제거
 
 ## 예시 요청
 
@@ -3076,7 +3086,7 @@ curl -X DELETE "http://localhost:8000/order/algo-orders/SOL-USDT-SWAP?user_id=17
 """,
     responses={
         200: {
-            "description": "✅ 알고리즘 주문 취소 성공",
+            "description": " 알고리즘 주문 취소 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -3106,7 +3116,7 @@ curl -X DELETE "http://localhost:8000/order/algo-orders/SOL-USDT-SWAP?user_id=17
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 유효성 검증 실패",
+            "description": " 잘못된 요청 - 유효성 검증 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -3123,7 +3133,7 @@ curl -X DELETE "http://localhost:8000/order/algo-orders/SOL-USDT-SWAP?user_id=17
             }
         },
         401: {
-            "description": "🔒 인증 오류 - API 키 없음 또는 만료됨",
+            "description": " 인증 오류 - API 키 없음 또는 만료됨",
             "content": {
                 "application/json": {
                     "examples": {
@@ -3140,7 +3150,7 @@ curl -X DELETE "http://localhost:8000/order/algo-orders/SOL-USDT-SWAP?user_id=17
             }
         },
         404: {
-            "description": "🔍 주문 없음 - 취소할 알고주문이 없음",
+            "description": " 주문 없음 - 취소할 알고주문이 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -3157,7 +3167,7 @@ curl -X DELETE "http://localhost:8000/order/algo-orders/SOL-USDT-SWAP?user_id=17
             }
         },
         500: {
-            "description": "💥 서버 내부 오류 - 알고주문 취소 실패",
+            "description": " 서버 내부 오류 - 알고주문 취소 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -3290,12 +3300,12 @@ OKX의 알고리즘 주문(트리거 주문, 조건부 주문) 정보를 상세�
 
 ## 사용 시나리오
 
-- 🔍 **SL/TP 확인**: 설정된 스탑로스/테이크프로핏 주문 상태 확인
-- 📊 **트리거 주문 모니터링**: 트리거 대기 중인 주문 추적
+-  **SL/TP 확인**: 설정된 스탑로스/테이크프로핏 주문 상태 확인
+-  **트리거 주문 모니터링**: 트리거 대기 중인 주문 추적
 - ⏱️ **체결 상태 확인**: 알고주문이 체결되었는지 확인
-- ❌ **취소 확인**: 알고주문 취소 여부 검증
-- 📈 **히스토리 조회**: 과거 알고주문 실행 내역 확인
-- 🎯 **정확한 주문 정보**: algoId로 특정 알고주문 상세 정보 조회
+-  **취소 확인**: 알고주문 취소 여부 검증
+-  **히스토리 조회**: 과거 알고주문 실행 내역 확인
+-  **정확한 주문 정보**: algoId로 특정 알고주문 상세 정보 조회
 
 ## 예시 요청
 
@@ -3312,7 +3322,7 @@ curl "http://localhost:8000/order/algo/780934567890123456?symbol=SOL-USDT-SWAP&u
 """,
     responses={
         200: {
-            "description": "✅ 알고리즘 주문 조회 성공",
+            "description": " 알고리즘 주문 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -3399,7 +3409,7 @@ curl "http://localhost:8000/order/algo/780934567890123456?symbol=SOL-USDT-SWAP&u
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 유효성 검증 실패",
+            "description": " 잘못된 요청 - 유효성 검증 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -3423,7 +3433,7 @@ curl "http://localhost:8000/order/algo/780934567890123456?symbol=SOL-USDT-SWAP&u
             }
         },
         401: {
-            "description": "🔒 인증 오류 - API 키 없음 또는 만료됨",
+            "description": " 인증 오류 - API 키 없음 또는 만료됨",
             "content": {
                 "application/json": {
                     "examples": {
@@ -3440,7 +3450,7 @@ curl "http://localhost:8000/order/algo/780934567890123456?symbol=SOL-USDT-SWAP&u
             }
         },
         404: {
-            "description": "🔍 주문 없음 - 알고주문 조회 불가",
+            "description": " 주문 없음 - 알고주문 조회 불가",
             "content": {
                 "application/json": {
                     "examples": {
@@ -3488,7 +3498,7 @@ curl "http://localhost:8000/order/algo/780934567890123456?symbol=SOL-USDT-SWAP&u
             }
         },
         500: {
-            "description": "💥 서버 내부 오류 - 알고주문 조회 실패",
+            "description": " 서버 내부 오류 - 알고주문 조회 실패",
             "content": {
                 "application/json": {
                     "examples": {

@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import time
-from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from typing import List, Optional
 
@@ -13,7 +12,7 @@ import ccxt.async_support as ccxt
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from HYPERRSI.src.api.dependencies import get_exchange_client
+from HYPERRSI.src.api.dependencies import get_exchange_context
 from shared.database.redis_helper import get_redis_client
 
 logger = logging.getLogger(__name__)
@@ -22,18 +21,6 @@ router = APIRouter(prefix="/account", tags=["Account Management"])
 
 
 SYMBOL_INFO_PREFIX = "symbol_info:"
-
-
-@asynccontextmanager
-async def get_exchange_context(user_id: str):
-    """컨텍스트 매니저로 exchange client 관리"""
-    exchange = await get_exchange_client(user_id)
-    try:
-        yield exchange
-    finally:
-        print("Closing exchange client...!")
-        await exchange.close()
-
 
 class Position(BaseModel):
     """
@@ -139,9 +126,6 @@ def get_redis_keys(user_id: str):
     }
 
 
-
-router = APIRouter(prefix="/account", tags=["Account Management"])
-
 # 환경 변수나 별도의 설정 파일에서 가져오는 방식을 권장합니다.
 from HYPERRSI.src.config import OKX_API_KEY as API_KEY
 from HYPERRSI.src.config import OKX_PASSPHRASE as API_PASSPHRASE
@@ -156,8 +140,9 @@ async def update_contract_specifications(user_id: str):
     마지막 업데이트가 24시간 이전이면 새로 조회합니다
     """
     try:
+        redis = await get_redis_client()
         # 마지막 업데이트 시간 확인
-        last_update = await get_redis_client().get("symbol_info:contract_specs_last_update")
+        last_update = await redis.get("symbol_info:contract_specs_last_update")
         current_time = int(time.time())
         
         if not last_update or (current_time - int(last_update)) > 86400:
@@ -180,13 +165,13 @@ async def update_contract_specifications(user_id: str):
                     }
                 
                 # Redis에 저장 (만료시간 없이)
-                await get_redis_client().set("symbol_info:contract_specifications", json.dumps(specs_dict))
-                await get_redis_client().set("symbol_info:contract_specs_last_update", str(current_time))
+                await redis.set("symbol_info:contract_specifications", json.dumps(specs_dict))
+                await redis.set("symbol_info:contract_specs_last_update", str(current_time))
                 
                 return specs_dict
         
         # 기존 데이터 반환
-        specs = await get_redis_client().get("symbol_info:contract_specifications")
+        specs = await redis.get("symbol_info:contract_specifications")
         return json.loads(specs) if specs else {}
         
     except Exception as e:
@@ -208,16 +193,17 @@ async def get_contract_specifications(
     - force_update=true로 요청하면 강제로 새로 조회
     """
     try:
+        redis = await get_redis_client()
         if force_update:
             # Redis 데이터 삭제 후 새로 조회
-            await get_redis_client().delete("symbol_info:contract_specifications")
-            await get_redis_client().delete("symbol_info:contract_specs_last_update")
+            await redis.delete("symbol_info:contract_specifications")
+            await redis.delete("symbol_info:contract_specs_last_update")
             
         specs_dict = await update_contract_specifications(user_id)
         return {
             "success": True,
             "data": specs_dict,
-            "last_update": await get_redis_client().get("symbol_info:contract_specs_last_update")
+            "last_update": await redis.get("symbol_info:contract_specs_last_update")
         }
     
     except Exception as e:
@@ -285,11 +271,11 @@ async def get_contract_specifications(
 
 ## 사용 시나리오
 
-- 💰 **자산 확인**: 총자산 및 가용 마진 모니터링
-- 📊 **포지션 관리**: 모든 활성 포지션 한눈에 확인
-- ⚠️ **리스크 체크**: 마진 비율 및 청산가 모니터링
-- 📈 **손익 추적**: 미실현 손익 실시간 확인
-- 🎯 **거래 계획**: 가용 마진 기반 신규 포지션 계획
+-  **자산 확인**: 총자산 및 가용 마진 모니터링
+-  **포지션 관리**: 모든 활성 포지션 한눈에 확인
+-  **리스크 체크**: 마진 비율 및 청산가 모니터링
+-  **손익 추적**: 미실현 손익 실시간 확인
+-  **거래 계획**: 가용 마진 기반 신규 포지션 계획
 
 ## 계약 사양 자동 업데이트
 
@@ -307,7 +293,7 @@ GET /account/balance?user_id=1709556958
 """,
     responses={
         200: {
-            "description": "✅ 잔고 조회 성공",
+            "description": " 잔고 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -380,7 +366,7 @@ GET /account/balance?user_id=1709556958
             },
         },
         400: {
-            "description": "❌ 잘못된 요청 - 거래소 오류",
+            "description": " 잘못된 요청 - 거래소 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -395,7 +381,7 @@ GET /account/balance?user_id=1709556958
             }
         },
         401: {
-            "description": "🔒 인증 오류",
+            "description": " 인증 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -416,7 +402,7 @@ GET /account/balance?user_id=1709556958
             }
         },
         404: {
-            "description": "🔍 API 키를 찾을 수 없음",
+            "description": " API 키를 찾을 수 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -431,7 +417,7 @@ GET /account/balance?user_id=1709556958
             }
         },
         503: {
-            "description": "🔧 서비스 이용 불가 - 거래소 연결 오류",
+            "description": " 서비스 이용 불가 - 거래소 연결 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -452,7 +438,7 @@ GET /account/balance?user_id=1709556958
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -631,24 +617,21 @@ async def get_positions(
 async def get_history(
     user_id: str = Query(..., description="사용자 ID(문자열). 예 : 1709556985"),
     limit: int = Query(10, description="조회할 거래 내역 수"),
-    
+
 ):
     """
     사용자의 거래 내역을 조회하고 실시간 정보로 업데이트합니다.
-    
+
     - 거래소에서 실시간 주문 상태 확인
     - PNL 및 수수료 정보 포함
     - 청산 유형(TP/SL/Manual) 구분
     """
     keys = get_redis_keys(user_id)
-    api_keys = await get_redis_client().hgetall(keys['api_keys'])
-    
-    if not api_keys:
-        raise HTTPException(status_code=400, detail="등록되지 않은 사용자입니다.")
-        
+
     try:
+        redis = await get_redis_client()
         async with get_exchange_context(str(user_id)) as exchange:
-            history_list = await get_redis_client().lrange(keys['history'], 0, limit - 1)
+            history_list = await redis.lrange(keys['history'], 0, limit - 1)
             if not history_list:
                 return []
                 
@@ -701,7 +684,7 @@ async def get_history(
                                 trade_info['close_type'] = 'Manual'
                             
                             # Redis 업데이트
-                            await get_redis_client().lset(
+                            await redis.lset(
                                 keys['history'],
                                 history_list.index(trade_data),
                                 json.dumps(trade_info)
@@ -713,7 +696,10 @@ async def get_history(
                 results.append(TradeHistory(**trade_info))
                 
             return results
-            
+
+    except HTTPException:
+        # HTTPException은 그대로 전파 (API 키 없음, 인증 오류 등)
+        raise
     except Exception as e:
         logger.error(f"[get_history] Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="거래 내역 조회 중 오류가 발생했습니다.")
@@ -760,11 +746,11 @@ async def get_history(
 
 ## 사용 시나리오
 
-- 📊 **대시보드**: 포지션 현황 한눈에 파악
-- 💰 **손익 모니터링**: 전체 미실현 손익 실시간 추적
-- ⚠️ **리스크 관리**: 청산가 대비 현재가 모니터링
-- 📈 **포트폴리오 분석**: 심볼별 포지션 분포 확인
-- 🎯 **거래 전략**: 포지션 밸런스 최적화
+-  **대시보드**: 포지션 현황 한눈에 파악
+-  **손익 모니터링**: 전체 미실현 손익 실시간 추적
+-  **리스크 관리**: 청산가 대비 현재가 모니터링
+-  **포트폴리오 분석**: 심볼별 포지션 분포 확인
+-  **거래 전략**: 포지션 밸런스 최적화
 
 ## GET /balance와의 차이점
 
@@ -789,7 +775,7 @@ GET /account/positions/summary?user_id=1709556958
 """,
     responses={
         200: {
-            "description": "✅ 포지션 요약 조회 성공",
+            "description": " 포지션 요약 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -884,7 +870,7 @@ GET /account/positions/summary?user_id=1709556958
             },
         },
         400: {
-            "description": "❌ 잘못된 요청 - 거래소 오류",
+            "description": " 잘못된 요청 - 거래소 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -899,7 +885,7 @@ GET /account/positions/summary?user_id=1709556958
             }
         },
         401: {
-            "description": "🔒 인증 오류",
+            "description": " 인증 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -914,7 +900,7 @@ GET /account/positions/summary?user_id=1709556958
             }
         },
         503: {
-            "description": "🔧 서비스 이용 불가 - 거래소 연결 오류",
+            "description": " 서비스 이용 불가 - 거래소 연결 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -929,7 +915,7 @@ GET /account/positions/summary?user_id=1709556958
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1055,10 +1041,10 @@ async def get_positions_summary(
 
 ## 사용 시나리오
 
-- 📊 **월간 통계**: 이번달 거래 활동 분석
-- 💰 **수수료 계산**: 거래 비용 추적 및 최적화
-- 📈 **활동 모니터링**: 거래량 추이 파악
-- 🎯 **VIP 등급**: 거래소 VIP 등급 산정 기준 확인
+-  **월간 통계**: 이번달 거래 활동 분석
+-  **수수료 계산**: 거래 비용 추적 및 최적화
+-  **활동 모니터링**: 거래량 추이 파악
+-  **VIP 등급**: 거래소 VIP 등급 산정 기준 확인
 - 💼 **세무 자료**: 월별 거래 내역 정리
 
 ## Bills API vs Orders API
@@ -1084,7 +1070,7 @@ GET /account/volume/month?user_id=1709556958
 """,
     responses={
         200: {
-            "description": "✅ 거래량 조회 성공",
+            "description": " 거래량 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1137,7 +1123,7 @@ GET /account/volume/month?user_id=1709556958
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 거래소 오류",
+            "description": " 잘못된 요청 - 거래소 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1152,7 +1138,7 @@ GET /account/volume/month?user_id=1709556958
             }
         },
         401: {
-            "description": "🔒 인증 오류",
+            "description": " 인증 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1167,7 +1153,7 @@ GET /account/volume/month?user_id=1709556958
             }
         },
         503: {
-            "description": "🔧 서비스 이용 불가 - 거래소 연결 오류",
+            "description": " 서비스 이용 불가 - 거래소 연결 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1182,7 +1168,7 @@ GET /account/volume/month?user_id=1709556958
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {

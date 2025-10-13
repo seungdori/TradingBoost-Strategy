@@ -11,6 +11,7 @@ aiohttp==3.9.1
 celery==5.3.4
 redis==5.0.1
 APScheduler==3.11.0
+nest-asyncio==1.6.0
 
 # Database
 sqlalchemy==2.0.23

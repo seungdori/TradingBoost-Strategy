@@ -8,21 +8,28 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 import asyncio
+import logging
 import signal
 
 from HYPERRSI.src.bot.handlers import setup_bot, shutdown_bot
-from HYPERRSI.src.core.database import init_db
+from HYPERRSI.src.core.database import init_db, init_global_redis_clients
 from HYPERRSI.src.services.redis_service import init_redis
 from shared.logging import get_logger
+
+# aiogram 로그 레벨을 WARNING으로 설정 (INFO 레벨의 "is not handled" 메시지 숨김)
+logging.getLogger("aiogram").setLevel(logging.WARNING)
 
 logger = get_logger(__name__)
 
 async def main():
     try:
-        # 초기화w
+        # 초기화
         await init_db()
         await init_redis()
-        
+
+        # Initialize global Redis clients for shared.database.redis_helper
+        await init_global_redis_clients()
+
         # 봇 설정
         bot, dp = await setup_bot()
         

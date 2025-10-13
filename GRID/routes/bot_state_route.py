@@ -65,10 +65,10 @@ router = APIRouter(prefix="/state", tags=["state"])
 
 ## 사용 시나리오
 
-- ✅ **대시보드 표시**: 봇 상태를 실시간으로 UI에 표시
-- ✅ **헬스 체크**: 주기적으로 봇 상태 모니터링
-- ✅ **에러 감지**: 봇 에러 발생 확인 및 알림
-- ✅ **자동화 워크플로우**: 봇 상태에 따른 자동 작업 트리거
+-  **대시보드 표시**: 봇 상태를 실시간으로 UI에 표시
+-  **헬스 체크**: 주기적으로 봇 상태 모니터링
+-  **에러 감지**: 봇 에러 발생 확인 및 알림
+-  **자동화 워크플로우**: 봇 상태에 따른 자동 작업 트리거
 
 ## 예시 URL
 
@@ -80,7 +80,7 @@ GET /state/upbit/long-short/11111
 """,
     responses={
         200: {
-            "description": "✅ 봇 상태 조회 성공",
+            "description": " 봇 상태 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -148,7 +148,7 @@ GET /state/upbit/long-short/11111
             }
         },
         400: {
-            "description": "❌ 조회 실패 - 잘못된 요청",
+            "description": " 조회 실패 - 잘못된 요청",
             "content": {
                 "application/json": {
                     "examples": {
@@ -190,7 +190,7 @@ GET /state/upbit/long-short/11111
             }
         },
         404: {
-            "description": "🔍 봇 상태를 찾을 수 없음",
+            "description": " 봇 상태를 찾을 수 없음",
             "content": {
                 "application/json": {
                     "example": error_example(
@@ -204,7 +204,7 @@ GET /state/upbit/long-short/11111
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -239,7 +239,7 @@ GET /state/upbit/long-short/11111
             }
         },
         503: {
-            "description": "🔧 서비스 이용 불가",
+            "description": " 서비스 이용 불가",
             "content": {
                 "application/json": {
                     "example": error_example(
@@ -327,17 +327,17 @@ async def get_bot_state(exchange_name: str, enter_strategy: str, user_id:int, re
 ## 사용 시나리오
 
 **일반 사용:**
-- ✅ **봇 시작 시**: `is_running=true`, `error=null`로 설정
-- ✅ **봇 중지 시**: `is_running=false`, `error=null`로 설정
-- ✅ **에러 발생 시**: `is_running=false`, `error=<에러 정보>`로 설정
-- ✅ **상태 복구**: 에러 해결 후 정상 상태로 복구
+-  **봇 시작 시**: `is_running=true`, `error=null`로 설정
+-  **봇 중지 시**: `is_running=false`, `error=null`로 설정
+-  **에러 발생 시**: `is_running=false`, `error=<에러 정보>`로 설정
+-  **상태 복구**: 에러 해결 후 정상 상태로 복구
 
 **내부 사용:**
 - `/start` 엔드포인트에서 봇 시작 시 호출
 - `/stop` 엔드포인트에서 봇 중지 시 호출
 - 에러 핸들러에서 에러 상태 기록
 
-## ⚠️ 주의사항
+##  주의사항
 
 - 이 엔드포인트는 주로 **내부 서비스**에서 사용됩니다
 - 직접 호출 시 봇의 실제 프로세스 상태와 불일치 가능
@@ -345,7 +345,7 @@ async def get_bot_state(exchange_name: str, enter_strategy: str, user_id:int, re
 """,
     responses={
         200: {
-            "description": "✅ 상태 설정 성공",
+            "description": " 상태 설정 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -408,7 +408,7 @@ async def get_bot_state(exchange_name: str, enter_strategy: str, user_id:int, re
             }
         },
         400: {
-            "description": "❌ 설정 실패 - 잘못된 요청",
+            "description": " 설정 실패 - 잘못된 요청",
             "content": {
                 "application/json": {
                     "examples": {
@@ -470,7 +470,7 @@ async def get_bot_state(exchange_name: str, enter_strategy: str, user_id:int, re
             }
         },
         422: {
-            "description": "❌ 처리 불가 - 검증 오류",
+            "description": " 처리 불가 - 검증 오류",
             "content": {
                 "application/json": {
                     "example": error_example(
@@ -492,7 +492,7 @@ async def get_bot_state(exchange_name: str, enter_strategy: str, user_id:int, re
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -527,7 +527,7 @@ async def get_bot_state(exchange_name: str, enter_strategy: str, user_id:int, re
             }
         },
         503: {
-            "description": "🔧 서비스 이용 불가",
+            "description": " 서비스 이용 불가",
             "content": {
                 "application/json": {
                     "example": error_example(
@@ -596,9 +596,9 @@ async def set_bot_state(bot_state: BotStateDto, request: Request) -> ResponseDto
 3. **상태 저장**: 업데이트된 상태를 Redis에 저장
 
 **주요 특징:**
-- ✅ `error` 필드만 `null`로 변경
-- ✅ `is_running`, `key` 등 다른 필드는 그대로 유지
-- ✅ 봇의 실제 프로세스 상태는 변경하지 않음
+-  `error` 필드만 `null`로 변경
+-  `is_running`, `key` 등 다른 필드는 그대로 유지
+-  봇의 실제 프로세스 상태는 변경하지 않음
 
 ## 사용 시나리오
 
@@ -611,11 +611,11 @@ async def set_bot_state(bot_state: BotStateDto, request: Request) -> ResponseDto
 ```
 
 **자동화 시나리오:**
-- 🔄 **자동 복구**: 일시적 에러 해결 후 자동으로 에러 상태 제거
-- 📊 **모니터링**: 에러 해결 여부 추적
-- 🔔 **알림**: 에러 초기화 시 텔레그램 알림 발송
+-  **자동 복구**: 일시적 에러 해결 후 자동으로 에러 상태 제거
+-  **모니터링**: 에러 해결 여부 추적
+-  **알림**: 에러 초기화 시 텔레그램 알림 발송
 
-## ⚠️ 주의사항
+##  주의사항
 
 - 봇의 **실제 프로세스는 영향받지 않습니다**
 - 에러의 **근본 원인이 해결되었는지 확인** 필요
@@ -624,7 +624,7 @@ async def set_bot_state(bot_state: BotStateDto, request: Request) -> ResponseDto
 """,
     responses={
         200: {
-            "description": "✅ 에러 초기화 성공",
+            "description": " 에러 초기화 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -665,7 +665,7 @@ async def set_bot_state(bot_state: BotStateDto, request: Request) -> ResponseDto
             }
         },
         400: {
-            "description": "❌ 요청 오류",
+            "description": " 요청 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -706,7 +706,7 @@ async def set_bot_state(bot_state: BotStateDto, request: Request) -> ResponseDto
             }
         },
         404: {
-            "description": "🔍 봇 상태를 찾을 수 없음",
+            "description": " 봇 상태를 찾을 수 없음",
             "content": {
                 "application/json": {
                     "example": error_example(
@@ -723,7 +723,7 @@ async def set_bot_state(bot_state: BotStateDto, request: Request) -> ResponseDto
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -758,7 +758,7 @@ async def set_bot_state(bot_state: BotStateDto, request: Request) -> ResponseDto
             }
         },
         503: {
-            "description": "🔧 서비스 이용 불가",
+            "description": " 서비스 이용 불가",
             "content": {
                 "application/json": {
                     "example": error_example(

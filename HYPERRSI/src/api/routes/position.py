@@ -16,10 +16,10 @@ from shared.helpers.user_id_resolver import get_okx_uid_from_telegram, resolve_u
 
 logger = logging.getLogger(__name__)
 
-# ✅ FastAPI 라우터 설정
+#  FastAPI 라우터 설정
 router = APIRouter(prefix="/position", tags=["Position Management"])
 
-# ✅ Pydantic 모델 정의
+#  Pydantic 모델 정의
 class Info(BaseModel):
     adl: Optional[str]
     avgPx: Optional[float]
@@ -114,7 +114,7 @@ from HYPERRSI.src.trading.trading_service import TradingService
 # Trading DTOs are now imported from shared.dtos.trading
 
 
-# ✅ Redis에서 사용자 API 키 가져오기
+#  Redis에서 사용자 API 키 가져오기
 async def get_user_api_keys(user_id: str) -> Dict[str, str]:
     """
     사용자 ID를 기반으로 Redis에서 OKX API 키를 가져오는 함수
@@ -144,7 +144,7 @@ async def get_user_api_keys(user_id: str) -> Dict[str, str]:
         raise HTTPException(status_code=500, detail=f"Error fetching API keys: {str(e)}")
 
 
-# ✅ FastAPI 엔드포인트
+#  FastAPI 엔드포인트
 @router.get("/{user_id}/{symbol}", response_model=ApiResponse, include_in_schema=False)
 async def fetch_okx_position_with_symbol(
     user_id: str = Path(..., example="1709556958", description="사용자 ID (텔레그램 ID 또는 OKX UID)"),
@@ -213,11 +213,11 @@ async def fetch_okx_position_with_symbol(
 
 ## 사용 시나리오
 
-- 📊 **실시간 모니터링**: 대시보드에 포지션 현황 표시
-- 💰 **손익 계산**: 미실현 손익 및 손익률 확인
-- ⚠️ **리스크 관리**: 청산가 대비 현재가 모니터링
-- 🔄 **자동 동기화**: Redis 상태와 실제 포지션 동기화
-- 📈 **통계 분석**: 포지션 히스토리 및 성과 분석
+-  **실시간 모니터링**: 대시보드에 포지션 현황 표시
+-  **손익 계산**: 미실현 손익 및 손익률 확인
+-  **리스크 관리**: 청산가 대비 현재가 모니터링
+-  **자동 동기화**: Redis 상태와 실제 포지션 동기화
+-  **통계 분석**: 포지션 히스토리 및 성과 분석
 
 ## 예시 URL
 
@@ -229,7 +229,7 @@ GET /position/1709556958?symbol=ETH-USDT-SWAP
 """,
     responses={
         200: {
-            "description": "✅ 포지션 조회 성공",
+            "description": " 포지션 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -294,7 +294,7 @@ GET /position/1709556958?symbol=ETH-USDT-SWAP
             }
         },
         404: {
-            "description": "🔍 API 키를 찾을 수 없음",
+            "description": " API 키를 찾을 수 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -309,7 +309,7 @@ GET /position/1709556958?symbol=ETH-USDT-SWAP
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -340,9 +340,9 @@ async def fetch_okx_position(
         # user_id를 OKX UID로 변환
         okx_uid = await resolve_user_identifier(user_id)
         
-        # ✅ Redis에서 API 키 가져오기        
+        #  Redis에서 API 키 가져오기        
         api_keys = await get_user_api_keys(okx_uid)
-        # ✅ OKX 클라이언트 생성
+        #  OKX 클라이언트 생성
         client = ccxt.okx({
             'apiKey': api_keys.get('api_key'),
             'secret': api_keys.get('api_secret'),
@@ -353,7 +353,7 @@ async def fetch_okx_position(
 
         await client.load_markets()
 
-        # ✅ 포지션 조회 (symbol 파라미터가 None이면 모든 포지션 조회)
+        #  포지션 조회 (symbol 파라미터가 None이면 모든 포지션 조회)
         if symbol:
             positions = await client.fetch_positions([symbol], params={'instType': 'SWAP'})
         else:
@@ -590,11 +590,11 @@ async def fetch_okx_position(
 
 ## 사용 시나리오
 
-- ⚡ **레버리지 조정**: 시장 변동성에 따라 레버리지 조절
-- 🛡️ **리스크 관리**: 높은 변동성 구간에서 레버리지 낮춤
-- 🎯 **전략 최적화**: 전략별 최적 레버리지 설정
-- 🔄 **마진 모드 전환**: cross ↔ isolated 전환
-- 📊 **포트폴리오 관리**: 심볼별 레버리지 차별화
+-  **레버리지 조정**: 시장 변동성에 따라 레버리지 조절
+-  **리스크 관리**: 높은 변동성 구간에서 레버리지 낮춤
+-  **전략 최적화**: 전략별 최적 레버리지 설정
+-  **마진 모드 전환**: cross ↔ isolated 전환
+-  **포트폴리오 관리**: 심볼별 레버리지 차별화
 
 ## 주의사항
 
@@ -631,7 +631,7 @@ POST /position/518796558012178692/SOL-USDT-SWAP/leverage
 """,
     responses={
         200: {
-            "description": "✅ 레버리지 설정 성공",
+            "description": " 레버리지 설정 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -688,7 +688,7 @@ POST /position/518796558012178692/SOL-USDT-SWAP/leverage
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 유효성 검증 실패",
+            "description": " 잘못된 요청 - 유효성 검증 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -737,7 +737,7 @@ POST /position/518796558012178692/SOL-USDT-SWAP/leverage
             }
         },
         401: {
-            "description": "🔒 인증 실패",
+            "description": " 인증 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -766,7 +766,7 @@ POST /position/518796558012178692/SOL-USDT-SWAP/leverage
             }
         },
         404: {
-            "description": "🔍 리소스를 찾을 수 없음",
+            "description": " 리소스를 찾을 수 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -811,7 +811,7 @@ POST /position/518796558012178692/SOL-USDT-SWAP/leverage
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1006,11 +1006,11 @@ async def set_position_leverage(
 
 ## 사용 시나리오
 
-- 📈 **롱 포지션**: 상승 추세 포착, 지지선 반등 매수
-- 📉 **숏 포지션**: 하락 추세 포착, 저항선 돌파 실패
-- 🎯 **TP/SL 설정**: 리스크 관리 및 자동 청산
-- 🔄 **DCA 전략**: 가격 하락 시 추가 매수로 평균 단가 낮춤
-- 🛡️ **헤지**: 기존 포지션 리스크 헤지
+-  **롱 포지션**: 상승 추세 포착, 지지선 반등 매수
+-  **숏 포지션**: 하락 추세 포착, 저항선 돌파 실패
+-  **TP/SL 설정**: 리스크 관리 및 자동 청산
+-  **DCA 전략**: 가격 하락 시 추가 매수로 평균 단가 낮춤
+-  **헤지**: 기존 포지션 리스크 헤지
 
 ## 주의사항
 
@@ -1062,7 +1062,7 @@ curl -X POST "http://localhost:8000/position/open" \\
 """,
    responses={
        200: {
-           "description": "✅ 포지션 생성 성공",
+           "description": " 포지션 생성 성공",
            "content": {
                "application/json": {
                    "examples": {
@@ -1127,7 +1127,7 @@ curl -X POST "http://localhost:8000/position/open" \\
            }
        },
        400: {
-           "description": "❌ 잘못된 요청 - 유효성 검증 실패",
+           "description": " 잘못된 요청 - 유효성 검증 실패",
            "content": {
                "application/json": {
                    "examples": {
@@ -1166,7 +1166,7 @@ curl -X POST "http://localhost:8000/position/open" \\
            }
        },
        401: {
-           "description": "🔒 인증 실패",
+           "description": " 인증 실패",
            "content": {
                "application/json": {
                    "examples": {
@@ -1187,7 +1187,7 @@ curl -X POST "http://localhost:8000/position/open" \\
            }
        },
        404: {
-           "description": "🔍 리소스를 찾을 수 없음",
+           "description": " 리소스를 찾을 수 없음",
            "content": {
                "application/json": {
                    "examples": {
@@ -1224,7 +1224,7 @@ curl -X POST "http://localhost:8000/position/open" \\
            }
        },
        500: {
-           "description": "💥 서버 오류",
+           "description": " 서버 오류",
            "content": {
                "application/json": {
                    "examples": {
@@ -1251,7 +1251,7 @@ curl -X POST "http://localhost:8000/position/open" \\
            }
        },
        503: {
-           "description": "🔧 서비스 이용 불가",
+           "description": " 서비스 이용 불가",
            "content": {
                "application/json": {
                    "examples": {
@@ -1485,11 +1485,11 @@ async def open_position_endpoint(
 
 ## 사용 시나리오
 
-- 💰 **이익 실현**: 목표 수익 달성 시 전체 또는 부분 청산
-- 🛡️ **손절**: 손실 확대 방지를 위한 조기 청산
-- 📊 **리밸런싱**: 포트폴리오 비율 조정을 위한 부분 청산
+-  **이익 실현**: 목표 수익 달성 시 전체 또는 부분 청산
+-  **손절**: 손실 확대 방지를 위한 조기 청산
+-  **리밸런싱**: 포트폴리오 비율 조정을 위한 부분 청산
 - ⚖️ **리스크 관리**: 변동성 증가 시 포지션 축소
-- 🔄 **전략 전환**: 시장 상황 변화에 따른 포지션 종료
+-  **전략 전환**: 시장 상황 변화에 따른 포지션 종료
 
 ## 청산 방식 비교
 
@@ -1554,7 +1554,7 @@ curl -X POST "http://localhost:8000/position/close" \\
 """,
     responses={
         200: {
-            "description": "✅ 포지션 청산 성공",
+            "description": " 포지션 청산 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1584,7 +1584,7 @@ curl -X POST "http://localhost:8000/position/close" \\
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 유효성 검증 실패",
+            "description": " 잘못된 요청 - 유효성 검증 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1617,7 +1617,7 @@ curl -X POST "http://localhost:8000/position/close" \\
             }
         },
         401: {
-            "description": "🔒 인증 실패",
+            "description": " 인증 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1638,7 +1638,7 @@ curl -X POST "http://localhost:8000/position/close" \\
             }
         },
         404: {
-            "description": "🔍 포지션을 찾을 수 없음",
+            "description": " 포지션을 찾을 수 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1681,7 +1681,7 @@ curl -X POST "http://localhost:8000/position/close" \\
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1714,7 +1714,7 @@ curl -X POST "http://localhost:8000/position/close" \\
             }
         },
         503: {
-            "description": "🔧 서비스 이용 불가",
+            "description": " 서비스 이용 불가",
             "content": {
                 "application/json": {
                     "examples": {

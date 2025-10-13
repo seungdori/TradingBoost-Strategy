@@ -401,7 +401,8 @@ async def get_user_api_keys(user_id: str) -> Dict[str, str]:
     사용자 ID를 기반으로 Redis에서 OKX API 키를 조회합니다.
     """
     try:
-        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+        redis = await get_redis_client()
+        api_keys = await redis.hgetall(f"user:{user_id}:api:keys")
         if not api_keys:
             raise HTTPException(status_code=404, detail="API keys not found in Redis")
         return dict(api_keys)

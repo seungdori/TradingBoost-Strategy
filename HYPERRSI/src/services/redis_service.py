@@ -503,8 +503,9 @@ class ApiKeyService:
             HTTPException: API 키를 찾을 수 없거나 오류 발생 시
         """
         try:
+            redis = await get_redis_client()
             api_key_format = f"user:{user_id}:api:keys"
-            api_keys_result = await get_redis_client().hgetall(api_key_format)
+            api_keys_result = await redis.hgetall(api_key_format)
 
             if not api_keys_result:
                 raise HTTPException(status_code=404, detail="API keys not found in Redis")
@@ -533,8 +534,9 @@ class ApiKeyService:
             bool: 성공 여부
         """
         try:
+            redis = await get_redis_client()
             api_key_format = f"user:{user_id}:api:keys"
-            await get_redis_client().hmset(api_key_format, {
+            await redis.hmset(api_key_format, {
                 'api_key': api_key,
                 'api_secret': api_secret,
                 'passphrase': passphrase

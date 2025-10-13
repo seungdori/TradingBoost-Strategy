@@ -47,8 +47,9 @@ class OKXPositionFetcher:
         사용자 ID를 기반으로 Redis에서 OKX API 키를 가져오는 함수
         """
         try:
+            redis = await get_redis_client()
             api_key_format = f"user:{user_id}:api:keys"
-            api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+            api_keys = await redis.hgetall(f"user:{user_id}:api:keys")
             if not api_keys:
                 raise HTTPException(status_code=404, detail="API keys not found in Redis")
             return api_keys
@@ -99,6 +100,8 @@ class OKXPositionFetcher:
         Returns:
             dict: 포지션 정보. 포지션이 없으면 빈 딕셔너리 반환
         """
+
+        redis = await get_redis_client()
         exchange = None
         fail_to_fetch_position = False
         fetched_redis_position = False
@@ -109,7 +112,7 @@ class OKXPositionFetcher:
             exchange = OrderWrapper(user_id, api_keys)
 
             position_state_key = f"user:{user_id}:position:{symbol}:position_state"
-            current_state = await get_redis_client().get(position_state_key)
+            current_state = await redis.get(position_state_key)
 
             try:
                 position_state = int(current_state) if current_state is not None else 0
@@ -130,7 +133,7 @@ class OKXPositionFetcher:
                 logger.error(f"[{user_id}] Authentication error for {symbol}: {str(e)}")
 
                 is_running = False
-                await get_redis_client().set(f"user:{user_id}:trading:status", str(is_running))
+                await redis.set(f"user:{user_id}:trading:status", str(is_running))
                 if exchange is not None:
                     await exchange.close()
                 return {}
@@ -139,12 +142,12 @@ class OKXPositionFetcher:
                 traceback.print_exc()
                 try:
                     if side is None:
-                        positions_long = await get_redis_client().hgetall(f"user:{user_id}:position:{symbol}:long")
-                        positions_short = await get_redis_client().hgetall(f"user:{user_id}:position:{symbol}:short")
+                        positions_long = await redis.hgetall(f"user:{user_id}:position:{symbol}:long")
+                        positions_short = await redis.hgetall(f"user:{user_id}:position:{symbol}:short")
                         positions = {**positions_long, **positions_short}
                         return positions
                     else:
-                        positions = await get_redis_client().hgetall(f"user:{user_id}:position:{symbol}:{side}")
+                        positions = await redis.hgetall(f"user:{user_id}:position:{symbol}:{side}")
                         return positions
                 except Exception as e:
                     logger.error(f"Error in fetch_okx_position for {symbol}: {str(e)}")
@@ -159,9 +162,9 @@ class OKXPositionFetcher:
                 for side in ['long', 'short']:
                     position_key = f"user:{user_id}:position:{symbol}:{side}"
                     dca_count_key = f"user:{user_id}:position:{symbol}:{side}:dca_count"
-                    await get_redis_client().set(dca_count_key, "0")
-                    await get_redis_client().set(position_state_key, "0")
-                    await get_redis_client().delete(position_key)
+                    await redis.set(dca_count_key, "0")
+                    await redis.set(position_state_key, "0")
+                    await redis.delete(position_key)
                 logger.error(f"[{user_id}] 포지션 없음. Redis 데이터 삭제.")
                 await send_telegram_message(f"[{user_id}] [{debug_entry_number}] 포지션 없음. Redis 데이터 삭제. 여기서 아마 경합 일어날 가능성 있으니, 실제로 어떻게 된건지 체크.", debug=True)
 
@@ -193,7 +196,7 @@ class OKXPositionFetcher:
                 position_qty = contracts * contract_size
                 contracts_amount = contracts
                 dca_count_key = f"user:{user_id}:position:{symbol}:{side}:dca_count"
-                dca_count = await get_redis_client().get(dca_count_key)
+                dca_count = await redis.get(dca_count_key)
 
                 try:
                     if contracts > 0:
@@ -203,14 +206,14 @@ class OKXPositionFetcher:
                         else:
                             # DCA 진입이 2회 이상인 경우, 가장 최근 진입 크기 계산
                             # 1) Redis에서 이전 포지션 크기 가져오기
-                            previous_contracts = await get_redis_client().hget(position_key, 'contracts_amount')
+                            previous_contracts = await redis.hget(position_key, 'contracts_amount')
                             if previous_contracts:
                                 previous_contracts = safe_float(previous_contracts)
                                 # 현재 포지션에서 이전 포지션을 빼서 최근 추가된 물량 계산
                                 last_entry_size = contracts_amount - previous_contracts
                                 if last_entry_size <= 0:
                                     # 음수이거나 0인 경우, DCA 배수로 추정 계산
-                                    previous_last_entry = await get_redis_client().hget(position_key, 'last_entry_size')
+                                    previous_last_entry = await redis.hget(position_key, 'last_entry_size')
                                     if previous_last_entry:
                                         scale = 0.5  # 기본 DCA 배수
                                         last_entry_size = safe_float(previous_last_entry) * scale
@@ -220,7 +223,7 @@ class OKXPositionFetcher:
                             else:
                                 # 이전 데이터가 없으면 entry_multiplier를 사용해서 역산으로 계산
                                 if user_settings is None:
-                                    settings_str = await get_redis_client().get(f"user:{user_id}:settings")
+                                    settings_str = await redis.get(f"user:{user_id}:settings")
                                     if settings_str:
                                         try:
                                             user_settings = json.loads(settings_str)
@@ -247,7 +250,7 @@ class OKXPositionFetcher:
 
                         leverage = safe_float(pos['leverage'])
                         # 기존 tp_data와 sl_data 보존
-                        existing_data = await get_redis_client().hgetall(position_key)
+                        existing_data = await redis.hgetall(position_key)
                         existing_tp_data = existing_data.get('tp_data')
                         existing_sl_data = existing_data.get('sl_data')
 
@@ -277,16 +280,16 @@ class OKXPositionFetcher:
                         if existing_sl_data and existing_sl_data != '{}':
                             mapping['sl_data'] = existing_sl_data
 
-                        await get_redis_client().hset(position_key, mapping=mapping)
+                        await redis.hset(position_key, mapping=mapping)
                         result[side] = mapping
 
                     else:
                         # contracts가 0인 경우 해당 side의 포지션 삭제
                         await init_user_position_data(user_id, symbol, side)
                         position_key = f"user:{user_id}:position:{symbol}:{side}"
-                        await get_redis_client().delete(position_key)
+                        await redis.delete(position_key)
                         dca_count_key = f"user:{user_id}:position:{symbol}:{side}:dca_count"
-                        await get_redis_client().set(dca_count_key, "0")
+                        await redis.set(dca_count_key, "0")
                         await send_telegram_message(f"[{user_id}] contracts가 0인 경우여서, 해당 Side의 포지션을 삭제하는데, 정상적이지 않은 로직. 체크 필요", debug=True)
                 except Exception as e:
                     logger.error(f"포지션 업데이트 실패 ({symbol}): {str(e)}")
@@ -305,7 +308,7 @@ class OKXPositionFetcher:
                 position_state = 0
 
             # Redis에 업데이트된 position_state 저장
-            await get_redis_client().set(position_state_key, str(position_state))
+            await redis.set(position_state_key, str(position_state))
 
             return result
 
@@ -316,7 +319,7 @@ class OKXPositionFetcher:
             result = {}
             for side in ['long', 'short']:
                 position_key = f"user:{user_id}:position:{symbol}:{side}"
-                position_data = await get_redis_client().hgetall(position_key)
+                position_data = await redis.hgetall(position_key)
                 if position_data:
                     result[side] = position_data
             return result
@@ -331,18 +334,20 @@ class OKXPositionFetcher:
         먼저 ccxt로 실시간 포지션을 확인하고, 없으면 redis에서 확인합니다.
         """
         # ccxt로 실시간 포지션 확인
+
+        redis = await get_redis_client()
         positions = await self.trading_service.client.fetch_positions([symbol])
         for position in positions:
             if position['symbol'] == symbol and position['side'] == side:
                 entry_price = position['entryPrice']
                 # redis 업데이트
                 position_key = f"user:{user_id}:position:{symbol}:{side}"
-                await get_redis_client().hset(position_key, 'entry_price', str(entry_price))
+                await redis.hset(position_key, 'entry_price', str(entry_price))
                 return entry_price
 
         # ccxt에서 찾지 못한 경우 redis 확인
         position_key = f"user:{user_id}:position:{symbol}:{side}"
-        position_data = await get_redis_client().hgetall(position_key)
+        position_data = await redis.hgetall(position_key)
         if not position_data:
             return None
 

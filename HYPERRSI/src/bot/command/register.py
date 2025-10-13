@@ -19,6 +19,8 @@ from shared.constants.default_settings import (  # 추가
 )
 from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger
+from shared.utils.uid_validator import UIDValidator, UIDType
+from HYPERRSI.src.services.timescale_service import TimescaleUserService
 
 permit_uid = [
     '646396755365762614',
@@ -28,29 +30,39 @@ permit_uid = [
 ]
 
 #ONLY FOR OKX API
-def check_right_invitee(okx_api, okx_secret, okx_parra, user_id= None):
+async def check_right_invitee(okx_api, okx_secret, okx_parra, user_id= None):
+    """
+    API 키로 OKX UID를 가져오고 초대자 여부 확인
 
-    invitee = True
+    Args:
+        okx_api: OKX API 키
+        okx_secret: OKX Secret 키
+        okx_parra: OKX Passphrase
+        user_id: 텔레그램 ID (로깅용)
+
+    Returns:
+        tuple: (초대 여부, OKX UID)
+    """
     try:
-        
-        if user_id == 1709556958 or user_id == 7097155337:
-            return True, 1709556958
-        else:
-            invitee, uid = get_uid_from_api_keys(okx_api, okx_secret, okx_parra)
-            
-            if str(uid) in permit_uid:
-                print("관리자로부터 허용된 사용자입니다.")
-                return True, str(uid)
-        
-        
+        # 모든 사용자에 대해 실제 OKX API에서 UID 가져오기
+        invitee, uid = await get_uid_from_api_keys(okx_api, okx_secret, okx_parra)
+
+        # 허용된 UID 목록 확인
+        if str(uid) in permit_uid:
+            logger.info(f"Allowed user: telegram_id={user_id}, okx_uid={uid}")
+            return True, str(uid)
+
         if invitee:
-            return True, uid
+            logger.info(f"Valid invitee: telegram_id={user_id}, okx_uid={uid}")
+            return True, str(uid)
         else:
+            logger.warning(f"Not an invitee: telegram_id={user_id}, okx_uid={uid}")
             return False, None
+
     except Exception as e:
-        print(f"Error checking invitee: {e}")
-        print(traceback.format_exc())
-        return False
+        logger.error(f"Error checking invitee for telegram_id={user_id}: {e}")
+        logger.error(traceback.format_exc())
+        return False, None
     
 
 
@@ -63,21 +75,23 @@ def get_redis_keys(user_id):
         'api_keys': f"user:{user_id}:api:keys",
         'stats': f"user:{user_id}:stats",
     }
-allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267"]
+allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267","586156710277369942"]
 def is_allowed_user(user_id):
     """허용된 사용자인지 확인"""
     return str(user_id) in allowed_uid
 @router.message(Command("register"))
 async def register_command(message: types.Message, state: FSMContext):
     """사용자 등록 시작"""
+    redis = await get_redis_client()
     user_id = message.from_user.id
-    okx_uid = await get_redis_client().get(f"user:{user_id}:okx_uid")
+    okx_uid = await redis.get(f"user:{user_id}:okx_uid")
     if not is_allowed_user(okx_uid):
+        print("okx_uid", okx_uid)
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
     keys = get_redis_keys(user_id)
     
-    api_keys = await get_redis_client().hgetall(keys['api_keys'])
+    api_keys = await redis.hgetall(keys['api_keys'])
     if api_keys:
         await message.reply(
             "⚠️ 이미 등록된 사용자입니다.\n"
@@ -92,10 +106,12 @@ async def register_command(message: types.Message, state: FSMContext):
     )
     await state.set_state(RegisterStates.waiting_for_api_key)
 @router.message(Command("setapi"))
+
 async def setapi_command(message: types.Message, state: FSMContext):
     """API 키 설정"""
+    redis = await get_redis_client()
     user_id = message.from_user.id
-    okx_uid = await get_redis_client().get(f"user:{user_id}:okx_uid")
+    okx_uid = await redis.get(f"user:{user_id}:okx_uid")
     if not is_allowed_user(okx_uid):
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
@@ -116,6 +132,7 @@ async def setapi_command(message: types.Message, state: FSMContext):
     )
 
 @router.callback_query(F.data == "confirm_setapi")
+
 async def confirm_setapi(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         "🔑 OKX API 키 변경을 시작합니다.\n\n"
@@ -135,20 +152,21 @@ async def cancel_setapi(callback: types.CallbackQuery):
 @router.message(RegisterStates.waiting_for_passphrase)
 async def process_passphrase(message: types.Message, state: FSMContext):
     """Passphrase 처리 및 API 키 변경 완료"""
-    user_id = message.from_user.id
-    keys = get_redis_keys(user_id)
-    
+    redis = await get_redis_client()
+    telegram_id = message.from_user.id  # 텔레그램 ID 저장
+    keys_temp = get_redis_keys(telegram_id)  # 임시로 텔레그램 ID 기반 키 사용
+
     user_data = await state.get_data()
     user_data['passphrase'] = message.text
-    
-    # invitee 확인
-    is_valid_invitee, uid = check_right_invitee(
-        user_data['api_key'], 
-        user_data['api_secret'], 
+
+    # invitee 확인 (async 함수이므로 await 필요)
+    is_valid_invitee, uid = await check_right_invitee(
+        user_data['api_key'],
+        user_data['api_secret'],
         user_data['passphrase'],
-        user_id = user_id
+        user_id = telegram_id
     )
-    
+
     if not is_valid_invitee:
         await message.reply(
             "⚠️ 유효하지 않은 API 키입니다.\n"
@@ -157,10 +175,60 @@ async def process_passphrase(message: types.Message, state: FSMContext):
         )
         await state.clear()
         return
-    
+
     try:
-        # Redis에 API 키 정보 저장
-        await get_redis_client().hmset(keys['api_keys'], {
+        is_update = user_data.get('is_update', False)
+
+        if is_update:  # API 키 업데이트인 경우
+            # 기존 OKX UID 유지
+            existing_okx_uid = await redis.get(f"user:{telegram_id}:okx_uid")
+            if existing_okx_uid:
+                existing_okx_uid = existing_okx_uid.decode('utf-8') if isinstance(existing_okx_uid, bytes) else existing_okx_uid
+
+                # 새 API 키의 UID와 기존 UID 비교
+                new_uid = str(uid)
+                if existing_okx_uid != new_uid:
+                    await message.reply(
+                        "⚠️ 오류: 새 API 키의 계정이 기존 계정과 다릅니다.\n"
+                        f"기존 UID: {existing_okx_uid}\n"
+                        f"새 API UID: {new_uid}\n\n"
+                        "동일한 OKX 계정의 API 키를 사용해주세요."
+                    )
+                    await state.clear()
+                    return
+
+                okx_uid = existing_okx_uid  # 기존 UID 유지
+                logger.info(f"API key update: keeping existing UID {okx_uid}")
+            else:
+                # 기존 UID가 없는 경우 (예외 상황)
+                okx_uid = str(uid)
+                await redis.set(f"user:{telegram_id}:okx_uid", okx_uid)
+                logger.warning(f"No existing UID found for telegram_id={telegram_id}, creating new mapping")
+        else:  # 새 사용자 등록인 경우
+            # OKX UID로 Redis 키 생성
+            okx_uid = str(uid)
+
+            # UID 검증
+            try:
+                okx_uid = UIDValidator.ensure_okx_uid(okx_uid)
+                telegram_id_str = UIDValidator.ensure_telegram_id(str(telegram_id))
+                logger.info(f"✅ UID 검증 성공 - OKX: {okx_uid}, Telegram: {telegram_id_str}")
+            except ValueError as e:
+                await message.reply(
+                    f"⚠️ UID 검증 실패: {str(e)}\n"
+                    "관리자에게 문의하세요."
+                )
+                await state.clear()
+                return
+
+            # 텔레그램 ID -> OKX UID 매핑 저장
+            await redis.set(f"user:{telegram_id}:okx_uid", okx_uid)
+            logger.info(f"New user registration: telegram_id={telegram_id}, okx_uid={okx_uid}")
+
+        keys = get_redis_keys(okx_uid)
+
+        # Redis에 API 키 정보 저장 (OKX UID 사용)
+        await redis.hmset(keys['api_keys'], {
             'api_key': user_data['api_key'],
             'api_secret': user_data['api_secret'],
             'passphrase': user_data['passphrase'],
@@ -170,26 +238,26 @@ async def process_passphrase(message: types.Message, state: FSMContext):
         })
         
         is_update = user_data.get('is_update', False)
-        
+
         if not is_update:  # 새 사용자 등록인 경우
-            # DEFAULT_TRADING_SETTINGS에서 기본 설정 가져와서 저장
-            await get_redis_client().hmset(
-                f"user:{user_id}:preferences", 
+            # DEFAULT_TRADING_SETTINGS에서 기본 설정 가져와서 Redis에 저장 (OKX UID 사용)
+            await redis.hmset(
+                f"user:{okx_uid}:preferences",
                 {k: str(v) for k, v in DEFAULT_TRADING_SETTINGS.items()}
             )
-            await get_redis_client().set(
-                f"user:{user_id}:settings",
+            await redis.set(
+                f"user:{okx_uid}:settings",
                 json.dumps(DEFAULT_PARAMS_SETTINGS)
             )
-            await get_redis_client().hmset(
-                f"user:{user_id}:dual_side",
+            await redis.hmset(
+                f"user:{okx_uid}:dual_side",
                 {k: str(v) for k, v in DEFAULT_DUAL_SIDE_ENTRY_SETTINGS.items()}
             )
             # 사용자 상태 초기화
-            await get_redis_client().set(keys['status'], "stopped")
-            
+            await redis.set(keys['status'], "stopped")
+
             # 트레이딩 통계 초기화
-            await get_redis_client().hmset(keys['stats'], {
+            await redis.hmset(keys['stats'], {
                 'total_trades': '0',
                 'entry_trade': '0',
                 'successful_trades': '0',
@@ -197,7 +265,38 @@ async def process_passphrase(message: types.Message, state: FSMContext):
                 'registration_date': str(int(time.time())),
                 'last_trade_date': '0'
             })
-            
+
+            # TimescaleDB에도 저장
+            try:
+                # 1. 사용자 존재 확인 및 생성
+                await TimescaleUserService.ensure_user_exists(
+                    okx_uid=okx_uid,
+                    telegram_id=str(telegram_id),
+                    display_name=f"User {okx_uid}",
+                    telegram_username=None
+                )
+
+                # 2. API 키 저장
+                await TimescaleUserService.upsert_api_credentials(
+                    identifier=okx_uid,
+                    api_key=user_data['api_key'],
+                    api_secret=user_data['api_secret'],
+                    passphrase=user_data['passphrase']
+                )
+
+                # 3. 모든 설정 저장
+                await TimescaleUserService.save_all_user_settings(
+                    identifier=okx_uid,
+                    preferences=DEFAULT_TRADING_SETTINGS,
+                    params=DEFAULT_PARAMS_SETTINGS,
+                    dual_side=DEFAULT_DUAL_SIDE_ENTRY_SETTINGS
+                )
+
+                logger.info(f"✅ TimescaleDB 저장 완료: okx_uid={okx_uid}, telegram_id={telegram_id}")
+            except Exception as ts_error:
+                logger.error(f"⚠️ TimescaleDB 저장 실패 (Redis는 성공): {ts_error}")
+                # TimescaleDB 저장 실패해도 Redis 저장은 성공했으므로 계속 진행
+
             await message.reply(
                 "✅ 등록이 완료되었습니다!\n\n"
                 "📌 사용 가능한 명령어:\n\n"
@@ -210,13 +309,13 @@ async def process_passphrase(message: types.Message, state: FSMContext):
                 "└ /balance - 포지션 + 자산 정보\n\n"
                 "❓ 전체 명령어를 보시려면 /help를 입력해주세요."
             )
-            logger.info(f"New user registered: {user_id}")
+            logger.info(f"New user registered: telegram_id={telegram_id}, okx_uid={okx_uid}")
         else:  # API 키 업데이트인 경우
             await message.reply(
                 "✅ API 키가 성공적으로 변경되었습니다!\n"
                 "계속해서 기존 설정으로 트레이딩을 진행할 수 있습니다."
             )
-            logger.info(f"User {user_id} updated API keys")
+            logger.info(f"User telegram_id={telegram_id}, okx_uid={okx_uid} updated API keys")
         
         await state.clear()
         await message.delete()
@@ -231,6 +330,7 @@ async def process_passphrase(message: types.Message, state: FSMContext):
         )
 
 @router.message(RegisterStates.waiting_for_api_key)
+
 async def process_api_key(message: types.Message, state: FSMContext):
     """API 키 처리"""
     await state.update_data(api_key=message.text)

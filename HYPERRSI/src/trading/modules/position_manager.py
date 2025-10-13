@@ -199,7 +199,8 @@ class PositionManager:
             leverage: 레버리지 (기본값: 10.0)
             settings: 설정 정보
         """
-        redis_client = get_redis_client()
+
+        redis = await get_redis_client()
         print(f"direction: {direction}, size: {size}, leverage: {leverage}, size : {size}")
         contracts_amount = size
         position_qty = await self.contract_size_to_qty(user_id, symbol, contracts_amount)
@@ -208,7 +209,7 @@ class PositionManager:
             if direction not in ['long', 'short']:
                 raise ValueError("direction must be either 'long' or 'short'")
             settings_key = f"user:{user_id}:settings"
-            settings_str = await get_redis_client().get(settings_key)
+            settings_str = await redis.get(settings_key)
             if not settings_str:
                 raise ValueError("설정 정보를 찾을 수 없습니다.")
             settings = json.loads(settings_str)
@@ -216,8 +217,8 @@ class PositionManager:
             position_key = f"user:{user_id}:position:{symbol}:{direction}"
             cooldown_key = f"user:{user_id}:cooldown:{symbol}:{direction}"
             if str(user_id) != "1709556958" and not is_hedge:
-                if await get_redis_client().get(cooldown_key):
-                    ttl = await get_redis_client().ttl(cooldown_key)
+                if await redis.get(cooldown_key):
+                    ttl = await redis.ttl(cooldown_key)
                     raise ValueError(f"[{user_id}] {direction} 진입 중지. 직전 주문 종료 후 쿨다운 시간이 지나지 않았습니다. 쿨다운 시간: " + str(ttl) + "초")
                 # 현재가 조회
             current_price = await self.trading_service.market_data.get_current_price(symbol)

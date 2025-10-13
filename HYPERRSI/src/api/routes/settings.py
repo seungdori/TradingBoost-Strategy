@@ -129,9 +129,9 @@ def validate_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
 ## 사용 시나리오
 
 - ⚙️ **설정 로드**: 앱 시작 시 사용자 설정 불러오기
-- 🔧 **초기화**: 신규 사용자의 기본 설정 자동 생성
-- 📊 **설정 확인**: 현재 전략 파라미터 확인
-- 🔄 **동기화**: 다중 디바이스 간 설정 동기화
+-  **초기화**: 신규 사용자의 기본 설정 자동 생성
+-  **설정 확인**: 현재 전략 파라미터 확인
+-  **동기화**: 다중 디바이스 간 설정 동기화
 
 ## 예시 URL
 
@@ -142,7 +142,7 @@ GET /settings/1709556958
 """,
     responses={
         200: {
-            "description": "✅ 사용자 설정 조회 성공",
+            "description": " 사용자 설정 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -185,7 +185,7 @@ GET /settings/1709556958
             }
         },
         400: {
-            "description": "❌ 잘못된 요청",
+            "description": " 잘못된 요청",
             "content": {
                 "application/json": {
                     "examples": {
@@ -200,7 +200,7 @@ GET /settings/1709556958
             }
         },
         404: {
-            "description": "🔍 사용자를 찾을 수 없음",
+            "description": " 사용자를 찾을 수 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -315,8 +315,8 @@ async def get_settings(user_id: str):
 ## 사용 시나리오
 
 - ⚙️ **전략 조정**: 레버리지, 익절/손절 값 변경
-- 🎯 **위험 관리**: 손절 비율 업데이트
-- 📊 **성과 최적화**: 진입 배율 조정
+-  **위험 관리**: 손절 비율 업데이트
+-  **성과 최적화**: 진입 배율 조정
 
 ## 예시 URL
 
@@ -326,7 +326,7 @@ PUT /settings/518796558012178692
 """,
     responses={
         200: {
-            "description": "✅ 설정 업데이트 성공",
+            "description": " 설정 업데이트 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -348,7 +348,7 @@ PUT /settings/518796558012178692
             }
         },
         400: {
-            "description": "❌ 유효하지 않은 설정값",
+            "description": " 유효하지 않은 설정값",
             "content": {
                 "application/json": {
                     "examples": {
@@ -363,7 +363,7 @@ PUT /settings/518796558012178692
             }
         },
         404: {
-            "description": "🔍 사용자를 찾을 수 없음"
+            "description": " 사용자를 찾을 수 없음"
         }
     }
 )
@@ -471,9 +471,9 @@ async def update_settings(
 
 ## 사용 시나리오
 
-- 🔄 **설정 복구**: 잘못된 설정 변경 후 원상복구
+-  **설정 복구**: 잘못된 설정 변경 후 원상복구
 - 🆕 **새 시작**: 전략 재설정을 위한 초기화
-- 🛡️ **안전 모드**: 보수적인 기본 설정으로 전환
+-  **안전 모드**: 보수적인 기본 설정으로 전환
 
 ## 예시 URL
 
@@ -483,7 +483,7 @@ POST /settings/518796558012178692/reset
 """,
     responses={
         200: {
-            "description": "✅ 설정 초기화 성공",
+            "description": " 설정 초기화 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -509,10 +509,10 @@ POST /settings/518796558012178692/reset
             }
         },
         400: {
-            "description": "❌ 초기화 오류"
+            "description": " 초기화 오류"
         },
         404: {
-            "description": "🔍 사용자를 찾을 수 없음"
+            "description": " 사용자를 찾을 수 없음"
         }
     }
 )
@@ -908,7 +908,7 @@ class TimescaleApiUpdateRequest(BaseModel):
     telegram_id: Optional[str] = None
     telegram_linked: Optional[bool] = None
 
-@router.get("/{user_id}/supabase",
+@router.get("/{user_id}/timescale",
     response_model=TimescaleResponse,
     summary="사용자 정보 조회 (TimescaleDB)",
     description="TimescaleDB에서 사용자 및 API 정보를 조회합니다.",
@@ -942,7 +942,7 @@ async def get_timescale_info(user_id: str):
         )
 
 
-@router.put("/{user_id}/supabase/user",
+@router.put("/{user_id}/timescale/user",
     response_model=TimescaleResponse,
     summary="Timescale 사용자 정보 업데이트",
     description="TimescaleDB 사용자 레코드를 업데이트합니다.",
@@ -1012,7 +1012,7 @@ async def update_timescale_user(
         )
 
 
-@router.put("/{user_id}/supabase/api",
+@router.put("/{user_id}/timescale/api",
     response_model=TimescaleResponse,
     summary="Timescale API 정보 업데이트",
     description="TimescaleDB okx_api_info 정보를 업데이트합니다.",
@@ -1176,7 +1176,7 @@ async def debug_api_keys(user_id: str):
         }
 
 
-@router.get("/debug-supabase/{user_id}",
+@router.get("/debug-timescale/{user_id}",
     summary="Timescale 데이터 디버깅",
     description="TimescaleDB 연결 상태와 사용자 레코드를 점검합니다.",
     responses={

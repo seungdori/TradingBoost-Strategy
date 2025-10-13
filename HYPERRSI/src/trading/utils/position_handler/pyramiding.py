@@ -104,7 +104,7 @@ async def handle_pyramiding(
         - Records trade entries in stats
         - Sets position locks
     """
-    redis_client = get_redis_client()
+    redis = await get_redis_client()
     position_manager = PositionStateManager(trading_service)
 
     # Get pyramiding settings
@@ -128,11 +128,11 @@ async def handle_pyramiding(
 
     # Get position info
     position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side)
-    position_info = await redis_client.hgetall(position_key)
+    position_info = await redis.hgetall(position_key)
 
     # Get or calculate DCA levels
     dca_key = DCA_LEVELS_KEY.format(user_id=user_id, symbol=symbol, side=side)
-    dca_levels = await redis_client.lrange(dca_key, 0, -1)
+    dca_levels = await redis.lrange(dca_key, 0, -1)
 
     # Always recalculate DCA levels for accuracy
     entry_price = position_info.get('entry_price', str(current_price))
@@ -160,7 +160,7 @@ async def handle_pyramiding(
     await update_dca_levels_redis(user_id, symbol, dca_levels, side)
 
     # Refresh DCA levels from Redis
-    dca_levels = await redis_client.lrange(dca_key, 0, -1)
+    dca_levels = await redis.lrange(dca_key, 0, -1)
 
     # Check if DCA condition is met
     check_dca_condition_result = await check_dca_condition(
@@ -175,11 +175,11 @@ async def handle_pyramiding(
 
     # Get DCA order count
     dca_count_key = DCA_COUNT_KEY.format(user_id=user_id, symbol=symbol, side=side)
-    dca_order_count = await redis_client.get(dca_count_key)
+    dca_order_count = await redis.get(dca_count_key)
 
     if dca_order_count is None:
         dca_order_count = 1
-        await redis_client.set(dca_count_key, 1)
+        await redis.set(dca_count_key, 1)
     else:
         dca_order_count = int(dca_order_count)
 
@@ -291,7 +291,7 @@ async def _recover_last_entry_size(
     try:
         initial_size = float(position_info.get('initial_size', 0))
         if initial_size == 0:
-            initial_size_str = await redis_client.get(
+            initial_size_str = await redis.get(
                 f"user:{user_id}:position:{symbol}:{side}:initial_size"
             )
             if initial_size_str is None:
@@ -311,7 +311,7 @@ async def _recover_last_entry_size(
         calculated_last_entry_size = initial_size * (scale ** (dca_order_count - 1))
 
         position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side)
-        await redis_client.hset(position_key, "last_entry_size", str(calculated_last_entry_size))
+        await redis.hset(position_key, "last_entry_size", str(calculated_last_entry_size))
         await send_telegram_message(
             f"[{user_id}] last_entry_size가 0이어서 재계산했습니다: {calculated_last_entry_size}",
             user_id,
@@ -383,7 +383,7 @@ async def _calculate_dca_entry_size(
     except Exception as e:
         # Manual calculation fallback
         print(f"[{user_id}] scale : {scale}")
-        manual_calculated_initial_size_raw = await redis_client.get(
+        manual_calculated_initial_size_raw = await redis.get(
             f"user:{user_id}:position:{symbol}:{side}:initial_size"
         )
 
@@ -501,7 +501,7 @@ async def _execute_long_pyramiding(
         )
 
         position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side="long")
-        position_info = await redis_client.hgetall(position_key)
+        position_info = await redis.hgetall(position_key)
         initial_size = float(position_info.get('initial_size', 0))
         initial_entry_qty = await trading_service.contract_size_to_qty(user_id, symbol, initial_size)
 
@@ -543,12 +543,12 @@ async def _execute_long_pyramiding(
 
             # Update DCA count
             dca_count_key = DCA_COUNT_KEY.format(user_id=user_id, symbol=symbol, side="long")
-            dca_order_count = await redis_client.get(dca_count_key)
+            dca_order_count = await redis.get(dca_count_key)
             dca_order_count = int(dca_order_count) + 1
-            await redis_client.set(dca_count_key, dca_order_count)
+            await redis.set(dca_count_key, dca_order_count)
 
             # Update last_entry_size
-            await redis_client.hset(
+            await redis.hset(
                 f"user:{user_id}:position:{symbol}:long",
                 "last_entry_size",
                 new_entry_contracts_amount
@@ -594,7 +594,7 @@ async def _execute_long_pyramiding(
         )
 
         # Get updated position info
-        new_position_qty_size_from_redis = await redis_client.hget(
+        new_position_qty_size_from_redis = await redis.hget(
             f"user:{user_id}:position:{symbol}:long",
             "position_qty"
         )
@@ -768,15 +768,15 @@ async def _execute_short_pyramiding(
 
             # Update DCA count
             dca_count_key = DCA_COUNT_KEY.format(user_id=user_id, symbol=symbol, side="short")
-            dca_order_count = await redis_client.get(dca_count_key)
+            dca_order_count = await redis.get(dca_count_key)
             dca_order_count = int(dca_order_count) + 1
-            await redis_client.set(dca_count_key, dca_order_count)
+            await redis.set(dca_count_key, dca_order_count)
 
             # Set position lock
             await set_position_lock(user_id, symbol, "short", timeframe)
 
             # Update last_entry_size
-            await redis_client.hset(
+            await redis.hset(
                 f"user:{user_id}:position:{symbol}:short",
                 "last_entry_size",
                 new_entry_contracts_amount
@@ -817,7 +817,7 @@ async def _execute_short_pyramiding(
 
         # Remove first DCA level
         dca_key = DCA_LEVELS_KEY.format(user_id=user_id, symbol=symbol, side="short")
-        await redis_client.lpop(dca_key)
+        await redis.lpop(dca_key)
 
         # Get position info
         new_entry_price = position.entry_price
@@ -850,7 +850,7 @@ async def _execute_short_pyramiding(
 
         # Send debug message
         position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side="short")
-        position_info = await redis_client.hgetall(position_key)
+        position_info = await redis.hgetall(position_key)
         initial_size = float(position_info.get('initial_size', 0))
         initial_entry_qty = await trading_service.contract_size_to_qty(user_id, symbol, initial_size)
         new_position_entry_qty = await trading_service.contract_size_to_qty(
@@ -943,7 +943,7 @@ async def _send_long_pyramiding_message(
         redis_client: Redis client instance
     """
     # Get TP prices
-    tp_prices = await redis_client.hget(f"user:{user_id}:position:{symbol}:long", "tp_prices")
+    tp_prices = await redis.hget(f"user:{user_id}:position:{symbol}:long", "tp_prices")
     use_tp1 = settings.get('use_tp1', True)
     use_tp2 = settings.get('use_tp2', True)
     use_tp3 = settings.get('use_tp3', True)
@@ -967,7 +967,7 @@ async def _send_long_pyramiding_message(
     # Get next DCA level
     next_dca_level_str = ""
     dca_levels_key = DCA_LEVELS_KEY.format(user_id=user_id, symbol=symbol, side="long")
-    dca_levels = await redis_client.lrange(dca_levels_key, 0, 0)
+    dca_levels = await redis.lrange(dca_levels_key, 0, 0)
 
     if dca_levels and len(dca_levels) > 0:
         next_dca_level_str = format_next_dca_level(dca_levels, "long")
@@ -1018,14 +1018,14 @@ async def _send_short_pyramiding_message(
         redis_client: Redis client instance
     """
     # Get position info
-    total_position_qty = await redis_client.hget(
+    total_position_qty = await redis.hget(
         f"user:{user_id}:position:{symbol}:short",
         "position_qty"
     )
     position_avg_price = await trading_service.get_position_avg_price(user_id, symbol, "short")
 
     # Get TP prices
-    tp_prices = await redis_client.hget(f"user:{user_id}:position:{symbol}:short", "tp_prices")
+    tp_prices = await redis.hget(f"user:{user_id}:position:{symbol}:short", "tp_prices")
     use_tp1 = settings.get('use_tp1', True)
     use_tp2 = settings.get('use_tp2', True) and not (
         settings.get('trailing_stop_active', False) and
@@ -1045,7 +1045,7 @@ async def _send_short_pyramiding_message(
     # Get next DCA level
     next_dca_level_str = ""
     dca_levels_key = DCA_LEVELS_KEY.format(user_id=user_id, symbol=symbol, side="short")
-    dca_levels = await redis_client.lrange(dca_levels_key, 0, 0)
+    dca_levels = await redis.lrange(dca_levels_key, 0, 0)
 
     # If DCA levels are empty, recalculate
     if not dca_levels or len(dca_levels) == 0:
@@ -1096,7 +1096,7 @@ async def _send_pyramiding_trend_alert(
         redis_client: Redis client instance
     """
     alert_key = TREND_SIGNAL_ALERT_KEY.format(user_id=user_id)
-    is_alerted = await redis_client.get(alert_key)
+    is_alerted = await redis.get(alert_key)
 
     if not is_alerted:
         side_kr = "q" if side == "long" else ""
@@ -1106,5 +1106,5 @@ async def _send_pyramiding_trend_alert(
             f"RSI 신호는 있지만 트렌드 조건이 맞지 않아 추가진입하지 않습니다.",
             user_id
         )
-        await redis_client.set(alert_key, "true", ex=TREND_ALERT_EXPIRY_SECONDS)
+        await redis.set(alert_key, "true", ex=TREND_ALERT_EXPIRY_SECONDS)
         await set_position_lock(user_id, symbol, side, timeframe)

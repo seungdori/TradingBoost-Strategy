@@ -62,12 +62,13 @@ async def get_contract_size(symbol: str) -> float:
         DatabaseException: Redis operation failed
     """
     try:
+        redis = await get_redis_client()
         logger.debug(
             "Getting contract size",
             extra={"symbol": symbol}
         )
 
-        spec_key = await get_redis_client().get(f"symbol_info:contract_specifications")
+        spec_key = await redis.get(f"symbol_info:contract_specifications")
 
         if not spec_key:
             logger.warning(
@@ -110,7 +111,8 @@ async def round_to_qty(size: float, symbol: str) -> float:
     기본적으로, size에는 contract amount가 들어오고, 이걸 주문에 맞게 반올림하는 함수.
     """
     try:
-        spec_json = await get_redis_client().get("symbol_info:contract_specifications")
+        redis = await get_redis_client()
+        spec_json = await redis.get("symbol_info:contract_specifications")
         if not spec_json:
             return max(0.01, size)
 
@@ -157,7 +159,8 @@ async def get_tick_size_from_redis(symbol: str) -> Optional[float]:
     }
     """
     try:
-        spec_json = await get_redis_client().get("symbol_info:contract_specifications")
+        redis = await get_redis_client()
+        spec_json = await redis.get("symbol_info:contract_specifications")
         if spec_json:
             specs = json.loads(spec_json)
             spec = specs.get(symbol)
@@ -177,7 +180,8 @@ async def get_minimum_qty(symbol: str) -> float:
     Redis에 저장된 contract_specifications에서 해당 심볼의 최소 주문 수량을 반환합니다.
     """
     try:
-        spec_json = await get_redis_client().get("symbol_info:contract_specifications")
+        redis = await get_redis_client()
+        spec_json = await redis.get("symbol_info:contract_specifications")
         if not spec_json:
             logger.error(f"Contract specification not found for symbol: {symbol}")
             return 0.1

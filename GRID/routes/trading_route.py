@@ -70,10 +70,10 @@ logging.basicConfig(level=logging.DEBUG)
 
 ## 사용 시나리오
 
-- 📊 **전략 성과 분석**: 각 전략의 효과성 평가
-- 🎯 **심볼 선택**: 승률 높은 심볼 우선 거래
-- 📈 **포트폴리오 최적화**: 수익성 높은 코인에 집중
-- 📉 **리스크 관리**: 승률 낮은 심볼 블랙리스트 추가
+-  **전략 성과 분석**: 각 전략의 효과성 평가
+-  **심볼 선택**: 승률 높은 심볼 우선 거래
+-  **포트폴리오 최적화**: 수익성 높은 코인에 집중
+-  **리스크 관리**: 승률 낮은 심볼 블랙리스트 추가
 - 📋 **리포트 생성**: 전략별 성과 리포트 작성
 
 ## 예시 URL
@@ -86,7 +86,7 @@ GET /trading/upbit/long-short/winrate
 """,
     responses={
         200: {
-            "description": "✅ 승률 조회 성공",
+            "description": " 승률 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -134,7 +134,7 @@ GET /trading/upbit/long-short/winrate
             }
         },
         400: {
-            "description": "❌ 잘못된 요청",
+            "description": " 잘못된 요청",
             "content": {
                 "application/json": {
                     "examples": {
@@ -161,7 +161,7 @@ GET /trading/upbit/long-short/winrate
             }
         },
         404: {
-            "description": "🔍 데이터 없음",
+            "description": " 데이터 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -179,7 +179,7 @@ GET /trading/upbit/long-short/winrate
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -278,9 +278,9 @@ async def set_target_pnl(exchange_name : str, user_id : int, target_pnl : float,
 
 ## 사용 시나리오
 
-- 📊 **거래 분석**: 진입/청산 포인트 시각화
-- 📈 **리포트 생성**: 트레이딩 성과 리포트에 차트 포함
-- 📱 **텔레그램 알림**: 차트 이미지를 포함한 거래 알림 발송
+-  **거래 분석**: 진입/청산 포인트 시각화
+-  **리포트 생성**: 트레이딩 성과 리포트에 차트 포함
+-  **텔레그램 알림**: 차트 이미지를 포함한 거래 알림 발송
 - 🖼️ **웹 대시보드**: 실시간 차트 표시
 - 📋 **백테스팅 분석**: 과거 전략 성과 시각화
 
@@ -294,7 +294,7 @@ POST /trading/upbit/long-short/chart
 """,
     responses={
         200: {
-            "description": "✅ 차트 생성 성공",
+            "description": " 차트 생성 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -329,7 +329,7 @@ POST /trading/upbit/long-short/chart
             }
         },
         400: {
-            "description": "❌ 잘못된 요청",
+            "description": " 잘못된 요청",
             "content": {
                 "application/json": {
                     "examples": {
@@ -408,7 +408,7 @@ POST /trading/upbit/long-short/chart
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -453,7 +453,7 @@ POST /trading/upbit/long-short/chart
             }
         },
         503: {
-            "description": "🔧 거래소 서비스 이용 불가",
+            "description": " 거래소 서비스 이용 불가",
             "content": {
                 "application/json": {
                     "examples": {
@@ -539,9 +539,9 @@ async def create_chart_image(exchange_name: str, dto: CoinDto, enter_strategy: s
 ## 사용 시나리오
 
 - 🚫 **특정 코인 제외**: 손실이 큰 코인을 거래에서 제외
-- 📉 **변동성 필터링**: 변동성이 너무 큰 코인 차단
-- 💡 **리스크 관리**: 안전한 거래를 위한 코인 필터
-- 🎯 **전략 최적화**: 승률 낮은 심볼 제외
+-  **변동성 필터링**: 변동성이 너무 큰 코인 차단
+-  **리스크 관리**: 안전한 거래를 위한 코인 필터
+-  **전략 최적화**: 승률 낮은 심볼 제외
 - 👤 **사용자 맞춤 설정**: 개인 선호도에 따른 거래 설정
 
 ## 예시 URL
@@ -554,7 +554,7 @@ GET /trading/blacklist/upbit/11111
 """,
     responses={
         200: {
-            "description": "✅ 블랙리스트 조회 성공",
+            "description": " 블랙리스트 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -581,7 +581,7 @@ GET /trading/blacklist/upbit/11111
             }
         },
         400: {
-            "description": "❌ 잘못된 요청",
+            "description": " 잘못된 요청",
             "content": {
                 "application/json": {
                     "examples": {
@@ -614,7 +614,7 @@ GET /trading/blacklist/upbit/11111
             }
         },
         404: {
-            "description": "🔍 사용자 없음",
+            "description": " 사용자 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -635,7 +635,7 @@ GET /trading/blacklist/upbit/11111
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -699,10 +699,10 @@ async def get_black_list_endpoint(exchange_name: str, user_id: int) -> ResponseD
 
 ## 사용 시나리오
 
-- ✅ **특정 코인만 거래**: 승률 높은 코인만 선택적으로 거래
-- 🛡️ **안전한 코인 풀**: 메이저 코인만 거래하여 리스크 최소화
+-  **특정 코인만 거래**: 승률 높은 코인만 선택적으로 거래
+-  **안전한 코인 풀**: 메이저 코인만 거래하여 리스크 최소화
 - 💎 **고수익 코인 집중**: 높은 수익을 내는 코인에만 투자
-- 📊 **전략 최적화**: 백테스팅에서 검증된 심볼만 활용
+-  **전략 최적화**: 백테스팅에서 검증된 심볼만 활용
 - 👤 **사용자 맞춤 설정**: 개인 선호도와 전략에 맞는 코인 선택
 
 ## 블랙리스트와 화이트리스트 우선순위
@@ -721,7 +721,7 @@ GET /trading/whitelist/upbit/11111
 """,
     responses={
         200: {
-            "description": "✅ 화이트리스트 조회 성공",
+            "description": " 화이트리스트 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -748,7 +748,7 @@ GET /trading/whitelist/upbit/11111
             }
         },
         400: {
-            "description": "❌ 잘못된 요청",
+            "description": " 잘못된 요청",
             "content": {
                 "application/json": {
                     "examples": {
@@ -781,7 +781,7 @@ GET /trading/whitelist/upbit/11111
             }
         },
         404: {
-            "description": "🔍 사용자 없음",
+            "description": " 사용자 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -802,7 +802,7 @@ GET /trading/whitelist/upbit/11111
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -881,9 +881,9 @@ async def get_white_list_endpoint(exchange_name: str, user_id: int) -> ResponseD
 ## 사용 시나리오
 
 - 🚫 **블랙리스트 추가**: 손실 발생 코인을 거래에서 제외
-- ✅ **화이트리스트 추가**: 수익성 좋은 코인을 거래 허용 목록에 추가
-- 📊 **전략 조정**: 실시간으로 거래 대상 심볼 조정
-- 🛡️ **리스크 관리**: 변동성 큰 코인을 즉시 블랙리스트 처리
+-  **화이트리스트 추가**: 수익성 좋은 코인을 거래 허용 목록에 추가
+-  **전략 조정**: 실시간으로 거래 대상 심볼 조정
+-  **리스크 관리**: 변동성 큰 코인을 즉시 블랙리스트 처리
 - 💎 **수익 최적화**: 백테스팅 결과를 반영하여 화이트리스트 구성
 
 ## 예시 URL
@@ -896,7 +896,7 @@ PUT /trading/symbols/access?exchange_name=upbit&user_id=11111&symbols=BTC,ETH&ty
 """,
     responses={
         200: {
-            "description": "✅ 심볼 추가 성공",
+            "description": " 심볼 추가 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -931,7 +931,7 @@ PUT /trading/symbols/access?exchange_name=upbit&user_id=11111&symbols=BTC,ETH&ty
             }
         },
         400: {
-            "description": "❌ 잘못된 요청",
+            "description": " 잘못된 요청",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1009,7 +1009,7 @@ PUT /trading/symbols/access?exchange_name=upbit&user_id=11111&symbols=BTC,ETH&ty
             }
         },
         404: {
-            "description": "🔍 사용자 없음",
+            "description": " 사용자 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1030,7 +1030,7 @@ PUT /trading/symbols/access?exchange_name=upbit&user_id=11111&symbols=BTC,ETH&ty
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1130,10 +1130,10 @@ async def add_symbol_access_list(
 
 ## 사용 시나리오
 
-- ✅ **블랙리스트 해제**: 손실 원인 해결 후 거래 재개
-- 🔄 **화이트리스트 조정**: 수익성 낮은 코인을 목록에서 제거
-- 📊 **전략 재조정**: 실시간으로 거래 대상 심볼 변경
-- 🎯 **선택적 제거**: 일부 심볼만 제거하여 유연하게 관리
+-  **블랙리스트 해제**: 손실 원인 해결 후 거래 재개
+-  **화이트리스트 조정**: 수익성 낮은 코인을 목록에서 제거
+-  **전략 재조정**: 실시간으로 거래 대상 심볼 변경
+-  **선택적 제거**: 일부 심볼만 제거하여 유연하게 관리
 - 🧹 **리스트 정리**: 불필요한 심볼 일괄 제거
 
 ## 예시 요청
@@ -1158,7 +1158,7 @@ async def add_symbol_access_list(
 """,
     responses={
         200: {
-            "description": "✅ 심볼 제거 성공",
+            "description": " 심볼 제거 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1207,7 +1207,7 @@ async def add_symbol_access_list(
             }
         },
         400: {
-            "description": "❌ 잘못된 요청",
+            "description": " 잘못된 요청",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1285,7 +1285,7 @@ async def add_symbol_access_list(
             }
         },
         404: {
-            "description": "🔍 사용자 또는 리스트 없음",
+            "description": " 사용자 또는 리스트 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1318,7 +1318,7 @@ async def add_symbol_access_list(
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {

@@ -14,6 +14,14 @@ echo -e "${BLUE}=============================================${NC}"
 echo -e "${GREEN}🚀 Celery 워커 시작 스크립트${NC}"
 echo -e "${BLUE}=============================================${NC}"
 
+# 프로젝트 루트로 이동 (HYPERRSI가 있는 상위 디렉토리)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_ROOT" || exit 1
+
+echo -e "${YELLOW}📁 작업 디렉토리: $(pwd)${NC}"
+echo -e "${YELLOW}📁 HYPERRSI 경로: $SCRIPT_DIR${NC}"
+
 # 운영체제 확인
 if [[ "$OSTYPE" == "darwin"* ]]; then
     echo -e "${YELLOW}🍏 macOS 환경이 감지되었습니다.${NC}"
@@ -25,73 +33,78 @@ fi
 # 기존 Celery 프로세스 정리
 echo -e "${YELLOW}🧹 기존 Celery 프로세스 정리 중...${NC}"
 
-# 기존 프로세스 종료 스크립트 실행
-if [ -f "stop_celery_worker.sh" ]; then
-    bash stop_celery_worker.sh
-else
-    # 프로세스 직접 종료
-    if $IS_MACOS; then
-        ps aux | grep -E '[c]elery|[H]YPERRSI.src.core.celery_task' | awk '{print $2}' | xargs kill -9 2>/dev/null || true
-    else
-        pkill -9 -f "celery" || true
-        pkill -9 -f "HYPERRSI.src.core.celery_task" || true
+# 프로세스 직접 종료 (stop_celery_worker.sh 호출 시 무한 루프 방지)
+if $IS_MACOS; then
+    # macOS: Celery worker와 beat 프로세스만 종료
+    celery_pids=$(ps aux | grep -E 'celery.*worker|celery.*beat' | grep 'HYPERRSI.src.core.celery_task' | grep -v "grep" | awk '{print $2}')
+    if [ -n "$celery_pids" ]; then
+        echo -e "${YELLOW}🔍 기존 Celery 프로세스 발견. 종료 중...${NC}"
+        echo "$celery_pids" | xargs kill -9 2>/dev/null || true
+        sleep 2
     fi
+else
+    # Linux
+    pkill -9 -f "celery.*worker.*HYPERRSI" || true
+    pkill -9 -f "celery.*beat.*HYPERRSI" || true
     sleep 2
 fi
 
-# 임시 파일 정리
-echo -e "${YELLOW}🧹 Celery 임시 파일 정리 중...${NC}"
-rm -f celerybeat.pid celerybeat-schedule.db 2>/dev/null || true
+# 확인
+remaining=$(ps aux | grep -E 'celery.*worker|celery.*beat' | grep 'HYPERRSI.src.core.celery_task' | grep -v "grep" | wc -l)
+if [ "$remaining" -eq 0 ]; then
+    echo -e "${GREEN}✅ 기존 프로세스 정리 완료${NC}"
+else
+    echo -e "${RED}⚠️ 일부 프로세스가 남아있습니다. 계속 진행...${NC}"
+fi
 
-# 필요한 경우 디렉토리 생성
+# 임시 파일 정리 (HYPERRSI 디렉토리)
+echo -e "${YELLOW}🧹 Celery 임시 파일 정리 중...${NC}"
+rm -f "$SCRIPT_DIR/celerybeat.pid" "$SCRIPT_DIR/celerybeat-schedule.db" 2>/dev/null || true
+
+# 필요한 경우 디렉토리 생성 (HYPERRSI/logs 디렉토리)
 echo -e "${YELLOW}📁 로그 디렉토리 확인 중...${NC}"
-mkdir -p logs
+mkdir -p "$SCRIPT_DIR/logs"
 
 # 현재 시간 가져오기 (로그 파일명용)
 timestamp=$(date +"%Y%m%d_%H%M%S")
-worker_log="logs/celery_workers_${timestamp}.log"
-beat_log="logs/celery_beat_${timestamp}.log"
+worker_log="$SCRIPT_DIR/logs/celery_workers_${timestamp}.log"
+beat_log="$SCRIPT_DIR/logs/celery_beat_${timestamp}.log"
 
 echo -e "${YELLOW}📝 로그 파일: ${NC}"
 echo -e "   - 워커 로그: ${worker_log}"
 echo -e "   - 비트 로그: ${beat_log}"
 
-# 워커 수 정의 (CPU 코어 수에 따라 자동 조정)
+# 워커 수 정의 (고정: 1개로 안정적으로 운영)
+worker_count=1
+
 if $IS_MACOS; then
     cores=$(sysctl -n hw.ncpu)
 else
     cores=$(nproc)
 fi
 
-# 최대 4개까지만 사용
-if [ $cores -gt 4 ]; then
-    worker_count=4
-else
-    worker_count=$cores
-fi
-
-echo -e "${YELLOW}⚙️ $worker_count 개의 워커를 시작합니다 (CPU 코어: $cores)${NC}"
+echo -e "${YELLOW}⚙️ $worker_count 개의 워커를 시작합니다 (CPU 코어: $cores, concurrency=2)${NC}"
 
 # Celery 워커 시작 (백그라운드로 실행)
 echo -e "${GREEN}🚀 Celery 워커 시작 중...${NC}"
 
-for i in $(seq 1 $worker_count); do
-    echo -e "${YELLOW}🔄 워커 $i/$worker_count 시작 중...${NC}"
-    celery -A HYPERRSI.src.core.celery_task worker --loglevel=info --concurrency=2 -n worker${i}@%h --purge >> "$worker_log" 2>&1 &
+echo -e "${YELLOW}🔄 워커 시작 중...${NC}"
+# --pool=solo: 단일 프로세스로 실행하여 event loop 문제 해결 (macOS asyncio 호환)
+# concurrency 옵션은 solo pool에서 무시됨
+celery -A HYPERRSI.src.core.celery_task worker --loglevel=warning --pool=solo --purge >> "$worker_log" 2>&1 &
 
-    # 프로세스 ID 저장
-    worker_pid=$!
-    echo "worker${i}_pid=$worker_pid" >> .celery_pids
+# 프로세스 ID 저장
+worker_pid=$!
+echo "worker_pid=$worker_pid" >> "$SCRIPT_DIR/.celery_pids"
 
-    echo -e "${GREEN}✅ 워커 $i 시작됨 (PID: $worker_pid)${NC}"
-    sleep 1
-done
+echo -e "${GREEN}✅ 워커 시작됨 (PID: $worker_pid) - solo pool mode${NC}"
+sleep 2
 
 # Celery Beat 시작 (스케줄링된 작업이 필요한 경우)
 echo -e "${GREEN}🚀 Celery beat 시작 중...${NC}"
-celery -A HYPERRSI.src.core.celery_task beat --loglevel=info >> "$beat_log" 2>&1 &
+celery -A HYPERRSI.src.core.celery_task beat --loglevel=warning >> "$beat_log" 2>&1 &
 beat_pid=$!
-echo "beat_pid=$beat_pid" >> .celery_pids
+echo "beat_pid=$beat_pid" >> "$SCRIPT_DIR/.celery_pids"
 echo -e "${GREEN}✅ Beat 시작됨 (PID: $beat_pid)${NC}"
 
 echo -e "${BLUE}=============================================${NC}"

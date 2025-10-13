@@ -38,24 +38,24 @@ def get_redis_url():
 async def set_grid_trading_status(user_id: str, status: str):
     """사용자의 Grid 트레이딩 상태 설정"""
     key = REDIS_KEY_GRID_STATUS.format(user_id=user_id)
-    await get_redis_client().set(key, status)
+    await redis.set(key, status)
     logger.info(f"[{user_id}] Grid 트레이딩 상태를 '{status}'로 설정")
 
 async def get_grid_trading_status(user_id: str) -> str:
     """사용자의 Grid 트레이딩 상태 가져오기"""
     key = REDIS_KEY_GRID_STATUS.format(user_id=user_id)
-    status = await get_redis_client().get(key)
+    status = await redis.get(key)
     return status or "stopped"
 
 async def update_grid_trading_info(user_id: str, info: dict):
     """Grid 트레이딩 정보 업데이트"""
     key = REDIS_KEY_GRID_INFO.format(user_id=user_id)
-    await get_redis_client().set(key, json.dumps(info))
+    await redis.set(key, json.dumps(info))
 
 async def get_grid_trading_info(user_id: str) -> dict:
     """Grid 트레이딩 정보 가져오기"""
     key = REDIS_KEY_GRID_INFO.format(user_id=user_id)
-    info_str = await get_redis_client().get(key)
+    info_str = await redis.get(key)
     if not info_str:
         return {}
     try:
@@ -70,6 +70,8 @@ def run_grid_trading(self, exchange_name, enter_strategy, enter_symbol_count,
                      enter_symbol_amount_list, grid_num, leverage, stop_loss, 
                      user_id, custom_stop, telegram_id, force_restart=False):
     """
+
+    redis = await get_redis_client()
     Grid 트레이딩 실행 태스크
     """
     logger.info(f"[{user_id}] Grid 트레이딩 태스크 시작: exchange={exchange_name}, 전략={enter_strategy}")

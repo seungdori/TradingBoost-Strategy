@@ -312,6 +312,8 @@ class TrendStateCalculator:
         DataFrame으로 변환해 반환
         """
         
+
+        redis = await get_redis_client()
         tf_str = get_timeframe(timeframe)
         key = f"candles_with_indicators:{symbol}:{tf_str}"
         
@@ -319,7 +321,7 @@ class TrendStateCalculator:
             logger.debug(f"[{symbol}] Redis에서 캔들 데이터 가져오기 시작, key={key}")
             # 예: 맨 끝(최신)부터 fetch_count개 가져오고 싶으면 lrange(key, -fetch_count, -1)
             # 여기서는 전체 가져온 뒤, 필요하면 뒤집는 식으로 처리
-            candles = await get_redis_client().lrange(key, 0, -1)
+            candles = await redis.lrange(key, 0, -1)
             
             if not candles:
                 logger.error(f"Redis key='{key}'에서 캔들을 찾을 수 없습니다.")

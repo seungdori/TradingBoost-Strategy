@@ -58,6 +58,8 @@ class TPSLCalculator:
         Raises:
             ValueError: 유효하지 않은 SL 가격
         """
+
+        redis = await get_redis_client()
         print("update_stop_loss 호출")
         async with self.trading_service.position_lock(user_id, symbol):  # 포지션별 락 사용
             try:
@@ -105,7 +107,7 @@ class TPSLCalculator:
                 position.sl_order_id = new_order['id']
 
                 position_key = f"user:{user_id}:position:{symbol}:{side}"
-                async with get_redis_client().pipeline() as pipe:
+                async with redis.pipeline() as pipe:
                     pipe.hset(
                         position_key,
                         mapping={
@@ -255,30 +257,50 @@ class TPSLCalculator:
             Tuple[str, str]: 포지션 모드 ("hedge" 또는 "one-way"), tdMode
         """
         try:
-            # 거래소 API를 통해 포지션 모드 조회
-            try:
-                position_mode = await self.trading_service.client.fetch_position_mode(symbol=symbol)
-            except Exception as e:
-                traceback.print_exc()
-                logger.error(f"2포지션 모드 조회 실패: {str(e)}")
-                return "hedge", "cross"
+            redis = await get_redis_client()
 
-            is_hedge_mode = position_mode.get('hedged', True)
-            td_mode = position_mode.get('tdMode', 'cross')
+            # Redis 캐시 확인
+            cached_mode = await redis.get(f"user:{user_id}:position:{symbol}:hedge_mode")
+            cached_tdMode = await redis.get(f"user:{user_id}:position:{symbol}:tdMode")
+
+            if cached_mode and cached_tdMode:
+                logger.debug(f"Using cached position mode: hedge={cached_mode}, tdMode={cached_tdMode}")
+                return cached_mode, cached_tdMode
+
+            # OKX API를 통해 계정 설정 조회 시도
+            try:
+                # CCXT OKX에서 fetch_position_mode는 표준 메서드가 아니므로
+                # 포지션 정보에서 posSide를 확인하거나 기본값 사용
+                # OKX는 기본적으로 hedge 모드(양방향 포지션)를 지원
+                positions = await self.trading_service.client.fetch_positions([symbol])
+
+                # 포지션이 있으면 posSide로 hedge 모드 확인
+                is_hedge_mode = True  # OKX 기본값
+                td_mode = "cross"      # OKX 기본값
+
+                if positions:
+                    # posSide가 'long' 또는 'short'면 hedge 모드, 'net'이면 one-way 모드
+                    pos_side = positions[0].get('info', {}).get('posSide', 'long')
+                    is_hedge_mode = pos_side in ('long', 'short')
+                    td_mode = positions[0].get('info', {}).get('mgnMode', 'cross')
+
+                logger.info(f"[{user_id}] Position mode: hedge={is_hedge_mode}, tdMode={td_mode}")
+
+            except Exception as e:
+                logger.warning(f"[{user_id}] 포지션 모드 조회 실패, 기본값 사용: {str(e)}")
+                is_hedge_mode = True  # OKX 기본값 (hedge mode)
+                td_mode = "cross"      # OKX 기본값 (cross margin)
 
             # Redis에 캐시 (bool을 문자열로 변환)
-            await get_redis_client().set(f"user:{user_id}:position:{symbol}:hedge_mode", str(is_hedge_mode).lower())
-            await get_redis_client().set(f"user:{user_id}:position:{symbol}:tdMode", td_mode)
+            await redis.set(f"user:{user_id}:position:{symbol}:hedge_mode", str(is_hedge_mode).lower(), ex=3600)
+            await redis.set(f"user:{user_id}:position:{symbol}:tdMode", td_mode, ex=3600)
 
             return str(is_hedge_mode).lower(), td_mode
 
         except Exception as e:
             logger.error(f"포지션 모드 조회 실패: {str(e)}")
-            traceback.print_exc()
-            # Redis에 캐시된 값이 있으면 사용
-            cached_mode = await get_redis_client().get(f"user:{user_id}:position:{symbol}:hedge_mode")
-            cached_tdMode = await get_redis_client().get(f"user:{user_id}:position:{symbol}:tdMode")
-            return cached_mode if cached_mode else "true", cached_tdMode if cached_tdMode else "cross"
+            # 기본값 반환 (OKX는 hedge 모드가 기본)
+            return "true", "cross"
 
     async def calculate_sl_price(
         self,

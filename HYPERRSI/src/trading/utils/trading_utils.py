@@ -16,7 +16,8 @@ error_logger = setup_error_logger()
 # redis_client는 사용 시점에 동적으로 import
 
 async def init_user_position_data(user_id: str, symbol: str, side: str):
-    redis_client = get_redis_client()  # Get redis_client dynamically
+
+    redis = await get_redis_client()
 
     dual_side_position_key = f"user:{user_id}:{symbol}:dual_side_position"
     position_state_key = f"user:{user_id}:position:{symbol}:position_state"
@@ -34,34 +35,35 @@ async def init_user_position_data(user_id: str, symbol: str, side: str):
     dual_side_count_key = f"user:{user_id}:{symbol}:dual_side_count"
     current_trade_key = f"user:{user_id}:current_trade:{symbol}:{side}"
 
-    await get_redis_client().delete(position_state_key)
-    await get_redis_client().delete(dual_side_position_key)
-    await get_redis_client().delete(tp_data_key)
-    await get_redis_client().delete(ts_key)
-    await get_redis_client().delete(dca_count_key)
-    await get_redis_client().delete(dca_levels_key)
-    await get_redis_client().delete(position_key)
-    await get_redis_client().delete(min_size_key)
+    await redis.delete(position_state_key)
+    await redis.delete(dual_side_position_key)
+    await redis.delete(tp_data_key)
+    await redis.delete(ts_key)
+    await redis.delete(dca_count_key)
+    await redis.delete(dca_levels_key)
+    await redis.delete(position_key)
+    await redis.delete(min_size_key)
     #await redis_client.delete(main_position_direction_key)
-    await get_redis_client().delete(tp_state)
-    await get_redis_client().delete(entry_fail_count_key)
-    await get_redis_client().delete(hedging_direction_key)
-    await get_redis_client().delete(dual_side_count_key)
-    await get_redis_client().delete(current_trade_key)
+    await redis.delete(tp_state)
+    await redis.delete(entry_fail_count_key)
+    await redis.delete(hedging_direction_key)
+    await redis.delete(dual_side_count_key)
+    await redis.delete(current_trade_key)
 async def init_user_monitoring_data(user_id: str, symbol: str):
     """
     monitor:user:{user_id}:{symbol}:* 패턴에 해당하는 모든 키를 삭제합니다.
     """
-    redis_client = get_redis_client()  # Get redis_client dynamically
+
+    redis = await get_redis_client()
 
     pattern = f"monitor:user:{user_id}:{symbol}:*"
 
     # pattern에 맞는 모든 키 조회
-    keys = await get_redis_client().keys(pattern)
+    keys = await redis.keys(pattern)
     
     # 조회된 키가 있으면 모두 삭제
     if keys:
-        await get_redis_client().delete(*keys)
+        await redis.delete(*keys)
         logger.info(f"사용자 {user_id}의 {symbol} 모니터링 데이터를 초기화했습니다. 삭제된 키 개수: {len(keys)}")
     else:
         logger.info(f"사용자 {user_id}의 {symbol} 모니터링 데이터가 없습니다.")
@@ -71,20 +73,22 @@ class TPPrice:
         self.prices = {}  # price: ratio
 
 async def store_tp_prices(user_id: str, symbol: str, side: str, tp_prices):
-    redis_client = get_redis_client()  # Get redis_client dynamically
+
+    redis = await get_redis_client()
     tp_data_key = f"user:{user_id}:position:{symbol}:{side}:tp_data"
-    await get_redis_client().set(tp_data_key, json.dumps(tp_prices))
+    await redis.set(tp_data_key, json.dumps(tp_prices))
 
 async def get_tp_prices(user_id: str, symbol: str, side: str):
-    redis_client = get_redis_client()  # Get redis_client dynamically
+
+    redis = await get_redis_client()
     tp_data_key = f"user:{user_id}:position:{symbol}:{side}:tp_data"
-    data = await get_redis_client().get(tp_data_key)
+    data = await redis.get(tp_data_key)
     return json.loads(data) if data else {}
 
 async def is_trading_running(user_id: str) -> bool:
     """trading_status 확인 후 'running'이면 True, 아니면 False."""
-    redis_client = get_redis_client()  # Get redis_client dynamically
-    status = await get_redis_client().get(f"user:{user_id}:trading:status")
+    redis = await get_redis_client()
+    status = await redis.get(f"user:{user_id}:trading:status")
     
     # 바이트 문자열을 디코딩
     if isinstance(status, bytes):
@@ -128,11 +132,12 @@ async def calculate_dca_levels(entry_price: float, last_filled_price:float ,sett
     return dca_levels
 
 async def update_dca_levels_redis(user_id: str, symbol: str, dca_levels: list, side: str):
-    redis_client = get_redis_client()  # Get redis_client dynamically
+
+    redis = await get_redis_client()
     dca_key = f"user:{user_id}:position:{symbol}:{side}:dca_levels"
-    await get_redis_client().delete(dca_key)
+    await redis.delete(dca_key)
     if dca_levels:
-        await get_redis_client().rpush(dca_key, *[str(level) for level in dca_levels])
+        await redis.rpush(dca_key, *[str(level) for level in dca_levels])
 
 async def check_dca_condition(current_price: float, dca_levels: list, side: str, use_check_DCA_with_price: bool) -> bool:
     if use_check_DCA_with_price:

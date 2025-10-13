@@ -106,6 +106,13 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str = ""
     OWNER_ID: int = 0
 
+    # TimescaleDB 설정
+    TIMESCALE_HOST: str = os.getenv("TIMESCALE_HOST", "")
+    TIMESCALE_PORT: int = int(os.getenv("TIMESCALE_PORT", "5432"))
+    TIMESCALE_DATABASE: str = os.getenv("TIMESCALE_DATABASE", "")
+    TIMESCALE_USER: str = os.getenv("TIMESCALE_USER", "")
+    TIMESCALE_PASSWORD: str = os.getenv("TIMESCALE_PASSWORD", "")
+
 
 @lru_cache()
 def get_settings():

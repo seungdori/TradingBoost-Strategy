@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from celery import Celery
 from celery.signals import task_failure, task_success
-from trend import analyze_trend, getMA
+from HYPERRSI.trend import analyze_trend, getMA
 
 from GRID.main import periodic_analysis
 from shared.utils import path_helper

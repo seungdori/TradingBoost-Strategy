@@ -102,18 +102,25 @@ class TaskTracker:
             logger.info(f"[{self.name}] No tasks to cancel")
             return
 
-        task_count = len(self.tasks)
+        # Exclude current task to avoid recursive cancellation
+        current_task = asyncio.current_task()
+        tasks_to_cancel = {task for task in self.tasks if task is not current_task and not task.done()}
+
+        if not tasks_to_cancel:
+            logger.info(f"[{self.name}] No tasks to cancel (excluding current task)")
+            return
+
+        task_count = len(tasks_to_cancel)
         logger.info(f"[{self.name}] Cancelling {task_count} tasks...")
 
-        # Cancel all tasks
-        for task in self.tasks:
-            if not task.done():
-                task.cancel()
+        # Cancel all tasks except current
+        for task in tasks_to_cancel:
+            task.cancel()
 
         # Wait for cancellation with timeout
         try:
             await asyncio.wait_for(
-                asyncio.gather(*self.tasks, return_exceptions=True),
+                asyncio.gather(*tasks_to_cancel, return_exceptions=True),
                 timeout=timeout
             )
             logger.info(f"[{self.name}] All tasks cancelled successfully")

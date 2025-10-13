@@ -41,9 +41,9 @@ async def check_margin_block(user_id: str, symbol: str) -> bool:
         >>> await check_margin_block("user123", "BTC-USDT-SWAP")
         False
     """
-    redis_client = get_redis_client()
+    redis = await get_redis_client()
     block_key = MARGIN_BLOCK_KEY.format(user_id=user_id, symbol=symbol)
-    block_status = await redis_client.get(block_key)
+    block_status = await redis.get(block_key)
     return block_status is not None
 
 
@@ -62,9 +62,9 @@ async def check_entry_failure_limit(user_id: str) -> Tuple[bool, int]:
         >>> if exceeded:
         ...     print(f"Too many failures: {count}")
     """
-    redis_client = get_redis_client()
+    redis = await get_redis_client()
     key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id)
-    fail_count = int(await redis_client.get(key) or 0)
+    fail_count = int(await redis.get(key) or 0)
     exceeded = fail_count >= MAX_ENTRY_FAILURES
     return exceeded, fail_count
 
@@ -79,9 +79,9 @@ async def increment_entry_failure(user_id: str) -> int:
     Returns:
         New failure count
     """
-    redis_client = get_redis_client()
+    redis = await get_redis_client()
     key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id)
-    new_count = await redis_client.incr(key)
+    new_count = await redis.incr(key)
     logger.warning(f"[{user_id}] Entry failure count increased to {new_count}")
     return int(new_count) if new_count else 0
 
@@ -95,9 +95,9 @@ async def reset_entry_failure(user_id: str) -> None:
     Args:
         user_id: User identifier
     """
-    redis_client = get_redis_client()
+    redis = await get_redis_client()
     key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id)
-    await redis_client.delete(key)
+    await redis.delete(key)
     logger.info(f"[{user_id}] Entry failure count reset")
 
 
@@ -120,10 +120,10 @@ async def check_cooldown(user_id: str, symbol: str, side: str) -> Tuple[bool, in
         >>> if is_cooldown:
         ...     print(f"In cooldown for {remaining} seconds")
     """
-    redis_client = get_redis_client()
+    redis = await get_redis_client()
     cooldown_key = COOLDOWN_KEY.format(user_id=user_id, symbol=symbol, side=side)
-    is_cooldown = await redis_client.exists(cooldown_key)
-    remaining_time = await redis_client.ttl(cooldown_key) if is_cooldown else 0
+    is_cooldown = await redis.exists(cooldown_key)
+    remaining_time = await redis.ttl(cooldown_key) if is_cooldown else 0
     return bool(is_cooldown), remaining_time
 
 
@@ -155,7 +155,7 @@ async def check_position_lock(
         >>> if is_locked:
         ...     print(f"Position locked for {remaining} more seconds")
     """
-    redis_client = get_redis_client()
+    redis = await get_redis_client()
     tf_str = get_timeframe(timeframe)
 
     lock_key = POSITION_LOCK_KEY.format(
@@ -165,8 +165,8 @@ async def check_position_lock(
         timeframe=tf_str
     )
 
-    is_locked = await redis_client.exists(lock_key)
-    remaining_time = await redis_client.ttl(lock_key) if is_locked else 0
+    is_locked = await redis.exists(lock_key)
+    remaining_time = await redis.ttl(lock_key) if is_locked else 0
 
     if is_locked:
         logger.info(
@@ -203,7 +203,7 @@ async def check_any_direction_locked(
         >>> if is_locked:
         ...     print(f"{direction} position is locked for {remaining}s")
     """
-    redis_client = get_redis_client()
+    redis = await get_redis_client()
     tf_str = get_timeframe(timeframe)
 
     # Check long lock first
@@ -215,9 +215,9 @@ async def check_any_direction_locked(
     )
 
     try:
-        is_long_locked = await redis_client.exists(long_lock_key)
+        is_long_locked = await redis.exists(long_lock_key)
         if is_long_locked:
-            remaining = await redis_client.ttl(long_lock_key)
+            remaining = await redis.ttl(long_lock_key)
             return True, "long", remaining
 
         # Check short lock
@@ -228,9 +228,9 @@ async def check_any_direction_locked(
             timeframe=tf_str
         )
 
-        is_short_locked = await redis_client.exists(short_lock_key)
+        is_short_locked = await redis.exists(short_lock_key)
         if is_short_locked:
-            remaining = await redis_client.ttl(short_lock_key)
+            remaining = await redis.ttl(short_lock_key)
             return True, "short", remaining
 
         return False, None, 0
@@ -378,16 +378,16 @@ async def check_dual_side_entry_allowed(
     Returns:
         Tuple of (is_allowed: bool, reason: str)
     """
-    redis_client = get_redis_client()
+    redis = await get_redis_client()
 
     # Check if dual-side trading is enabled
-    use_dual_side = await redis_client.hget(f"user:{user_id}:dual_side", "use_dual_side_entry")
+    use_dual_side = await redis.hget(f"user:{user_id}:dual_side", "use_dual_side_entry")
 
     if not use_dual_side or use_dual_side == "false":
         # Dual-side disabled - check if opposite position exists
         opposite_side = "short" if intended_side == "long" else "long"
         opposite_key = f"user:{user_id}:position:{symbol}:{opposite_side}"
-        has_opposite = await redis_client.exists(opposite_key)
+        has_opposite = await redis.exists(opposite_key)
 
         if has_opposite:
             return False, f"Dual-side disabled but {opposite_side} position exists"

@@ -193,12 +193,12 @@ async def get_chart(request: Request):
 
 ## 사용 시나리오
 
-- 📊 **차트 표시**: 실시간 가격 차트 렌더링
-- 📈 **기술적 분석**: RSI, EMA, 볼린저 밴드 등 지표 활용
-- 🎯 **신호 생성**: 매매 신호 판단 및 전략 실행
-- 📉 **백테스팅**: 과거 데이터로 전략 검증
-- 🔍 **패턴 인식**: 가격 패턴 및 추세 분석
-- ⚡ **실시간 모니터링**: 시장 상황 실시간 추적
+-  **차트 표시**: 실시간 가격 차트 렌더링
+-  **기술적 분석**: RSI, EMA, 볼린저 밴드 등 지표 활용
+-  **신호 생성**: 매매 신호 판단 및 전략 실행
+-  **백테스팅**: 과거 데이터로 전략 검증
+-  **패턴 인식**: 가격 패턴 및 추세 분석
+-  **실시간 모니터링**: 시장 상황 실시간 추적
 
 ## WebSocket 지원
 
@@ -232,7 +232,7 @@ curl -X GET "http://localhost:8000/api/candles/BTC-USDT-SWAP/1D?from_timestamp=1
     response_description="캔들 데이터와 메타데이터를 포함한 JSON 응답",
     responses={
         200: {
-            "description": "✅ 캔들 데이터 조회 성공",
+            "description": " 캔들 데이터 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -336,7 +336,7 @@ curl -X GET "http://localhost:8000/api/candles/BTC-USDT-SWAP/1D?from_timestamp=1
             }
         },
         404: {
-            "description": "🔍 데이터를 찾을 수 없음",
+            "description": " 데이터를 찾을 수 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -357,7 +357,7 @@ curl -X GET "http://localhost:8000/api/candles/BTC-USDT-SWAP/1D?from_timestamp=1
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -378,7 +378,7 @@ curl -X GET "http://localhost:8000/api/candles/BTC-USDT-SWAP/1D?from_timestamp=1
             }
         },
         503: {
-            "description": "🔧 서비스 이용 불가",
+            "description": " 서비스 이용 불가",
             "content": {
                 "application/json": {
                     "examples": {

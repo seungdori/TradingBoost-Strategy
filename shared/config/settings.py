@@ -221,6 +221,10 @@ class Settings(BaseSettings):
 
     TELEGRAM_BOT_TOKEN: str = ""
     OWNER_ID: int = 0
+    DEBUG_TELEGRAM_ID: int = Field(
+        default=0,
+        description="Debug telegram ID for development/testing"
+    )
 
     # ============================================================================
     # Logging Configuration
@@ -344,6 +348,7 @@ OKX_SECRET_KEY = settings.OKX_SECRET_KEY
 OKX_PASSPHRASE = settings.OKX_PASSPHRASE
 TELEGRAM_BOT_TOKEN = settings.TELEGRAM_BOT_TOKEN
 OWNER_ID = settings.OWNER_ID
+DEBUG_TELEGRAM_ID = settings.DEBUG_TELEGRAM_ID
 DATABASE_URL = settings.DATABASE_URL
 REDIS_URL = settings.REDIS_URL
 REDIS_HOST = settings.REDIS_HOST

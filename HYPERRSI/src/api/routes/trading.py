@@ -87,10 +87,10 @@ class TradingTaskRequest(BaseModel):
 
 ## 사용 시나리오
 
-- 🚀 **최초 트레이딩 시작**: 사용자의 첫 트레이딩 봇 가동
-- 🔄 **재시작**: 서버 재시작 후 트레이딩 봇 복구
+-  **최초 트레이딩 시작**: 사용자의 첫 트레이딩 봇 가동
+-  **재시작**: 서버 재시작 후 트레이딩 봇 복구
 - ⚙️ **설정 변경**: 심볼 또는 타임프레임 변경 시 재시작
-- 🔧 **문제 해결**: 오류 상태에서 정상 상태로 복구
+-  **문제 해결**: 오류 상태에서 정상 상태로 복구
 
 ## 보안 및 검증
 
@@ -113,7 +113,7 @@ curl -X POST "http://localhost:8000/trading/start?restart=false" \\
 """,
     responses={
         200: {
-            "description": "✅ 트레이딩 태스크 시작 성공",
+            "description": " 트레이딩 태스크 시작 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -138,7 +138,7 @@ curl -X POST "http://localhost:8000/trading/start?restart=false" \\
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 이미 실행 중",
+            "description": " 잘못된 요청 - 이미 실행 중",
             "content": {
                 "application/json": {
                     "examples": {
@@ -159,7 +159,7 @@ curl -X POST "http://localhost:8000/trading/start?restart=false" \\
             }
         },
         403: {
-            "description": "🔒 권한 없음 - 허용되지 않은 사용자",
+            "description": " 권한 없음 - 허용되지 않은 사용자",
             "content": {
                 "application/json": {
                     "examples": {
@@ -174,7 +174,7 @@ curl -X POST "http://localhost:8000/trading/start?restart=false" \\
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -233,7 +233,7 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
             raise HTTPException(status_code=500, detail=f"Redis 연결 오류: {str(redis_error)}")
 
         # telegram_id인지 okx_uid인지 확인
-        is_telegram_id = not okx_uid.isdigit() or len(okx_uid) < 10
+        is_telegram_id = not okx_uid.isdigit() or len(okx_uid) < 13
         telegram_id = okx_uid if is_telegram_id else None
 
         # telegram_id인 경우 okx_uid로 변환 시도
@@ -277,8 +277,8 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
                 logger.info(f"사용자 {okx_uid}의 API 키를 TimescaleDB 정보로 업데이트했습니다.")
         
         #if okx_uid not in allowed_uid:
-        #    await send_telegram_message(f"⚠️[{okx_uid}] 권한이 없는 사용자입니다.", okx_uid, debug=True)
-        #    await send_telegram_message(f"⚠️[{okx_uid}] 권한이 없는 사용자입니다. \n관리자에게 문의해주세요.", okx_uid)
+        #    await send_telegram_message(f"[{okx_uid}] 권한이 없는 사용자입니다.", okx_uid, debug=True)
+        #    await send_telegram_message(f"[{okx_uid}] 권한이 없는 사용자입니다. \n관리자에게 문의해주세요.", okx_uid)
         #    await redis_client.set(f"user:{okx_uid}:trading:status", "stopped")
         #    raise HTTPException(status_code=403, detail="권한이 없는 사용자입니다.")
             
@@ -651,11 +651,11 @@ async def start_all_users():
 
 ## 사용 시나리오
 
-- 🛑 **수동 중지**: 사용자가 트레이딩을 직접 중지
-- ⚠️ **비상 중지**: 시장 급변 시 긴급 중지
-- 🔧 **유지보수**: 설정 변경 또는 업데이트를 위한 중지
-- 📊 **전략 변경**: 새로운 전략 적용을 위한 중지
-- 💰 **손실 제한**: 일정 손실 도달 시 자동 중지
+-  **수동 중지**: 사용자가 트레이딩을 직접 중지
+-  **비상 중지**: 시장 급변 시 긴급 중지
+-  **유지보수**: 설정 변경 또는 업데이트를 위한 중지
+-  **전략 변경**: 새로운 전략 적용을 위한 중지
+-  **손실 제한**: 일정 손실 도달 시 자동 중지
 
 ## 예시 요청
 
@@ -673,7 +673,7 @@ curl -X POST "http://localhost:8000/trading/stop" \\
 """,
     responses={
         200: {
-            "description": "✅ 트레이딩 태스크 중지 성공",
+            "description": " 트레이딩 태스크 중지 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -696,7 +696,7 @@ curl -X POST "http://localhost:8000/trading/stop" \\
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 필수 파라미터 누락",
+            "description": " 잘못된 요청 - 필수 파라미터 누락",
             "content": {
                 "application/json": {
                     "examples": {
@@ -711,7 +711,7 @@ curl -X POST "http://localhost:8000/trading/stop" \\
             }
         },
         404: {
-            "description": "🔍 사용자를 찾을 수 없음",
+            "description": " 사용자를 찾을 수 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -726,7 +726,7 @@ curl -X POST "http://localhost:8000/trading/stop" \\
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -778,8 +778,8 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
         logger.info(f"사용자 {okx_uid}의 트레이딩 태스크 중지 시도")
         
         # 텔레그램 ID인지 OKX UID인지 확인
-        is_telegram_id = not okx_uid.isdigit() or len(okx_uid) < 10
-        
+        is_telegram_id = not okx_uid.isdigit() or len(okx_uid) < 13
+
         # 텔레그램 ID인 경우 OKX UID로 변환 시도
         telegram_id = okx_uid if is_telegram_id else None
         if is_telegram_id:
@@ -910,7 +910,7 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
             # telegram_id가 있으면 우선 사용, 없으면 okx_uid 사용
             recipient_id = telegram_id if telegram_id else okx_uid
             await send_telegram_message(
-                f"🛑 트레이딩이 중지되었습니다.\n\n"
+                f" 트레이딩이 중지되었습니다.\n\n"
                 f"심볼: {symbol if symbol else '알 수 없음'}\n"
                 f"타임프레임: {timeframe if timeframe else '알 수 없음'}", 
                 recipient_id
@@ -1032,11 +1032,11 @@ Redis에서 트레이딩 상태가 'running'인 모든 사용자의 OKX UID 목�
 
 ## 사용 시나리오
 
-- 📊 **시스템 모니터링**: 전체 활성 사용자 수 파악
-- 🔄 **일괄 재시작**: 서버 재시작 시 복구할 사용자 목록 확인
-- 🛑 **일괄 중지**: 긴급 상황 시 중지할 사용자 식별
-- 📈 **통계 분석**: 활성 사용자 통계 집계
-- 🔧 **관리자 도구**: 관리자 대시보드에 활성 사용자 표시
+-  **시스템 모니터링**: 전체 활성 사용자 수 파악
+-  **일괄 재시작**: 서버 재시작 시 복구할 사용자 목록 확인
+-  **일괄 중지**: 긴급 상황 시 중지할 사용자 식별
+-  **통계 분석**: 활성 사용자 통계 집계
+-  **관리자 도구**: 관리자 대시보드에 활성 사용자 표시
 
 ## 예시 URL
 
@@ -1046,7 +1046,7 @@ GET /trading/running_users
 """,
     responses={
         200: {
-            "description": "✅ 실행 중인 사용자 조회 성공",
+            "description": " 실행 중인 사용자 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1082,7 +1082,7 @@ GET /trading/running_users
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1180,7 +1180,7 @@ async def stop_all_running_users():
                     # 종료 신호 설정 (okx_uid 사용)
                     await get_redis_client().set(f"user:{okx_uid}:stop_signal", "true")
                     await get_redis_client().set(f"user:{okx_uid}:trading:status", "stopped")
-                    # await send_telegram_message(f"⚠️[{okx_uid}] User의 상태를 Stopped로 강제 변경.6", okx_uid, debug=True)
+                    # await send_telegram_message(f"[{okx_uid}] User의 상태를 Stopped로 강제 변경.6", okx_uid, debug=True)
                     logger.info(f"사용자 {okx_uid}에게 종료 신호를 설정했습니다.")
                     
                     # TradingService 초기화 및 활성 주문 취소 (okx_uid 사용 가정)
@@ -1217,7 +1217,7 @@ async def stop_all_running_users():
                     try:
                         logger.info(f"사용자 {okx_uid}의 Redis 상태 초기화 중")
                         await get_redis_client().set(f"user:{okx_uid}:trading:status", "stopped") # 이미 위에서 설정함
-                        #await send_telegram_message(f"⚠️[{okx_uid}] User의 상태를 Stopped로 강제 변경.8", okx_uid, debug=True)
+                        #await send_telegram_message(f"[{okx_uid}] User의 상태를 Stopped로 강제 변경.8", okx_uid, debug=True)
                         
                         # 관련 키 삭제 (키 형식 변경)
                         keys_to_delete = [
@@ -1437,9 +1437,9 @@ async def restart_all_running_users():
 
 ## 사용 시나리오
 
-- 📊 **상태 모니터링**: 실시간 트레이딩 상태 확인
-- 🔍 **디버깅**: 트레이딩 문제 분석 및 해결
-- 📈 **대시보드**: 사용자 대시보드에 상태 표시
+-  **상태 모니터링**: 실시간 트레이딩 상태 확인
+-  **디버깅**: 트레이딩 문제 분석 및 해결
+-  **대시보드**: 사용자 대시보드에 상태 표시
 - ⚙️ **설정 확인**: 현재 적용된 심볼/타임프레임 확인
 - 💼 **포지션 추적**: 현재 보유 포지션 현황 파악
 
@@ -1451,7 +1451,7 @@ GET /trading/status/518796558012178692
 """,
     responses={
         200: {
-            "description": "✅ 트레이딩 상태 조회 성공",
+            "description": " 트레이딩 상태 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1505,7 +1505,7 @@ GET /trading/status/518796558012178692
             }
         },
         404: {
-            "description": "🔍 사용자 정보를 찾을 수 없음",
+            "description": " 사용자 정보를 찾을 수 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1520,7 +1520,7 @@ GET /trading/status/518796558012178692
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {

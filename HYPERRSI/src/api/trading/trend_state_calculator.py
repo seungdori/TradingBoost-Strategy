@@ -339,10 +339,11 @@ class TrendStateCalculator:
             Dict: 분석 결과를 담은 딕셔너리
         """
         try:
+            redis = await get_redis_client()
             tf_str = get_timeframe(timeframe)
             redis_key = f"candles_with_indicators:{symbol}:{tf_str}"
             # 최근 21개 캔들 데이터 가져오기 (20기간 모멘텀 계산용)
-            candles = await get_redis_client().lrange(redis_key, -21, -1)
+            candles = await redis.lrange(redis_key, -21, -1)
             if not candles or len(candles) < 21:
                 logger.error(f"충분한 캔들 데이터를 찾을 수 없습니다: {redis_key}")
                 return self._get_empty_state()
@@ -483,7 +484,7 @@ class TrendStateCalculator:
             # Redis 키 형식: candles:SOL-USDT-SWAP:240
             tf_str = get_timeframe(timeframe)
             key = f"candles:{symbol}:{tf_str}"
-            candles = await get_redis_client().lrange(key, 0, -1)  # 모든 캔들 가져오기
+            candles = await redis.lrange(key, 0, -1)  # 모든 캔들 가져오기
             
             # 캔들 데이터를 DataFrame으로 변환
             df = pd.DataFrame([eval(candle) for candle in candles])

@@ -218,8 +218,10 @@ async def store_order_in_redis(user_id: str, order_state: OrderStatus) -> None:
     - key: user:{user_id}:open_orders
     - value: JSON (OrderStatus)
     """
+
+    redis = await get_redis_client()
     redis_key: str = f"user:{user_id}:open_orders"
-    existing: Any = await get_redis_client().get(f"open_orders:{user_id}:{order_state.order_id}")
+    existing: Any = await redis.get(f"open_orders:{user_id}:{order_state.order_id}")
     if existing:
         return
     order_data: Dict[str, Any] = {
@@ -236,7 +238,7 @@ async def store_order_in_redis(user_id: str, order_state: OrderStatus) -> None:
         "posSide": order_state.posSide
     }
     # 간단히 lpush
-    await get_redis_client().lpush(redis_key, json.dumps(order_data))
+    await redis.lpush(redis_key, json.dumps(order_data))
     # 실제 운영 시 "open_orders"에서 상태가 확정된 주문(= filled or canceled 등)은 제거하거나 별도 리스트에 옮기는 식으로 관리
 
 
@@ -252,8 +254,10 @@ async def check_margin_block(user_id: str, symbol: str) -> bool:
     Returns:
         bool: 차단된 경우 True, 아닌 경우 False
     """
+
+    redis = await get_redis_client()
     block_key: str = f"margin_block:{user_id}:{symbol}"
-    block_status: Any = await get_redis_client().get(block_key)
+    block_status: Any = await redis.get(block_key)
     return block_status is not None
 
 async def set_margin_block(user_id: str, symbol: str, duration_seconds: int = 600) -> None:
@@ -264,9 +268,11 @@ async def set_margin_block(user_id: str, symbol: str, duration_seconds: int = 60
         symbol (str): 심볼
         duration_seconds (int): 차단 지속 시간 (초)
     """
+
+    redis = await get_redis_client()
     block_key = f"margin_block:{user_id}:{symbol}"
     block_msg = f"자금 부족으로 인해 {symbol} 거래가 {duration_seconds}초 동안 차단됩니다."
-    await get_redis_client().set(block_key, "blocked", ex=duration_seconds)
+    await redis.set(block_key, "blocked", ex=duration_seconds)
     await send_telegram_message(f"🔒 {block_msg}", user_id, debug=True)
     logger.warning(f"[{user_id}] {block_msg}")
 
@@ -280,8 +286,10 @@ async def get_margin_retry_count(user_id: str, symbol: str) -> int:
     Returns:
         int: 현재까지의 재시도 횟수
     """
+
+    redis = await get_redis_client()
     retry_key: str = f"margin_retry_count:{user_id}:{symbol}"
-    retry_count: Any = await get_redis_client().get(retry_key)
+    retry_count: Any = await redis.get(retry_key)
     return int(retry_count) if retry_count else 0
 
 async def increment_margin_retry_count(user_id: str, symbol: str) -> int:
@@ -294,10 +302,12 @@ async def increment_margin_retry_count(user_id: str, symbol: str) -> int:
     Returns:
         int: 증가된 재시도 횟수
     """
+
+    redis = await get_redis_client()
     retry_key: str = f"margin_retry_count:{user_id}:{symbol}"
     # 24시간 동안 유지 (필요에 따라 조정 가능)
-    retry_count: int = int(await get_redis_client().incr(retry_key))
-    await get_redis_client().expire(retry_key, 86400)  # 24시간 (초)
+    retry_count: int = int(await redis.incr(retry_key))
+    await redis.expire(retry_key, 86400)  # 24시간 (초)
     return retry_count
 
 async def reset_margin_retry_count(user_id: str, symbol: str) -> None:
@@ -307,8 +317,10 @@ async def reset_margin_retry_count(user_id: str, symbol: str) -> None:
         user_id (int): 사용자 ID
         symbol (str): 심볼
     """
+
+    redis = await get_redis_client()
     retry_key = f"margin_retry_count:{user_id}:{symbol}"
-    await get_redis_client().delete(retry_key)
+    await redis.delete(retry_key)
 
 async def try_send_order(
     user_id: str,
@@ -413,7 +425,7 @@ async def try_send_order(
     
     try:
         # 실제 실행
-        specs_json: Any = await get_redis_client().get("symbol_info:contract_specifications")
+        specs_json: Any = await redis.get("symbol_info:contract_specifications")
         tick_size: float = 0.001
         current_price: float = 0.0
         
@@ -433,7 +445,7 @@ async def try_send_order(
                     if response.status_code != 200:
                         raise ValueError("계약 사양 정보 조회 실패")
 
-                    specs_json = await get_redis_client().get(f"symbol_info:contract_specifications")
+                    specs_json = await redis.get(f"symbol_info:contract_specifications")
                     if not specs_json:
                         raise ValueError(f"계약 사양 정보를 찾을 수 없습니다: {symbol}")
             specs_dict: Dict[str, Any] = json.loads(specs_json) if specs_json else {}
@@ -459,12 +471,25 @@ async def try_send_order(
             #print(f"DEBUG: 이미 계약 수량으로 전달된 경우: {size}")
             contracts_amount = "{:.8f}".format(float(size))
 
+        # 포지션 모드 조회 (OKX는 기본적으로 hedge 모드 사용)
         position_mode: Dict[str, Any] = {'hedged': True, 'marginMode': 'cross'}
         try:
-            position_mode = await exchange.fetch_position_mode(symbol=symbol)  # type: ignore
+            # CCXT OKX에서 fetch_position_mode는 표준 메서드가 아니므로
+            # 포지션 정보에서 확인하거나 기본값 사용
+            positions = await exchange.fetch_positions([symbol])  # type: ignore
+            if positions and len(positions) > 0:
+                pos_info = positions[0].get('info', {})
+                pos_side = pos_info.get('posSide', 'long')
+                mgn_mode = pos_info.get('mgnMode', 'cross')
+                # posSide가 'long' 또는 'short'면 hedge 모드, 'net'이면 one-way 모드
+                position_mode = {
+                    'hedged': pos_side in ('long', 'short'),
+                    'marginMode': mgn_mode
+                }
+                logger.debug(f"Position mode from API: {position_mode}")
         except Exception as e:
-            print("position_mode 조회 실패: ", e)
-            position_mode = {'hedged': True, 'marginMode': 'cross'} #테스트용으로 True
+            logger.debug(f"position_mode 조회 실패 (기본값 사용): {e}")
+            position_mode = {'hedged': True, 'marginMode': 'cross'}
 
         price_str: Optional[str] = None
         trigger_price_str: Optional[str] = None

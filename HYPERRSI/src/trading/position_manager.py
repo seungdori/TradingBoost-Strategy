@@ -42,6 +42,7 @@ class PositionStateManager:
         self._user_semaphores = {}
         self._semaphore_lock = asyncio.Lock()
         self._last_used = {}  # 추가
+
     async def get_user_semaphore(self, user_id: str) -> asyncio.Semaphore:
         """사용자별 세마포어 가져오기 (없으면 생성)"""
         async with self._semaphore_lock:
@@ -90,10 +91,11 @@ class PositionStateManager:
         거래소 포지션 vs Redis 포지션 정보 동기화 여부 확인 + mismatch 시 cleanup or sync
         """
         try:
+            redis = await get_redis_client()
             position_key = self.get_position_key(user_id, symbol, side)
 
             # Redis에 있는 포지션 정보
-            redis_position_data = await get_redis_client().hgetall(position_key)
+            redis_position_data = await redis.hgetall(position_key)
             if not redis_position_data:
                 return True
 
@@ -218,6 +220,7 @@ class PositionStateManager:
             
         async def update_operation(pipe):
             try:
+                redis = await get_redis_client()
                 # 현재 포지션 정보 조회
                 position_data = await pipe.hgetall(position_key)
                 position_info = json.loads(position_data.get('position_info', '{}'))
@@ -337,7 +340,7 @@ class PositionStateManager:
 
         # transaction 실행 및 결과 저장
         try:
-            result = await get_redis_client().transaction(update_operation, position_key)
+            result = await redis.transaction(update_operation, position_key)
             is_valid = await self.validate_position_state(user_id, symbol, side)
 
             if not result or (isinstance(result, list) and len(result) == 0):
@@ -366,8 +369,9 @@ class PositionStateManager:
         포지션 정보 조회
         """
         try:
+            redis = await get_redis_client()
             position_key = self.get_position_key(user_id, symbol, side)
-            return await get_redis_client().hgetall(position_key)
+            return await redis.hgetall(position_key)
         except Exception as e:
             await send_telegram_message(f"[{user_id}] [get_position_info] error: {e}", debug=True)
             logger.error(f"[get_position_info] error: {e}")

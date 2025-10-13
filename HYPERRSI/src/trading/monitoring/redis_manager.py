@@ -38,6 +38,8 @@ async def get_all_running_users() -> List[int]:
         List[int]: 실행 중인 사용자 ID 목록
     """
     # 최대 재시도 횟수
+
+    redis = await get_redis_client()
     max_retry = 3
     retry_count = 0
 
@@ -48,11 +50,11 @@ async def get_all_running_users() -> List[int]:
                 logger.warning(f"Redis 연결 상태 불량, 재연결 시도 ({retry_count+1}/{max_retry})")
                 await reconnect_redis()
 
-            status_keys = await get_redis_client().keys("user:*:trading:status")
+            status_keys = await redis.keys("user:*:trading:status")
             running_users = []
 
             for key in status_keys:
-                status = await get_redis_client().get(key)
+                status = await redis.get(key)
                 if status == "running":
                     # key 구조: user:{user_id}:trading:status
                     parts = key.split(":")
@@ -86,6 +88,7 @@ async def perform_memory_cleanup():
     메모리 정리 작업을 별도 태스크로 수행하여 메인 모니터링 루프를 차단하지 않습니다.
     """
     try:
+        redis = await get_redis_client()
         logger.info(f"메모리 정리 시작 (간격: {MEMORY_CLEANUP_INTERVAL}초)")
 
         # 메모리 사용량 로깅
@@ -117,15 +120,15 @@ async def perform_memory_cleanup():
             # 2주 이상 지난 완료된 주문 데이터 삭제
             two_weeks_ago = int((datetime.now() - timedelta(days=14)).timestamp())
             pattern = "completed:user:*:order:*"
-            old_order_keys = await get_redis_client().keys(pattern)
+            old_order_keys = await redis.keys(pattern)
 
             for key in old_order_keys:
                 try:
-                    order_data = await get_redis_client().hgetall(key)
+                    order_data = await redis.hgetall(key)
                     last_updated = int(order_data.get("last_updated_time", "0"))
                     if last_updated < two_weeks_ago:
                         logger.info(f"오래된 완료 주문 데이터 삭제: {key}")
-                        await get_redis_client().delete(key)
+                        await redis.delete(key)
                 except Exception as e:
                     logger.error(f"완료 주문 데이터 삭제 중 오류: {str(e)}")
                     continue
@@ -168,23 +171,24 @@ async def get_user_monitor_orders(user_id: str) -> Dict[str, Dict]:
         Dict: {order_id: order_data, ...}
     """
     try:
+        redis = await get_redis_client()
         # user_id를 OKX UID로 변환
         okx_uid = await get_identifier(str(user_id))
 
         # 사용자 주문 모니터링 키 패턴
         pattern = f"monitor:user:{okx_uid}:*:order:*"
-        order_keys = await get_redis_client().keys(pattern)
+        order_keys = await redis.keys(pattern)
 
         orders = {}
         for key in order_keys:
             try:
                 # 키 타입 확인
-                key_type = await get_redis_client().type(key)
+                key_type = await redis.type(key)
 
                 # 해시 타입인지 확인 - 문자열로 변환하여 비교
                 if str(key_type).lower() == 'hash' or str(key_type).lower() == "b'hash'":
                     # 정상적인 해시 타입인 경우
-                    order_data = await get_redis_client().hgetall(key)
+                    order_data = await redis.hgetall(key)
                     if order_data and "status" in order_data:
                         # Redis에는 open으로 저장되어 있지만 실제로는 체결되었을 수 있음
                         if order_data["status"] == "open":

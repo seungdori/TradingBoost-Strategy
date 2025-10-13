@@ -18,7 +18,7 @@ from aiogram.types import (
 from HYPERRSI.src.bot.keyboards.settings_keyboard import get_settings_keyboard
 from HYPERRSI.src.bot.states.states import SettingStates
 from HYPERRSI.src.bot.utils import validator
-from HYPERRSI.src.services.redis_service import RedisService
+from HYPERRSI.src.services.redis_service import redis_service
 from shared.constants.default_settings import (
     DEFAULT_PARAMS_SETTINGS,
     DIRECTION_OPTIONS,
@@ -37,7 +37,7 @@ from shared.logging import get_logger
 router = Router()
 logger = get_logger(__name__)
 
-allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267"]
+allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267","586156710277369942"]
 
 def is_allowed_user(user_id: Optional[str]) -> bool:
     """허용된 사용자인지 확인"""
@@ -56,8 +56,9 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> Optional[str]:
         Optional[str]: OKX UID or None if not found
     """
     try:
+        redis = await get_redis_client()
         # 텔레그램 ID로 OKX UID 조회
-        okx_uid = await get_redis_client().get(f"user:{telegram_id}:okx_uid")
+        okx_uid = await redis.get(f"user:{telegram_id}:okx_uid")
         if okx_uid:
             return okx_uid.decode() if isinstance(okx_uid, bytes) else okx_uid
         return None
@@ -68,21 +69,21 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> Optional[str]:
 async def get_identifier(user_id: str) -> str:
     """
     입력된 식별자가 텔레그램 ID인지 OKX UID인지 확인하고 적절한 OKX UID를 반환
-    
+
     Args:
         user_id: 텔레그램 ID 또는 OKX UID
-        
+
     Returns:
         str: OKX UID
     """
-    # 11글자 이하면 텔레그램 ID로 간주하고 변환
-    if len(str(user_id)) <= 11:
+    # 13자리 미만이면 텔레그램 ID로 간주하고 변환
+    if len(str(user_id)) < 13:
         okx_uid = await get_okx_uid_from_telegram_id(user_id)
         if not okx_uid:
             logger.error(f"텔레그램 ID {user_id}에 대한 OKX UID를 찾을 수 없습니다")
             return str(user_id)  # 변환 실패 시 원래 ID 반환
         return okx_uid
-    # 12글자 이상이면 이미 OKX UID로 간주
+    # 13자리 이상이면 이미 OKX UID로 간주
     return str(user_id)
 
 
@@ -92,15 +93,25 @@ async def settings_command(message: types.Message) -> None:
     if message.from_user is None:
         return
 
-    user_id = str(message.from_user.id)
+    telegram_id = str(message.from_user.id)
 
-    # 텔레그램 ID인지 OKX UID인지 확인
-    user_id = await get_identifier(user_id)
+    # 텔레그램 ID로 OKX UID 매핑 조회
+    redis = await get_redis_client()
+    okx_uid = await redis.get(f"user:{telegram_id}:okx_uid")
 
-    okx_uid = await get_redis_client().get(f"user:{user_id}:okx_uid")
+    if okx_uid:
+        okx_uid = okx_uid.decode() if isinstance(okx_uid, bytes) else okx_uid
+    else:
+        # 매핑이 없으면 get_identifier로 변환 시도 (fallback)
+        okx_uid = await get_identifier(telegram_id)
+
     if not is_allowed_user(okx_uid):
+        print("접근 권한 없음. settings.py", okx_uid)
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
+
+    # 이후 모든 작업에서 okx_uid 사용
+    user_id = okx_uid
 
     settings = await redis_service.get_user_settings(user_id)
     if settings is None:
@@ -114,6 +125,7 @@ async def settings_command(message: types.Message) -> None:
 
         
 @router.callback_query(F.data.startswith("direction:"))
+
 async def handle_direction_callback(callback: types.CallbackQuery) -> None:
     if callback.from_user is None or callback.message is None:
         return
@@ -130,6 +142,7 @@ async def handle_direction_callback(callback: types.CallbackQuery) -> None:
     user_id = str(callback.from_user.id)
     user_id = await get_identifier(user_id)
     settings = await redis_service.get_user_settings(user_id)
+    print("settings", settings)
     if settings is None:
         settings = DEFAULT_PARAMS_SETTINGS.copy()
 
@@ -161,11 +174,9 @@ async def handle_setting_callback(callback: types.CallbackQuery, state: FSMConte
         return types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="❌ 취소", callback_data="setting:cancel")]
         ])
-    print(f"callback_parts: {callback_parts}")
 
     # 카테고리 선택 처리
     if setting_type == "show_category":
-        print(f"callback_parts: {callback_parts}")
         if len(callback_parts) > 2:
             category = callback_parts[2]
             user_id = str(callback.from_user.id)
@@ -271,9 +282,10 @@ async def handle_setting_callback(callback: types.CallbackQuery, state: FSMConte
         return
     # 선택형 설정 처리
     if setting_type in [
-        "direction", "entry_option", "tp_option", 
-        "sl_option", "pyramiding_type", "pyramiding_entry_type", 
-        "entry_criterion", "trailing_stop_type", "trailing_stop"
+        "direction", "entry_option", "tp_option",
+        "sl_option", "pyramiding_type", "pyramiding_entry_type",
+        "entry_criterion", "trailing_stop_type", "trailing_stop",
+        "entry_amount_option"
     ]:
         keyboards = {
             "direction": [
@@ -337,6 +349,12 @@ async def handle_setting_callback(callback: types.CallbackQuery, state: FSMConte
                 [types.InlineKeyboardButton(text="TP2 도달 시", callback_data="set_trailing_start:tp2")],
                 [types.InlineKeyboardButton(text="TP3 도달 시", callback_data="set_trailing_start:tp3")],
                 [types.InlineKeyboardButton(text="❌ 사용 안함", callback_data="set_trailing_start:disable")],
+                [types.InlineKeyboardButton(text="⬅️ 뒤로가기", callback_data="settings_back")]
+            ],
+            "entry_amount_option": [
+                [types.InlineKeyboardButton(text="USDT 단위", callback_data="set_entry_amount_option:usdt")],
+                [types.InlineKeyboardButton(text="퍼센트(%) 단위", callback_data="set_entry_amount_option:percent")],
+                [types.InlineKeyboardButton(text="개수 단위", callback_data="set_entry_amount_option:count")],
                 [types.InlineKeyboardButton(text="⬅️ 뒤로가기", callback_data="settings_back")]
             ],
         }
@@ -465,6 +483,8 @@ async def handle_boolean_callback(callback: types.CallbackQuery) -> None:
 # ─────────────────────────────
 @router.callback_query(F.data == "setting:use_sl_on_last")
 async def handle_sl_last_toggle(callback: types.CallbackQuery) -> None:
+
+    redis = await get_redis_client()
     if callback.from_user is None or callback.message is None:
         return
     if not isinstance(callback.message, Message):
@@ -476,7 +496,7 @@ async def handle_sl_last_toggle(callback: types.CallbackQuery) -> None:
         settings_key = f"user:{user_id}:settings"
         
         # settings에서 현재 상태 가져오기
-        settings = await get_redis_client().get(settings_key)
+        settings = await redis.get(settings_key)
         settings_dict = json.loads(settings) if settings else {}
         
         # 현재 상태 반전
@@ -484,7 +504,7 @@ async def handle_sl_last_toggle(callback: types.CallbackQuery) -> None:
         settings_dict['use_sl_on_last'] = not is_enabled
         
         # 새로운 설정 저장
-        await get_redis_client().set(settings_key, json.dumps(settings_dict))
+        await redis.set(settings_key, json.dumps(settings_dict))
         
         status_msg = "미사용" if is_enabled else "사용"
         await callback.answer()

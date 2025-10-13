@@ -90,10 +90,10 @@ class ConnectionManager:
                 message.decode('utf-8') if isinstance(message, bytes) else message
                 for message in messages
             ]
-            logging.info(f"🔍 [INFO] Retrieved messages for user {user_id}: {decoded_messages}")
+            logging.info(f" [INFO] Retrieved messages for user {user_id}: {decoded_messages}")
             return decoded_messages or []
         except Exception as e:
-            logging.error(f"🚨 [ERROR] Failed to get messages for user {user_id}: {str(e)}")
+            logging.error(f" [ERROR] Failed to get messages for user {user_id}: {str(e)}")
             return []
 
     async def add_connected_user(self, user_id: int) -> None:
@@ -102,7 +102,7 @@ class ConnectionManager:
             await redis_client.sadd(self.redis_key, str(user_id))
             logging.info(f"👥 [INFO] Added user {user_id} to connected users")
         except Exception as e:
-            logging.error(f"🚨 [ERROR] Failed to add user {user_id} to connected users: {str(e)}")
+            logging.error(f" [ERROR] Failed to add user {user_id} to connected users: {str(e)}")
 
     async def remove_connected_user(self, user_id: int) -> None:
         try:
@@ -110,7 +110,7 @@ class ConnectionManager:
             await redis_client.srem(self.redis_key, str(user_id))
             logging.info(f"👋 [INFO] Removed user {user_id} from connected users")
         except Exception as e:
-            logging.error(f"🚨 [ERROR] Failed to remove user {user_id} from connected users: {str(e)}")
+            logging.error(f" [ERROR] Failed to remove user {user_id} from connected users: {str(e)}")
 
     async def get_connected_users(self) -> List[int]:
         try:
@@ -118,7 +118,7 @@ class ConnectionManager:
             users = await redis_client.smembers(self.redis_key)
             return [int(user_id) for user_id in users] if users else []
         except Exception as e:
-            logging.error(f"🚨 [ERROR] Failed to get connected users: {str(e)}")
+            logging.error(f" [ERROR] Failed to get connected users: {str(e)}")
             return []
 
     async def connect(self, websocket: WebSocket, user_id: int) -> None:
@@ -130,9 +130,9 @@ class ConnectionManager:
             self.active_connections[user_id].append(websocket)
             # Redis에 사용자 추가
             await self.add_connected_user(user_id)
-            logging.info(f"🚀 [INFO] User {user_id} connected")
+            logging.info(f" [INFO] User {user_id} connected")
         except Exception as e:
-            logging.error(f"🚨 [ERROR] Failed to connect user {user_id}: {str(e)}")
+            logging.error(f" [ERROR] Failed to connect user {user_id}: {str(e)}")
             raise
 
     async def is_user_connected(self, user_id: int) -> bool:
@@ -144,7 +144,7 @@ class ConnectionManager:
             
             # 동기화 체크
             if memory_connected != bool(redis_connected):
-                logging.warning(f"⚠️ Connection state mismatch for user {user_id}")
+                logging.warning(f" Connection state mismatch for user {user_id}")
                 # 메모리 상태를 우선으로 Redis 상태 동기화
                 if memory_connected:
                     await redis_client.sadd(self.redis_key, str(user_id))
@@ -154,7 +154,7 @@ class ConnectionManager:
             return memory_connected
             
         except Exception as e:
-            logging.error(f"🚨 [ERROR] Failed to check connection status: {str(e)}")
+            logging.error(f" [ERROR] Failed to check connection status: {str(e)}")
             return False
 
     async def get_connection_status(self, user_id: int) -> dict:
@@ -171,7 +171,7 @@ class ConnectionManager:
                 "last_seen": last_seen
             }
         except Exception as e:
-            logging.error(f"🚨 [ERROR] Failed to get connection status: {str(e)}")
+            logging.error(f" [ERROR] Failed to get connection status: {str(e)}")
             return {
                 "user_id": user_id,
                 "is_connected": False,
@@ -183,7 +183,7 @@ class ConnectionManager:
         key = f"user:{user_id}:messages"
         try:
             # 메시지 저장 전 로깅
-            logging.info(f"📝 [INFO] Adding message for user {user_id}: {message}")
+            logging.info(f" [INFO] Adding message for user {user_id}: {message}")
 
             # 파이프라인으로 작업 묶기
             pipe = redis_client.pipeline()
@@ -192,9 +192,9 @@ class ConnectionManager:
             await pipe.publish('messages', message)
             await pipe.execute()
 
-            logging.info(f"✅ [INFO] Message successfully added for user {user_id}")
+            logging.info(f" [INFO] Message successfully added for user {user_id}")
         except Exception as e:
-            logging.error(f"🚨 [ERROR] Failed to add message for user {user_id}: {str(e)}")
+            logging.error(f" [ERROR] Failed to add message for user {user_id}: {str(e)}")
             raise
 
     async def send_message_to_user(self, user_id: int, message: str) -> None:
@@ -203,9 +203,9 @@ class ConnectionManager:
             for connection in self.active_connections[user_id]:
                 try:
                     await connection.send_text(message)
-                    logging.info(f"🚀 [INFO] Message sent to user {user_id}: {message}")
+                    logging.info(f" [INFO] Message sent to user {user_id}: {message}")
                 except Exception as e:
-                    logging.error(f"🚨 [ERROR] Failed to send message to user {user_id}: {str(e)}")
+                    logging.error(f" [ERROR] Failed to send message to user {user_id}: {str(e)}")
                     failed_connections.append(connection)
             
             # 실패한 연결 제거
@@ -215,7 +215,7 @@ class ConnectionManager:
                     if conn not in failed_connections
                 ]
         else:
-            logging.warning(f"⚠️ [WARNING] No active connection for user {user_id}")
+            logging.warning(f" [WARNING] No active connection for user {user_id}")
 
 
 
@@ -230,7 +230,7 @@ class ConnectionManager:
                     asyncio.create_task(self.remove_connected_user(user_id))
                 logging.info(f"👋 [INFO] User {user_id} disconnected")
         except Exception as e:
-            logging.error(f"🚨 [ERROR] Error during disconnect for user {user_id}: {str(e)}")
+            logging.error(f" [ERROR] Error during disconnect for user {user_id}: {str(e)}")
 
     async def get_user_info(self, user_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -247,9 +247,9 @@ class ConnectionManager:
             # 예시: Redis에서 사용자 정보 조회 로직
             # 실제 구현에서는 Redis에 저장된 사용자 정보를 확인
             user_key = f"okx:user:{user_id}"
-            print(f"🍏🔹😇👆 {user_key}")
+            print(f" {user_key}")
             user_info_raw = await redis_client.hgetall(user_key)
-            print('🍏🔹😇👆',user_info_raw)
+            print('',user_info_raw)
 
             # Decode bytes to strings if necessary
             if user_info_raw:
@@ -276,7 +276,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int) -> None:
             await manager.add_user_message(user_id, data)
             await manager.send_message_to_user(user_id, f"Message received: {data}")
     except Exception as e:
-        logging.error(f"🚨🚨🚨 [ERROR] WebSocket error: {str(e)}")
+        logging.error(f" [ERROR] WebSocket error: {str(e)}")
     finally:
         await manager.disconnect(websocket, user_id)
 

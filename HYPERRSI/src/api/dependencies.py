@@ -5,12 +5,15 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from datetime import timedelta
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import ccxt.async_support as ccxt
 from fastapi import HTTPException
 
-from shared.database.redis_helper import get_redis_client
+from shared.database.redis_helper import get_redis_client as get_async_redis_client
+
+if TYPE_CHECKING:
+    import redis.asyncio as redis
 
 # Prometheus metrics
 try:
@@ -48,25 +51,31 @@ except ImportError:
     pool_metrics = {}
 
 
-logger =  logging.getLogger(__name__)
-
-# Dynamic redis_client access - import at runtime, not at module load time
-def get_redis_client():
-    """Get redis_client lazily to avoid initialization order issues"""
-    import asyncio
-
-    from HYPERRSI.src.core.database import get_redis_binary_client
-    loop = asyncio.get_event_loop()
-    return loop.run_until_complete(get_redis_binary_client())
+logger = logging.getLogger(__name__)
 
 class ExchangeConnectionPool:
-    def __init__(self, redis_client=None, max_size=10, max_age=3600):  # max_age는 초 단위
-        self.redis = redis_client if redis_client is not None else get_redis_client()
+    def __init__(
+        self,
+        redis_client: Optional["redis.Redis"] = None,
+        max_size: int = 10,
+        max_age: int = 3600,
+    ):  # max_age는 초 단위
+        # Redis 클라이언트는 필요 시 초기화하는 지연 로딩 방식으로 유지한다.
+        self._redis_client: Optional["redis.Redis"] = redis_client
         self.max_size = max_size
         self.max_age = max_age
         self.pools = {}
         self._lock = asyncio.Lock()
         self._client_metadata = {}  # 클라이언트 생성 시간과 사용 횟수 추적
+
+    @property
+    def redis(self) -> Optional["redis.Redis"]:
+        return self._redis_client
+
+    async def ensure_redis(self) -> "redis.Redis":
+        if self._redis_client is None:
+            self._redis_client = await get_async_redis_client()
+        return self._redis_client
 
     async def _remove_client(self, user_id: str, client):
         """클라이언트 제거 및 정리"""
@@ -138,9 +147,10 @@ class ExchangeConnectionPool:
                     except (asyncio.TimeoutError, Exception) as e:
                         logger.warning(f"Client validation failed for user {user_id}: {e}")
                         await self._remove_client(user_id, client)
-            print(f"[{user_id}]Length of pool['clients']: {len(pool['clients'])}")
             # 새 클라이언트 생성
             if len(pool['clients']) < self.max_size:
+                client = None
+                added_to_pool = False
                 try:
                     api_keys = await get_user_api_keys(user_id)
                     client = ccxt.okx({
@@ -163,6 +173,7 @@ class ExchangeConnectionPool:
                         'created_at': current_time,
                         'use_count': 0
                     }
+                    added_to_pool = True
 
                     # Record metrics
                     if HAS_METRICS:
@@ -173,12 +184,41 @@ class ExchangeConnectionPool:
 
                     logger.info(f"Created new exchange client for user {user_id}")
                     return client
+                except ccxt.AuthenticationError as e:
+                    # API 키 인증 오류 (잘못된 키, 만료된 키, IP 화이트리스트 문제 등)
+                    logger.error(f"Failed to create exchange client for user {user_id}: {e}")
+                    if HAS_METRICS:
+                        pool_metrics['client_error'].labels(
+                            user_id=user_id,
+                            error_type='authentication'
+                        ).inc()
+                    raise HTTPException(
+                        status_code=401,
+                        detail=f"API 키 인증 실패: {str(e)}"
+                    )
+                except HTTPException:
+                    raise
                 except Exception as e:
                     logger.error(f"Failed to create exchange client for user {user_id}: {e}")
+                    if HAS_METRICS:
+                        pool_metrics['client_error'].labels(
+                            user_id=user_id,
+                            error_type='initialization'
+                        ).inc()
                     raise HTTPException(
                         status_code=500,
                         detail=f"Failed to initialize exchange client: {str(e)}"
                     )
+                finally:
+                    if client is not None and not added_to_pool:
+                        try:
+                            await client.close()
+                        except Exception as close_error:
+                            logger.warning(
+                                "Failed to close exchange client after error for user %s: %s",
+                                user_id,
+                                close_error,
+                            )
 
             # 풀이 가득 찼다면 대기 후 재시도 (지수 백오프)
             backoff_time = 0.5 * (2 ** retry_count)  # 0.5s, 1s, 2s
@@ -254,7 +294,7 @@ async def get_user_api_keys(user_id: str) -> dict:
     try:
         #logger.info(f"Redis에서 키 조회 시작: {key}")
         redis_client = await get_redis_binary_client()
-        api_keys = await get_redis_client().hgetall(key)
+        api_keys = await redis_client.hgetall(key)
         #logger.info(f"Redis 원본 응답: {api_keys}, 타입: {type(api_keys)}")
         
         if not api_keys:

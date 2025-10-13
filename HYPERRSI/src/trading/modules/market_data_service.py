@@ -46,9 +46,10 @@ class MarketDataService:
         - 조회된 ATR 값을 반환
         """
         try:
+            redis = await get_redis_client()
             tf_str = get_timeframe(timeframe)
             candle_key = f"candles_with_indicators:{symbol}:{tf_str}"
-            candle_data = await get_redis_client().lindex(candle_key, -1)
+            candle_data = await redis.lindex(candle_key, -1)
             if candle_data:
                 candle_json = json.loads(candle_data)
                 atr_value = float(candle_json.get('atr14', 0.0))
@@ -64,9 +65,10 @@ class MarketDataService:
     async def get_historical_prices(self, symbol: str, timeframe: str, limit: int = 200) -> pd.DataFrame:
         """Redis에서 과거 데이터(캔들+인디케이터) 가져오기"""
         try:
+            redis = await get_redis_client()
             tf_str = get_timeframe(timeframe)
             candles_key = f"candles_with_indicators:{symbol}:{tf_str}"
-            cached_data = await get_redis_client().lrange(candles_key, -limit, -1)
+            cached_data = await redis.lrange(candles_key, -limit, -1)
             if cached_data:
                 df = pd.DataFrame([
                     {
@@ -184,8 +186,9 @@ class MarketDataService:
             }
         """
         try:
+            redis = await get_redis_client()
             # 1. 계약 사양 정보 조회
-            specs_json = await get_redis_client().get("symbol_info:contract_specifications")
+            specs_json = await redis.get("symbol_info:contract_specifications")
             if not specs_json:
                 if not user_id:
                     print("user_id가 없어서 계약사항 새로운 정보를 조회하지 않습니다.")
@@ -202,7 +205,7 @@ class MarketDataService:
                     if response.status_code != 200:
                         raise ValueError("계약 사양 정보 조회 실패")
 
-                    specs_json = await get_redis_client().get(f"symbol_info:contract_specifications")
+                    specs_json = await redis.get(f"symbol_info:contract_specifications")
                     if not specs_json:
                         raise ValueError(f"계약 사양 정보를 찾을 수 없습니다: {symbol}")
 

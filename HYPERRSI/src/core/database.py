@@ -6,6 +6,7 @@ Database configuration and connection management with structured logging
 and exception handling.
 """
 
+import asyncio
 import json
 import time
 from contextlib import asynccontextmanager
@@ -253,8 +254,25 @@ async def init_global_redis_clients():
     """
     전역 Redis 클라이언트를 초기화합니다.
     애플리케이션 시작 시 lifespan에서 호출해야 합니다.
+
+    이벤트 루프가 변경된 경우 재호출하면 새 클라이언트를 생성합니다.
     """
-    global _global_redis_client, _global_redis_binary_client
+    global _global_redis_client, _global_redis_binary_client, _redis_init_lock
+
+    # 기존 클라이언트가 있고 event loop가 변경된 경우 클라이언트 리셋
+    try:
+        current_loop = asyncio.get_running_loop()
+        if _global_redis_client is not None:
+            # 기존 클라이언트가 다른 이벤트 루프에 연결되어 있으면 리셋
+            logger.debug("Event loop 변경 감지, Redis 클라이언트 재초기화")
+            _global_redis_client = None
+            _global_redis_binary_client = None
+            _redis_init_lock = None  # Lock도 재생성
+    except RuntimeError:
+        # 실행 중인 이벤트 루프가 없는 경우
+        pass
+
+    # 새 클라이언트 생성
     _global_redis_client = await redis_instance.get_client()
     _global_redis_binary_client = await redis_instance.get_binary_client()
 

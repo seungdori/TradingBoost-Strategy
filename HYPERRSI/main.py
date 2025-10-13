@@ -12,6 +12,7 @@ from typing import Set
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -129,9 +130,10 @@ def handle_signals():
     loop.set_exception_handler(handle_exception)
 
     # Ctrl+C (SIGINT)에만 반응하도록 설정
+    # Don't track shutdown task to avoid recursive cancellation
     loop.add_signal_handler(
         signal.SIGINT,
-        lambda: task_tracker.create_task(shutdown("SIGINT"), name="shutdown-handler")
+        lambda: asyncio.create_task(shutdown("SIGINT"), name="shutdown-handler")
     )
 
 @asynccontextmanager
@@ -179,38 +181,7 @@ async def lifespan(app: FastAPI):
 # FastAPI 앱 설정
 app = FastAPI(
     title="HYPERRSI Trading Strategy API",
-    description="""
-# HYPERRSI Trading Strategy API
-
-RSI 및 트렌드 분석 기반의 자동화된 거래 API입니다.
-
-## 주요 기능
-
-- **RSI 기반 진입**: Relative Strength Index를 활용한 과매수/과매도 진입 전략
-- **트렌드 분석**: 이동평균선 및 추세 지표를 활용한 시장 방향성 판단
-- **자동 주문 실행**: 지정가, 시장가, 조건부 주문 자동 실행
-- **포지션 관리**: 자동 손절매, 익절, 포지션 사이징
-- **실시간 모니터링**: 계좌 잔고, 포지션, 주문 상태 실시간 조회
-- **텔레그램 알림**: 중요 이벤트에 대한 실시간 알림
-
-## 시작하기
-
-1. 계좌 설정: `/api/account` 엔드포인트에서 거래소 계정 정보를 확인하세요
-2. 거래 활성화: `/api/trading/activate` 엔드포인트로 자동 거래를 시작하세요
-3. 포지션 모니터링: `/api/position` 엔드포인트에서 현재 포지션을 확인하세요
-
-## 지원 거래소
-
-- OKX (선물)
-- Binance (선물)
-- Bybit (선물)
-
-## 보안 주의사항
-
-- API 키는 안전하게 저장되며 암호화됩니다
-- 프로덕션 환경에서는 반드시 HTTPS를 사용하세요
-- 2FA 인증을 활성화하는 것을 권장합니다
-""",
+    description="HyperRSI Swagger",
     version="1.0.0",
     contact={
         "name": "TradingBoost Support",
@@ -226,6 +197,13 @@ RSI 및 트렌드 분석 기반의 자동화된 거래 API입니다.
     lifespan=lifespan,
     proxy_headers=True,
     forwarded_allow_ips="127.0.0.1",
+    swagger_ui_parameters={
+        "filter": True,  # 검색 필터 활성화
+        "tryItOutEnabled": True,  # Try it out 기본 활성화
+        "persistAuthorization": True,  # 인증 정보 유지
+        "displayOperationId": False,
+        "displayRequestDuration": True,  # 요청 시간 표시
+    },
     openapi_tags=[
         {
             "name": "trading",
@@ -359,7 +337,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         }
     )
 
-@app.get("/") 
+@app.get("/")
 async def root():
     return {"status": "running"}
 
@@ -368,6 +346,19 @@ async def health_check():
     return {
         "status": "healthy"
     }
+
+# Custom ReDoc endpoint with enhanced search
+@app.get("/redoc", include_in_schema=False)
+async def redoc_html():
+    """
+    ReDoc documentation with enhanced search capabilities.
+    ReDoc provides better search functionality than Swagger UI.
+    """
+    return get_redoc_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} - ReDoc",
+        redoc_js_url="https://cdn.jsdelivr.net/npm/redoc@latest/bundles/redoc.standalone.js",
+    )
 
 # Note: @app.on_event decorators are deprecated in FastAPI.
 # All startup/shutdown logic is now handled by the lifespan context manager above.

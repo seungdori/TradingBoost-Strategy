@@ -45,10 +45,10 @@ router = APIRouter(prefix="/user", tags=["user"])
 ## 사용 시나리오
 
 - 🏢 **관리자 대시보드**: 거래소별 사용자 현황 파악
-- 🔍 **마이그레이션 확인**: 거래소 데이터 마이그레이션 후 사용자 존재 검증
-- 📊 **통계 수집**: 거래소별 활성 사용자 수 집계
-- 🚀 **배포 검증**: 새 거래소 추가 후 사용자 등록 상태 확인
-- 🔧 **디버깅**: 거래소 연동 문제 발생 시 사용자 데이터 존재 여부 확인
+-  **마이그레이션 확인**: 거래소 데이터 마이그레이션 후 사용자 존재 검증
+-  **통계 수집**: 거래소별 활성 사용자 수 집계
+-  **배포 검증**: 새 거래소 추가 후 사용자 등록 상태 확인
+-  **디버깅**: 거래소 연동 문제 발생 시 사용자 데이터 존재 여부 확인
 
 ## 워크플로우
 
@@ -66,7 +66,7 @@ GET /user/exist?exchange_name=upbit
 """,
     responses={
         200: {
-            "description": "✅ 사용자 존재 여부 조회 성공",
+            "description": " 사용자 존재 여부 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -108,7 +108,7 @@ GET /user/exist?exchange_name=upbit
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 유효하지 않은 거래소 이름",
+            "description": " 잘못된 요청 - 유효하지 않은 거래소 이름",
             "content": {
                 "application/json": {
                     "examples": {
@@ -154,7 +154,7 @@ GET /user/exist?exchange_name=upbit
             }
         },
         500: {
-            "description": "💥 서버 오류 - Redis 연결 실패",
+            "description": " 서버 오류 - Redis 연결 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -278,9 +278,9 @@ async def check_user_exist_route(
 
 - 👤 **프로필 조회**: 사용자 자신의 계정 정보 확인
 - 🔑 **API 키 확인**: 등록된 거래소 API 키 상태 검증
-- 🔧 **관리자 도구**: 특정 사용자 정보 확인 및 문제 해결
-- 📊 **데이터 동기화**: 사용자 정보 기반 거래 설정 로드
-- 🚨 **감사 로그**: 사용자 활동 추적 시 정보 조회
+-  **관리자 도구**: 특정 사용자 정보 확인 및 문제 해결
+-  **데이터 동기화**: 사용자 정보 기반 거래 설정 로드
+-  **감사 로그**: 사용자 활동 추적 시 정보 조회
 
 ## 워크플로우
 
@@ -299,13 +299,13 @@ GET /user/test_user?exchange_name=upbit
 ## 보안 고려사항
 
 - 🔐 **인증 필요**: 실제 운영 환경에서는 JWT 토큰 등 인증 메커니즘 필수
-- 🛡️ **권한 검증**: 본인 또는 관리자만 조회 가능하도록 권한 체크 필요
-- 🔒 **API 키 암호화**: API 키와 시크릿은 AES-256으로 암호화되어 저장
-- 📝 **감사 로깅**: 사용자 정보 조회 시 로그 기록으로 추적 가능
+-  **권한 검증**: 본인 또는 관리자만 조회 가능하도록 권한 체크 필요
+-  **API 키 암호화**: API 키와 시크릿은 AES-256으로 암호화되어 저장
+-  **감사 로깅**: 사용자 정보 조회 시 로그 기록으로 추적 가능
 """,
     responses={
         200: {
-            "description": "✅ 사용자 정보 조회 성공",
+            "description": " 사용자 정보 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -348,7 +348,7 @@ GET /user/test_user?exchange_name=upbit
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 유효하지 않은 파라미터",
+            "description": " 잘못된 요청 - 유효하지 않은 파라미터",
             "content": {
                 "application/json": {
                     "examples": {
@@ -385,7 +385,7 @@ GET /user/test_user?exchange_name=upbit
             }
         },
         404: {
-            "description": "🔍 사용자를 찾을 수 없음",
+            "description": " 사용자를 찾을 수 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -441,7 +441,7 @@ GET /user/test_user?exchange_name=upbit
             }
         },
         500: {
-            "description": "💥 서버 오류 - Redis 연결 실패",
+            "description": " 서버 오류 - Redis 연결 실패",
             "content": {
                 "application/json": {
                     "examples": {

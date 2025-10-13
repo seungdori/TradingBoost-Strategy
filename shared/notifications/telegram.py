@@ -9,13 +9,28 @@
 import asyncio
 import json
 import logging
+import os
 import time
 from enum import Enum
 from typing import Any
 
 import aiohttp
 
+from shared.config import OWNER_ID
+
 logger = logging.getLogger(__name__)
+
+
+def _resolve_debug_chat_id() -> str | None:
+    """DEBUG 전송용 텔레그램 ID를 환경 변수 또는 설정에서 조회"""
+    env_debug_id = os.getenv("DEBUG_TELEGRAM_ID")
+    if env_debug_id and env_debug_id.strip():
+        return env_debug_id.strip()
+
+    if OWNER_ID:
+        return str(OWNER_ID)
+
+    return None
 
 
 class MessageType(str, Enum):
@@ -311,6 +326,13 @@ async def get_telegram_id(
         logger.debug(f"식별자를 Telegram ID로 간주: {identifier}")
         return int(identifier)
 
+    if not order_backend_url:
+        logger.warning(
+            "ORDER_BACKEND가 설정되지 않아 OKX UID를 텔레그램 ID로 변환할 수 없습니다: %s",
+            identifier,
+        )
+        return None
+
     # 12글자 이상이면 okx_uid로 간주하고 텔레그램 ID 조회
     try:
         api_url = f"/api/user/okx/{identifier}/telegram"
@@ -479,21 +501,36 @@ async def send_telegram_message(
     Returns:
         bool: 성공 여부
     """
+    original_identifier = str(okx_uid)
+    target_identifier = original_identifier
+    message_to_send = message
+
+    if debug:
+        debug_chat_id = _resolve_debug_chat_id()
+        if not debug_chat_id:
+            logger.error("디버그 텔레그램 ID가 설정되지 않아 메시지를 전송할 수 없습니다.")
+            return False
+
+        target_identifier = str(debug_chat_id)
+
+        if original_identifier != target_identifier:
+            message_to_send = f"[debug::{original_identifier}] {message}"
+
     if use_queue:
         # 큐에 메시지 추가
-        success = await enqueue_telegram_message(message, okx_uid, redis_client, debug)
+        success = await enqueue_telegram_message(message_to_send, target_identifier, redis_client, debug)
         if success:
             # 큐 처리 시작 (백그라운드 태스크)
             asyncio.create_task(
-                process_telegram_messages(okx_uid, redis_client, bot_token, order_backend_url, debug)
+                process_telegram_messages(target_identifier, redis_client, bot_token, order_backend_url, debug)
             )
         return success
     else:
         # 직접 전송
-        telegram_id = await get_telegram_id(okx_uid, redis_client, order_backend_url)
+        telegram_id = await get_telegram_id(target_identifier, redis_client, order_backend_url)
         if not telegram_id and not debug:
-            logger.error(f"텔레그램 ID를 찾을 수 없습니다: {okx_uid}")
+            logger.error(f"텔레그램 ID를 찾을 수 없습니다: {original_identifier}")
             return False
 
         notifier = TelegramNotifier(bot_token, str(telegram_id))
-        return await notifier.send_message(message, chat_id=str(telegram_id))
+        return await notifier.send_message(message_to_send, chat_id=str(telegram_id))

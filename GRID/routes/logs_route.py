@@ -104,11 +104,11 @@ def convert_date_to_timestamp(date_str: str | None) -> float | None:
 
 ## 사용 시나리오
 
-- 📊 **거래 활동 분석**: 일별/주별/월별 거래량 추이 확인
-- 💰 **수수료 계산**: 거래량 기반 수수료 할인 조건 확인
-- 📈 **거래 패턴 파악**: 활발한 거래 시간대 분석
+-  **거래 활동 분석**: 일별/주별/월별 거래량 추이 확인
+-  **수수료 계산**: 거래량 기반 수수료 할인 조건 확인
+-  **거래 패턴 파악**: 활발한 거래 시간대 분석
 - 📋 **리포트 생성**: 거래 활동 리포트 작성
-- 🎯 **전략 평가**: 거래 빈도 및 규모 검토
+-  **전략 평가**: 거래 빈도 및 규모 검토
 
 ## 예시 URL
 
@@ -120,7 +120,7 @@ GET /logs/trading_volumes?user_id=12345&start_date=2025-01-01&end_date=2025-01-3
 """,
     responses={
         200: {
-            "description": "✅ 거래량 조회 성공",
+            "description": " 거래량 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -158,7 +158,7 @@ GET /logs/trading_volumes?user_id=12345&start_date=2025-01-01&end_date=2025-01-3
             }
         },
         400: {
-            "description": "❌ 잘못된 요청",
+            "description": " 잘못된 요청",
             "content": {
                 "application/json": {
                     "examples": {
@@ -185,7 +185,7 @@ GET /logs/trading_volumes?user_id=12345&start_date=2025-01-01&end_date=2025-01-3
             }
         },
         404: {
-            "description": "🔍 사용자 없음",
+            "description": " 사용자 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -200,7 +200,7 @@ GET /logs/trading_volumes?user_id=12345&start_date=2025-01-01&end_date=2025-01-3
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -297,10 +297,10 @@ async def get_trading_volumes(
 
 ## 사용 시나리오
 
-- 📊 **월별 거래량 집계**: 월간 거래 활동 분석
-- 💰 **수수료 할인 조건 확인**: VIP 등급 조건 충족 여부 검증
-- 📈 **분기별 리포트**: 분기 실적 집계 및 리포트 생성
-- 🎯 **거래 목표 달성률**: 설정한 거래량 목표 대비 달성률 확인
+-  **월별 거래량 집계**: 월간 거래 활동 분석
+-  **수수료 할인 조건 확인**: VIP 등급 조건 충족 여부 검증
+-  **분기별 리포트**: 분기 실적 집계 및 리포트 생성
+-  **거래 목표 달성률**: 설정한 거래량 목표 대비 달성률 확인
 - 📋 **세무 신고 자료**: 거래량 기반 세무 신고 자료 준비
 
 ## 예시 URL
@@ -313,7 +313,7 @@ GET /logs/total_trading_volume?user_id=12345&symbol=SOL/USDT&exchange_name=binan
 """,
     responses={
         200: {
-            "description": "✅ 총 거래량 조회 성공",
+            "description": " 총 거래량 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -352,7 +352,7 @@ GET /logs/total_trading_volume?user_id=12345&symbol=SOL/USDT&exchange_name=binan
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 날짜 형식 또는 범위 오류",
+            "description": " 잘못된 요청 - 날짜 형식 또는 범위 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -379,7 +379,7 @@ GET /logs/total_trading_volume?user_id=12345&symbol=SOL/USDT&exchange_name=binan
             }
         },
         404: {
-            "description": "🔍 사용자 또는 심볼을 찾을 수 없음",
+            "description": " 사용자 또는 심볼을 찾을 수 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -415,7 +415,7 @@ GET /logs/total_trading_volume?user_id=12345&symbol=SOL/USDT&exchange_name=binan
             }
         },
         500: {
-            "description": "💥 서버 오류 - Redis 연결 실패",
+            "description": " 서버 오류 - Redis 연결 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -501,11 +501,11 @@ async def get_total_trading_volume(
 
 ## 사용 시나리오
 
-- 💰 **수익률 분석**: 일별/주별/월별 수익 추이 분석
-- 📊 **거래 성과 평가**: 전략별 손익 비교 및 성과 측정
-- 📈 **포트폴리오 관리**: 심볼별 수익 기여도 분석
+-  **수익률 분석**: 일별/주별/월별 수익 추이 분석
+-  **거래 성과 평가**: 전략별 손익 비교 및 성과 측정
+-  **포트폴리오 관리**: 심볼별 수익 기여도 분석
 - 💼 **세금 계산 자료**: 실현 손익 기반 양도소득세 계산
-- 🎯 **목표 달성 추적**: 수익 목표 대비 달성률 모니터링
+-  **목표 달성 추적**: 수익 목표 대비 달성률 모니터링
 
 ## 예시 URL
 
@@ -518,7 +518,7 @@ GET /logs/trading_pnl?user_id=12345&symbol=ETH/USDT&exchange_name=binance
 """,
     responses={
         200: {
-            "description": "✅ 손익 조회 성공",
+            "description": " 손익 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -563,7 +563,7 @@ GET /logs/trading_pnl?user_id=12345&symbol=ETH/USDT&exchange_name=binance
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 날짜 형식 오류",
+            "description": " 잘못된 요청 - 날짜 형식 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -584,7 +584,7 @@ GET /logs/trading_pnl?user_id=12345&symbol=ETH/USDT&exchange_name=binance
             }
         },
         404: {
-            "description": "🔍 사용자 없음",
+            "description": " 사용자 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -599,7 +599,7 @@ GET /logs/trading_pnl?user_id=12345&symbol=ETH/USDT&exchange_name=binance
             }
         },
         500: {
-            "description": "💥 서버 오류 - Redis 연결 실패",
+            "description": " 서버 오류 - Redis 연결 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -691,11 +691,11 @@ async def get_trading_pnl(
 
 ## 사용 시나리오
 
-- 💰 **월별 수익 집계**: 월간 실현 손익 합산 및 성과 평가
-- 📊 **분기별 리포트**: 분기 실적 집계 및 투자 보고서 작성
+-  **월별 수익 집계**: 월간 실현 손익 합산 및 성과 평가
+-  **분기별 리포트**: 분기 실적 집계 및 투자 보고서 작성
 - 💼 **세무 신고 자료**: 양도소득세 계산을 위한 연간 실현 손익 집계
-- 🎯 **목표 달성 평가**: 수익 목표 대비 실제 실현 손익 비교
-- 📈 **전략 성과 분석**: 거래 전략별 수익률 및 효율성 평가
+-  **목표 달성 평가**: 수익 목표 대비 실제 실현 손익 비교
+-  **전략 성과 분석**: 거래 전략별 수익률 및 효율성 평가
 
 ## 예시 URL
 
@@ -707,7 +707,7 @@ GET /logs/total_trading_pnl?user_id=12345&symbol=SOL/USDT&exchange_name=binance
 """,
     responses={
         200: {
-            "description": "✅ 총 손익 조회 성공",
+            "description": " 총 손익 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -746,7 +746,7 @@ GET /logs/total_trading_pnl?user_id=12345&symbol=SOL/USDT&exchange_name=binance
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 날짜 형식 또는 범위 오류",
+            "description": " 잘못된 요청 - 날짜 형식 또는 범위 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -767,7 +767,7 @@ GET /logs/total_trading_pnl?user_id=12345&symbol=SOL/USDT&exchange_name=binance
             }
         },
         404: {
-            "description": "🔍 사용자 또는 심볼을 찾을 수 없음",
+            "description": " 사용자 또는 심볼을 찾을 수 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -803,7 +803,7 @@ GET /logs/total_trading_pnl?user_id=12345&symbol=SOL/USDT&exchange_name=binance
             }
         },
         500: {
-            "description": "💥 서버 오류 - Redis 연결 실패",
+            "description": " 서버 오류 - Redis 연결 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -878,7 +878,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
     ws.onmessage = (event) => console.log(event.data);
     ```
     """
-    print('⚡️⚡️😈 : ', user_id)
+    print('️️😈 : ', user_id)
     user_id_int = int(user_id)
     await manager.connect(websocket, user_id_int)
     try:
@@ -889,7 +889,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
     except WebSocketDisconnect:
         await manager.disconnect(websocket, user_id_int)
     except Exception as e:
-        logging.error(f"🚨 [ERROR] WebSocket error for user {user_id}: {str(e)}")
+        logging.error(f" [ERROR] WebSocket error for user {user_id}: {str(e)}")
         await manager.disconnect(websocket, user_id_int)
 
 @router.post(
@@ -1017,7 +1017,7 @@ async def get_connected_users() -> ConnectedUsersResponse:
             count=len(connected_users)
         )
     except Exception as e:
-        logging.error(f"🚨 [ERROR] Failed to get connected users: {str(e)}")
+        logging.error(f" [ERROR] Failed to get connected users: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail="Failed to retrieve connected users"
@@ -1054,12 +1054,12 @@ async def add_log_endpoint(
         user_id_int = int(user_id) if isinstance(user_id, str) else user_id
 
         # 로깅 시작
-        logging.info(f"📝 [LOG] Adding message for user {user_id}: {log_message}")
+        logging.info(f" [LOG] Adding message for user {user_id}: {log_message}")
 
         # 사용자 존재 여부 확인
         user_exists = await check_user_exists(user_id)
         if not user_exists:
-            logging.warning(f"⚠️ [WARNING] User {user_id} not found")
+            logging.warning(f" [WARNING] User {user_id} not found")
             raise HTTPException(
                 status_code=404,
                 detail=f"User {user_id} not found"
@@ -1079,9 +1079,9 @@ async def add_log_endpoint(
         # Redis에 메시지 저장
         try:
             await manager.add_user_message(user_id_int, formatted_message)
-            logging.info(f"✅ [SUCCESS] Message saved for user {user_id}")
+            logging.info(f" [SUCCESS] Message saved for user {user_id}")
         except Exception as redis_error:
-            logging.error(f"🚨 [ERROR] Redis operation failed: {str(redis_error)}")
+            logging.error(f" [ERROR] Redis operation failed: {str(redis_error)}")
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to save message: {str(redis_error)}"
@@ -1092,7 +1092,7 @@ async def add_log_endpoint(
             await manager.send_message_to_user(user_id_int, formatted_message)
             logging.info(f"📢 [BROADCAST] Message sent to user {user_id}")
         except Exception as ws_error:
-            logging.warning(f"⚠️ [WARNING] Failed to broadcast message: {str(ws_error)}")
+            logging.warning(f" [WARNING] Failed to broadcast message: {str(ws_error)}")
             # 웹소켓 전송 실패는 경고로 처리하고 계속 진행
 
         # 응답 생성
@@ -1112,7 +1112,7 @@ async def add_log_endpoint(
     except Exception as e:
         # 예상치 못한 오류
         error_msg = f"Unexpected error processing log message: {str(e)}"
-        logging.error(f"🚨 [ERROR] {error_msg}")
+        logging.error(f" [ERROR] {error_msg}")
         raise HTTPException(
             status_code=500,
             detail=error_msg
@@ -1147,10 +1147,10 @@ async def get_user_connection_status(user_id: int | str) -> dict[str, Any]:
     try:
         user_id_int = int(user_id) if isinstance(user_id, str) else user_id
         status = await manager.get_connection_status(user_id_int)
-        logging.info(f"📊 Connection status for user {user_id}: {status}")
+        logging.info(f" Connection status for user {user_id}: {status}")
         return status
     except Exception as e:
-        logging.error(f"🚨 [ERROR] Failed to get user status: {str(e)}")
+        logging.error(f" [ERROR] Failed to get user status: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get status for user {user_id}"

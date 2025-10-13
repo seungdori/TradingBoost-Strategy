@@ -10,33 +10,41 @@ async def get_symbol_status(user_id: str, symbol: str) -> str:
     """
     사용자의 특정 심볼에 대한 트레이딩 상태를 반환합니다.
     """
+
+    redis = await get_redis_client()
     key = f"user:{user_id}:trading:status"
-    result = await get_redis_client().get(key)
+    result = await redis.get(key)
     return str(result) if result else ""
 
 async def set_symbol_status(user_id: str, symbol: str, status: str) -> None:
     """
     사용자의 특정 심볼에 대한 트레이딩 상태를 설정합니다.
     """
+
+    redis = await get_redis_client()
     key = f"user:{user_id}:{symbol}:status"
-    await get_redis_client().set(key, status)
+    await redis.set(key, status)
     
     
 async def get_all_symbol_statuses(user_id: str) -> dict:
     """
     사용자의 모든 심볼에 대한 트레이딩 상태를 반환합니다.
     """
+
+    redis = await get_redis_client()
     key = f"user:{user_id}:*:status"
-    keys = await get_redis_client().keys(key)
-    return {k: await get_redis_client().get(k) for k in keys} if keys else {}
+    keys = await redis.keys(key)
+    return {k: await redis.get(k) for k in keys} if keys else {}
 
 
 async def get_universal_status(user_id: str, symbol: str = "BTC-USDT-SWAP") -> str:
     """
     사용자의 기본 심볼에 대한 트레이딩 상태를 반환합니다.
     """
+
+    redis = await get_redis_client()
     key = f"user:{user_id}:trading:status"
-    result = await get_redis_client().get(key)
+    result = await redis.get(key)
     return str(result) if result else ""
 
 async def check_is_running(user_id: str, symbol: str = "BTC-USDT-SWAP") -> bool:

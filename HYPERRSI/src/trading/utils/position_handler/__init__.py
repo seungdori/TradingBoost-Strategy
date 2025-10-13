@@ -89,7 +89,7 @@ async def handle_existing_position(
         - Updates Redis position state
         - Sends Telegram notifications
     """
-    redis_client = get_redis_client()
+    redis = await get_redis_client()
 
     try:
         # ========================================================================
@@ -106,22 +106,22 @@ async def handle_existing_position(
                 user_id=user_id,
                 symbol=symbol
             )
-            side = await redis_client.get(main_position_direction_key)
+            side = await redis.get(main_position_direction_key)
             if side is None or side == "any":
                 side = current_position.side
-                await redis_client.set(main_position_direction_key, side)
+                await redis.set(main_position_direction_key, side)
 
         size = current_position.size
         entry_price = current_position.entry_price
 
         # Get or recalculate initial position size
         position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side)
-        initial_position_size = await redis_client.hget(position_key, "initial_size")
+        initial_position_size = await redis.hget(position_key, "initial_size")
 
         initial_investment = get_investment_amount(settings, symbol)
 
         if initial_position_size is None:
-            initial_position_size = await redis_client.get(
+            initial_position_size = await redis.get(
                 f"user:{user_id}:position:{symbol}:{side}:initial_size"
             )
             if initial_position_size is None:
@@ -137,11 +137,11 @@ async def handle_existing_position(
                     initial_position_size = contract_info['contracts_amount']
 
                     # Store in Redis
-                    await redis_client.set(
+                    await redis.set(
                         f"user:{user_id}:position:{symbol}:{side}:initial_size",
                         initial_position_size
                     )
-                    await redis_client.hset(
+                    await redis.hset(
                         f"user:{user_id}:position:{symbol}:{side}",
                         "initial_size",
                         initial_position_size
@@ -151,22 +151,22 @@ async def handle_existing_position(
                     logger.error(f"0 종목 종목 종목 종목(: {str(e)}")
                     initial_position_size = float(size)
                     print(f"[{user_id}] 0 종목 종목 종목 종목(, 현재 포지션 크기 사용: {initial_position_size}")
-                    await redis_client.set(
+                    await redis.set(
                         f"user:{user_id}:position:{symbol}:{side}:initial_size",
                         initial_position_size
                     )
-                    await redis_client.hset(
+                    await redis.hset(
                         f"user:{user_id}:position:{symbol}:{side}",
                         "initial_size",
                         initial_position_size
                     )
 
         # Get dual-side settings
-        use_dual_side_settings = await redis_client.hget(
+        use_dual_side_settings = await redis.hget(
             f"user:{user_id}:dual_side",
             "use_dual_side_entry"
         )
-        trend_close_enabled = await redis_client.hget(
+        trend_close_enabled = await redis.hget(
             f"user:{user_id}:dual_side",
             "dual_side_trend_close"
         )
@@ -179,7 +179,7 @@ async def handle_existing_position(
         # Get ATR value
         tf_str = get_timeframe(timeframe)
         key = f"candles_with_indicators:{symbol}:{tf_str}"
-        candle = await redis_client.lindex(key, -1)
+        candle = await redis.lindex(key, -1)
         if candle:
             candle = json.loads(candle)
             atr_value = max(candle.get('atr14'), current_price * 0.1 * 0.01)

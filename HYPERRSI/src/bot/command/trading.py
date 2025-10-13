@@ -24,9 +24,10 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 from HYPERRSI.src.core.error_handler import log_error
+import os
 
-API_BASE_URL = "/api"
-allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267"]
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000/api")
+allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267","586156710277369942"]
 def is_allowed_user(user_id: Optional[str]) -> bool:
     """허용된 사용자인지 확인"""
     if user_id is None:
@@ -55,11 +56,11 @@ async def get_telegram_id(identifier: str) -> Optional[int]:
     Returns:
         Optional[int]: 텔레그램 ID
     """
-    # 11글자 이하면 telegram_id로 간주
-    if len(identifier) <= 11:
+    # 13자리 미만이면 telegram_id로 간주
+    if len(identifier) < 13:
         return int(identifier)
 
-    # 12글자 이상이면 okx_uid로 간주하고 텔레그램 ID 조회
+    # 13자리 이상이면 okx_uid로 간주하고 텔레그램 ID 조회
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{API_BASE_URL}/user/okx/{identifier}/telegram") as response:
@@ -85,8 +86,9 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> Optional[str]:
         Optional[str]: OKX UID
     """
     try:
+        redis = await get_redis_client()
         # Redis에서 OKX UID 조회
-        okx_uid = await get_redis_client().get(f"user:{telegram_id}:okx_uid")
+        okx_uid = await redis.get(f"user:{telegram_id}:okx_uid")
         if okx_uid:
             # bytes 타입인 경우에만 decode 수행
             if isinstance(okx_uid, bytes):
@@ -101,7 +103,7 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> Optional[str]:
                 okx_uid_result = data.get("okx_uid")
                 if okx_uid_result:
                     # Redis에 저장
-                    await get_redis_client().set(f"user:{telegram_id}:okx_uid", str(okx_uid_result))
+                    await redis.set(f"user:{telegram_id}:okx_uid", str(okx_uid_result))
                     return str(okx_uid_result)
 
         logger.error(f"텔레그램 ID {telegram_id}에 대한 OKX UID를 찾을 수 없습니다.")
@@ -113,11 +115,12 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> Optional[str]:
 @router.message(Command("stop"))
 async def stop_command(message: types.Message) -> None:
     """트레이딩 강제 중지 명령어"""
+    redis = await get_redis_client()
     if message.from_user is None:
         return
     user_id = message.from_user.id
     keys = get_redis_keys(str(user_id))
-    okx_uid_bytes = await get_redis_client().get(f"user:{user_id}:okx_uid")
+    okx_uid_bytes = await redis.get(f"user:{user_id}:okx_uid")
     okx_uid = okx_uid_bytes.decode('utf-8') if isinstance(okx_uid_bytes, bytes) else okx_uid_bytes if okx_uid_bytes else None
     if not is_allowed_user(okx_uid):
         await message.reply("⛔ 접근 권한이 없습니다.")
@@ -131,13 +134,13 @@ async def stop_command(message: types.Message) -> None:
             return
         
         # 현재 상태 확인 (텔레그램 ID와 OKX UID 모두 확인)
-        current_status = await get_redis_client().get(keys['status'])
+        current_status = await redis.get(keys['status'])
         
         # OKX UID가 있는 경우 해당 상태도 확인
         okx_status = None
         if okx_uid:
             okx_keys = get_redis_keys(okx_uid)
-            okx_status = await get_redis_client().get(okx_keys['status'])
+            okx_status = await redis.get(okx_keys['status'])
         
         # 둘 다 running이 아니면 실행 중인 트레이딩이 없음
         if current_status != "running" and (not okx_uid or okx_status != "running"):
@@ -166,6 +169,7 @@ async def stop_command(message: types.Message) -> None:
 @router.callback_query(F.data == "confirm_stop")
 async def confirm_stop(callback: types.CallbackQuery) -> None:
     """트레이딩 중지 확인"""
+    redis = await get_redis_client()
     if not isinstance(callback.message, Message):
         return
     if callback.from_user is None:
@@ -173,22 +177,23 @@ async def confirm_stop(callback: types.CallbackQuery) -> None:
     try:
         user_id = callback.from_user.id
         keys = get_redis_keys(str(user_id))
-        okx_uid_bytes = await get_redis_client().get(f"user:{user_id}:okx_uid")
+        okx_uid_bytes = await redis.get(f"user:{user_id}:okx_uid")
         okx_uid = okx_uid_bytes.decode('utf-8') if isinstance(okx_uid_bytes, bytes) else okx_uid_bytes if okx_uid_bytes else None
         if not is_allowed_user(okx_uid):
+            print("접근 권한 없음. trading.py", okx_uid)
             await callback.message.reply("⛔ 접근 권한이 없습니다.")
             return
         # 텔레그램 ID를 OKX UID로 변환
         okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
         
         # 현재 상태 확인 (텔레그램 ID와 OKX UID 모두 확인)
-        current_status = await get_redis_client().get(keys['status'])
+        current_status = await redis.get(keys['status'])
         
         # OKX UID가 있는 경우 해당 상태도 확인
         okx_status = None
         if okx_uid:
             okx_keys = get_redis_keys(okx_uid)
-            okx_status = await get_redis_client().get(okx_keys['status'])
+            okx_status = await redis.get(okx_keys['status'])
         
         # 둘 다 running이 아니면 실행 중인 트레이딩이 없음
         if current_status != "running" and (not okx_uid or okx_status != "running"):
@@ -244,6 +249,7 @@ async def confirm_stop(callback: types.CallbackQuery) -> None:
         await callback.answer("트레이딩 중지 중 오류가 발생했습니다.")
 
 @router.callback_query(F.data == "cancel_stop")
+
 async def cancel_stop(callback: types.CallbackQuery) -> None:
     """트레이딩 중지 취소"""
     if not isinstance(callback.message, Message):
@@ -265,17 +271,19 @@ async def cancel_stop_return(callback: types.CallbackQuery) -> None:
 @router.message(Command("trade"))
 async def trade_command(message: types.Message) -> None:
     """트레이딩 제어 명령어"""
+    redis = await get_redis_client()
     if message.from_user is None:
         return
     user_id = message.from_user.id
     keys = get_redis_keys(str(user_id))
-    okx_uid_bytes = await get_redis_client().get(f"user:{user_id}:okx_uid")
+    okx_uid_bytes = await redis.get(f"user:{user_id}:okx_uid")
     okx_uid = okx_uid_bytes.decode('utf-8') if isinstance(okx_uid_bytes, bytes) else okx_uid_bytes if okx_uid_bytes else None
     if not is_allowed_user(okx_uid):
-       await message.reply("⛔ 접근 권한이 없습니다.")
-       return
+        print("접근 권한 없음. trading.py", okx_uid)
+        await message.reply("⛔ 접근 권한이 없습니다.")
+        return
     # API 키 확인
-    api_keys = await get_redis_client().hgetall(keys['api_keys'])
+    api_keys = await redis.hgetall(keys['api_keys'])
     if not api_keys:
         await message.reply(
             "API 키 정보가 없습니다.\n"
@@ -287,7 +295,7 @@ async def trade_command(message: types.Message) -> None:
     okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
     
     # 현재 트레이딩 상태 확인 (텔레그램 ID)
-    trading_status = await get_redis_client().get(f"user:{user_id}:trading:status")
+    trading_status = await redis.get(f"user:{user_id}:trading:status")
     
     # 바이트 문자열을 디코딩
     if isinstance(trading_status, bytes):
@@ -297,7 +305,7 @@ async def trade_command(message: types.Message) -> None:
     okx_trading_status = None
     if okx_uid:
         okx_keys = get_redis_keys(okx_uid)
-        okx_trading_status = await get_redis_client().get(okx_keys['status'])
+        okx_trading_status = await redis.get(okx_keys['status'])
         
         # 바이트 문자열을 디코딩
         if isinstance(okx_trading_status, bytes):
@@ -317,7 +325,7 @@ async def trade_command(message: types.Message) -> None:
     #if stop_signal:
     #    is_trading = False
     
-    preference = await get_redis_client().hgetall(f"user:{user_id}:preferences")
+    preference = await redis.hgetall(f"user:{user_id}:preferences")
     selected_symbol = preference.get("symbol")
     selected_timeframe = preference.get("timeframe")
     
@@ -414,7 +422,10 @@ async def trade_command(message: types.Message) -> None:
             reply_markup=keyboard
         )
 @router.callback_query(lambda c: c.data.startswith('select_symbol_'))
+
 async def handle_symbol_selection(callback: types.CallbackQuery) -> None:
+
+    redis = await get_redis_client()
     if not isinstance(callback.message, Message):
         return
     if callback.from_user is None or callback.data is None:
@@ -426,14 +437,14 @@ async def handle_symbol_selection(callback: types.CallbackQuery) -> None:
         symbol = callback.data.replace('select_symbol_', '')
         
         # 선택된 심볼 저장
-        await get_redis_client().set(f"user:{user_id}:selected_symbol", symbol)
+        await redis.set(f"user:{user_id}:selected_symbol", symbol)
         
         preference_key = f"user:{user_id}:preferences"
-        await get_redis_client().hset(preference_key, mapping={
+        await redis.hset(preference_key, mapping={
             "symbol": symbol
         })
         
-        selected_timeframe = await get_redis_client().get(f"user:{user_id}:selected_timeframe")
+        selected_timeframe = await redis.get(f"user:{user_id}:selected_timeframe")
         
         
         
@@ -503,15 +514,16 @@ async def handle_symbol_selection(callback: types.CallbackQuery) -> None:
 @router.callback_query(lambda c: c.data == "back_to_symbol")
 async def handle_back_to_symbol(callback: types.CallbackQuery) -> None:
     """종목 선택으로 돌아가기"""
+    redis = await get_redis_client()
     if not isinstance(callback.message, Message):
         return
     if callback.from_user is None:
         return
     try:
         user_id = callback.from_user.id
-        
+
         # 선택된 심볼 초기화
-        await get_redis_client().delete(f"user:{user_id}:selected_symbol")
+        await redis.delete(f"user:{user_id}:selected_symbol")
 
         # 종목 선택 키보드 생성
         symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]
@@ -540,7 +552,10 @@ async def handle_back_to_symbol(callback: types.CallbackQuery) -> None:
         await callback.answer("오류가 발생했습니다. 다시 시도해주세요.")
 
 @router.callback_query(lambda c: c.data.startswith('select_timeframe_'))
+
 async def handle_timeframe_selection(callback: types.CallbackQuery) -> None:
+
+    redis = await get_redis_client()
     if not isinstance(callback.message, Message):
         return
     if callback.from_user is None or callback.data is None:
@@ -549,11 +564,11 @@ async def handle_timeframe_selection(callback: types.CallbackQuery) -> None:
     timeframe = callback.data.replace('select_timeframe_', '')
     preference_key = f"user:{user_id}:preferences"
 
-    await get_redis_client().set(f"user:{user_id}:selected_timeframe", timeframe)
-    await get_redis_client().hset(preference_key, mapping={
+    await redis.set(f"user:{user_id}:selected_timeframe", timeframe)
+    await redis.hset(preference_key, mapping={
         "timeframe": timeframe
     })
-    selected_symbol = await get_redis_client().get(f"user:{user_id}:selected_symbol")
+    selected_symbol = await redis.get(f"user:{user_id}:selected_symbol")
     
     # 최종 확인 키보드
     keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
@@ -580,6 +595,8 @@ async def handle_timeframe_selection(callback: types.CallbackQuery) -> None:
     )
 @router.callback_query(lambda c: c.data in ["trade_start", "trade_stop"])
 async def handle_trade_callback(callback: types.CallbackQuery) -> None:
+
+    redis = await get_redis_client()
     if not isinstance(callback.message, Message):
         return
     if callback.from_user is None or callback.data is None:
@@ -594,7 +611,7 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
         if action == "start":
             # preference에서 선택된 값을 가져오도록 수정
             preference_key = f"user:{user_id}:preferences"
-            preferences = await get_redis_client().hgetall(preference_key)
+            preferences = await redis.hgetall(preference_key)
             selected_symbol = preferences.get("symbol")
             selected_timeframe = preferences.get("timeframe")
             
@@ -604,7 +621,7 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
                 
             # 선택된 설정을 preferences에 저장
             preference_key = f"user:{user_id}:preferences"
-            await get_redis_client().hset(preference_key, mapping={
+            await redis.hset(preference_key, mapping={
                 "symbol": selected_symbol,
                 "timeframe": selected_timeframe
             })
@@ -622,12 +639,12 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
                 "type": "start"
             }
             
-            await get_redis_client().set(f"user:{user_id}:trading:request", json.dumps(request_body))
+            await redis.set(f"user:{user_id}:trading:request", json.dumps(request_body))
             
             # OKX UID가 있는 경우 해당 설정도 저장
             if okx_uid:
                 okx_preference_key = f"user:{okx_uid}:preferences"
-                await get_redis_client().hset(okx_preference_key, mapping={
+                await redis.hset(okx_preference_key, mapping={
                     "symbol": selected_symbol,
                     "timeframe": selected_timeframe
                 })
@@ -640,11 +657,11 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
                     "type": "start"
                 }
                 
-                await get_redis_client().set(f"user:{okx_uid}:trading:request", json.dumps(okx_request_body))
+                await redis.set(f"user:{okx_uid}:trading:request", json.dumps(okx_request_body))
             
             settings_key = f"user:{user_id}:settings"
             # 먼저 키의 타입을 확인
-            settings_str = await get_redis_client().get(settings_key)
+            settings_str = await redis.get(settings_key)
             settings = json.loads(settings_str) if settings_str else {}
 
             if selected_symbol == "BTC-USDT-SWAP":
@@ -670,10 +687,10 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
                 await callback.message.edit_text(msg)
                 await callback.answer()
                 # 상태를 stopped로 변경
-                await get_redis_client().set(f"user:{user_id}:trading:status", "stopped")
+                await redis.set(f"user:{user_id}:trading:status", "stopped")
                 print("22❤️‍🔥❤️‍🔥❤️‍🔥❤️‍🔥 !!!")
                 if okx_uid:
-                    await get_redis_client().set(f"user:{okx_uid}:trading:status", "stopped")
+                    await redis.set(f"user:{okx_uid}:trading:status", "stopped")
                     print("33❤️‍🔥❤️‍🔥❤️‍🔥❤️‍🔥 !!!")
                 return
             
@@ -702,9 +719,9 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
                 logger.error(f"Error starting trading task: {e}")
                 await callback.answer("트레이딩 시작 중 오류가 발생했습니다.")
                 # 오류 발생 시 상태를 stopped로 변경
-                await get_redis_client().set(f"user:{user_id}:trading:status", "stopped")
+                await redis.set(f"user:{user_id}:trading:status", "stopped")
                 if okx_uid:
-                    await get_redis_client().set(f"user:{okx_uid}:trading:status", "stopped")
+                    await redis.set(f"user:{okx_uid}:trading:status", "stopped")
                 return
             finally:
                 await client.aclose()  # 클라이언트 명시적 종료
@@ -742,28 +759,28 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
             
         elif action == "stop":
             # 트레이딩 중지
-            task_id = await get_redis_client().get(f"user:{user_id}:task_id")
+            task_id = await redis.get(f"user:{user_id}:task_id")
             if task_id:
                 celery_app.control.revoke(task_id, terminate=True)
-                await get_redis_client().delete(f"user:{user_id}:task_id")
+                await redis.delete(f"user:{user_id}:task_id")
     
             # 상태 초기화
-            await get_redis_client().set(f"user:{user_id}:trading:status", "stopped")
+            await redis.set(f"user:{user_id}:trading:status", "stopped")
             print("STOPPED!!!")
-            await get_redis_client().delete(f"user:{user_id}:selected_symbol")
-            await get_redis_client().delete(f"user:{user_id}:selected_timeframe")
+            await redis.delete(f"user:{user_id}:selected_symbol")
+            await redis.delete(f"user:{user_id}:selected_timeframe")
             
             # OKX UID가 있는 경우 해당 상태도 초기화
             if okx_uid:
-                okx_task_id = await get_redis_client().get(f"user:{okx_uid}:task_id")
+                okx_task_id = await redis.get(f"user:{okx_uid}:task_id")
                 if okx_task_id:
                     celery_app.control.revoke(okx_task_id, terminate=True)
-                    await get_redis_client().delete(f"user:{okx_uid}:task_id")
+                    await redis.delete(f"user:{okx_uid}:task_id")
                 
-                await get_redis_client().set(f"user:{okx_uid}:trading:status", "stopped")
+                await redis.set(f"user:{okx_uid}:trading:status", "stopped")
                 print("STOPED WITH OKX UID")
-                await get_redis_client().delete(f"user:{okx_uid}:selected_symbol")
-                await get_redis_client().delete(f"user:{okx_uid}:selected_timeframe")
+                await redis.delete(f"user:{okx_uid}:selected_symbol")
+                await redis.delete(f"user:{okx_uid}:selected_timeframe")
             
             # 종목 선택 화면으로 돌아가기
             symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]
@@ -797,6 +814,7 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
 @router.callback_query(lambda c: c.data == "trade_reset")
 async def handle_reset_callback(callback: types.CallbackQuery) -> None:
     """재설정 처리"""
+    redis = await get_redis_client()
     if not isinstance(callback.message, Message):
         return
     if callback.from_user is None:
@@ -804,12 +822,12 @@ async def handle_reset_callback(callback: types.CallbackQuery) -> None:
     try:
         user_id = callback.from_user.id
         keys = get_redis_keys(str(user_id))
-        await get_redis_client().set(keys['status'], "stopped")
+        await redis.set(keys['status'], "stopped")
         print("RESETED!!!")
         # 선택 초기화
-        await get_redis_client().delete(f"user:{user_id}:selected_symbol")
-        await get_redis_client().delete(f"user:{user_id}:selected_timeframe")
-        await get_redis_client().delete(f"user:{user_id}:preferences")
+        await redis.delete(f"user:{user_id}:selected_symbol")
+        await redis.delete(f"user:{user_id}:selected_timeframe")
+        await redis.delete(f"user:{user_id}:preferences")
         #await callback.message.answer("⛔ 트레이딩이 중지되었습니다.")
         # 선택 화면 직접 생성
         symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]
@@ -866,12 +884,14 @@ async def handle_reset_callback(callback: types.CallbackQuery) -> None:
 @router.message(Command("status"))
 async def status_command(message: types.Message) -> None:
     """현재 트레이딩 상태와 통계 표시"""
+    redis = await get_redis_client()
     if message.from_user is None:
         return
     user_id = message.from_user.id
-    okx_uid_bytes = await get_redis_client().get(f"user:{user_id}:okx_uid")
+    okx_uid_bytes = await redis.get(f"user:{user_id}:okx_uid")
     okx_uid = okx_uid_bytes.decode('utf-8') if isinstance(okx_uid_bytes, bytes) else okx_uid_bytes if okx_uid_bytes else None
     if not is_allowed_user(okx_uid):
+        print("접근 권한 없음. trading.py", okx_uid)
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
     tp_state = 0
@@ -879,11 +899,12 @@ async def status_command(message: types.Message) -> None:
         # 텔레그램 ID를 OKX UID로 변환
         okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
         if not is_allowed_user(okx_uid):
+            print("접근 권한 없음. trading.py", okx_uid)
             await message.reply("⛔ 접근 권한이 없습니다.")
             return
         
         # 1. 기본 트레이딩 상태 확인 (텔레그램 ID)
-        trading_status = await get_redis_client().get(f"user:{user_id}:trading:status")
+        trading_status = await redis.get(f"user:{user_id}:trading:status")
         
         # 바이트 문자열을 디코딩
         if isinstance(trading_status, bytes):
@@ -892,7 +913,7 @@ async def status_command(message: types.Message) -> None:
         # OKX UID가 있는 경우 해당 상태도 확인
         okx_trading_status = None
         if okx_uid:
-            okx_trading_status = await get_redis_client().get(f"user:{okx_uid}:trading:status")
+            okx_trading_status = await redis.get(f"user:{okx_uid}:trading:status")
             
             # 바이트 문자열을 디코딩
             if isinstance(okx_trading_status, bytes):
@@ -903,7 +924,7 @@ async def status_command(message: types.Message) -> None:
 
         # 2. 현재 활성 심볼/타임프레임 조회
         active_key = f"user:{user_id}:preferences"
-        preferences = await get_redis_client().hgetall(active_key)
+        preferences = await redis.hgetall(active_key)
         symbol = preferences.get('symbol', '')
         timeframe = preferences.get('timeframe', '')
 
@@ -924,22 +945,22 @@ async def status_command(message: types.Message) -> None:
                 try:
                     await client.load_markets()
                     positions = await client.fetch_positions([symbol], params={'instType': 'SWAP'})
-                    
+
                     # contracts > 0인 포지션만 필터링
                     active_positions = [pos for pos in positions if float(pos['contracts']) > 0]
                     logger.info(f"Active positions: {active_positions}")
-                    
+
                     for position in active_positions:
                         # Redis에 포지션 정보 저장/업데이트
                         position_key = f"user:{user_id}:position:{symbol}:{position['side']}"
                         dca_count_key = f"user:{user_id}:position:{symbol}:{position['side']}:dca_count"
                         
                         # Redis 키 타입 확인 및 디버깅
-                        key_type = await get_redis_client().type(position_key)
+                        key_type = await redis.type(position_key)
                         existing_data = {}
                         # key_type이 문자열일 수도 있으므로 조건 수정
                         if key_type in [b'hash', 'hash']:
-                            existing_data = await get_redis_client().hgetall(position_key)
+                            existing_data = await redis.hgetall(position_key)
                             
                             # bytes 타입 처리
                             existing_data = {
@@ -1022,16 +1043,39 @@ async def status_command(message: types.Message) -> None:
                         
                         # TP 상태 정보 가져오기
                         position_key = f"user:{user_id}:position:{symbol}:{position['side']}"
-                        position_data = await get_redis_client().hgetall(position_key)
+                        position_data = await redis.hgetall(position_key)
                         if position_data:
                             tp_state = position_data.get('tp_state', '0')
                             # 문자열을 bool로 변환
                             get_tp1 = position_data.get('get_tp1', 'false').lower() == 'true'
                             get_tp2 = position_data.get('get_tp2', 'false').lower() == 'true'
                             get_tp3 = position_data.get('get_tp3', 'false').lower() == 'true'
-                            dca_count = await get_redis_client().get(dca_count_key)
+                            dca_count = await redis.get(dca_count_key)
                             print(f" 상태 출력 ! : {tp_state}, {get_tp1}, {get_tp2}, {get_tp3}, {dca_count}")
-                
+
+                except ccxt.PermissionDenied as e:
+                    # IP 화이트리스트 오류 처리
+                    error_message = str(e)
+                    if "50110" in error_message or "IP whitelist" in error_message:
+                        await message.reply(
+                            "⚠️ API 접근 권한 오류\n"
+                            "─────────────────────\n"
+                            "귀하의 IP 주소가 OKX API 키의 화이트리스트에 등록되어 있지 않습니다.\n\n"
+                            "해결 방법:\n"
+                            "1. OKX 웹사이트에 로그인\n"
+                            "2. API 관리 페이지로 이동\n"
+                            "3. 해당 API 키의 IP 화이트리스트에 현재 IP 주소를 추가\n\n"
+                            f"상세 오류: {error_message}"
+                        )
+                    else:
+                        await message.reply(
+                            f"⚠️ API 접근 권한 오류\n"
+                            f"─────────────────────\n"
+                            f"{error_message}"
+                        )
+                    logger.error(f"PermissionDenied error for user {user_id}: {error_message}")
+                    return
+
                 finally:
                     try:
                         await client.close()
@@ -1048,10 +1092,10 @@ async def status_command(message: types.Message) -> None:
         message_text += "-----------------------------------\n"
         for pos in position_info_list:
             main_position_side_key = f"user:{user_id}:position:{symbol}:main_position_direction"
-            main_position_side = await get_redis_client().get(main_position_side_key)
+            main_position_side = await redis.get(main_position_side_key)
             unrealized_pnl = float(pos['unrealized_pnl'])
             dca_key = f"user:{user_id}:position:{symbol}:{pos['side']}:dca_count"
-            dca_count = await get_redis_client().get(dca_key)
+            dca_count = await redis.get(dca_key)
             pnl_emoji = "📈" if unrealized_pnl > 0 else "📉"
             
             message_text += f"포지션: {pos['side'].upper()}\n\n"
@@ -1111,6 +1155,7 @@ async def status_command(message: types.Message) -> None:
 @router.callback_query(lambda c: c.data.startswith('trade_'))
 async def button_callback(callback: types.CallbackQuery) -> None:
     """인라인 버튼 콜백 처리"""
+    redis = await get_redis_client()
     if not isinstance(callback.message, Message):
         return
     if callback.from_user is None or callback.data is None:
@@ -1126,7 +1171,7 @@ async def button_callback(callback: types.CallbackQuery) -> None:
                 await callback.answer("트레이딩을 시작합니다.")
                 await callback.message.edit_text("자동 트레이딩이 시작되었습니다.")
             elif action == 'stop':
-                await get_redis_client().set(f"user:{user_id}:trading:status", "stopped")
+                await redis.set(f"user:{user_id}:trading:status", "stopped")
                 await callback.answer("트레이딩을 중지합니다.")
                 await callback.message.edit_text("자동 트레이딩이 중지되었습니다.")
         else:
@@ -1139,6 +1184,7 @@ async def button_callback(callback: types.CallbackQuery) -> None:
         
 @router.callback_query(lambda c: c.data == "back_to_timeframe")
 async def handle_back_to_timeframe(callback: types.CallbackQuery) -> None:
+    redis = await get_redis_client()
     if not isinstance(callback.message, Message):
         return
     if callback.from_user is None:
@@ -1146,10 +1192,10 @@ async def handle_back_to_timeframe(callback: types.CallbackQuery) -> None:
     try:
         user_id = callback.from_user.id
         # 기존 선택된 타임프레임 삭제
-        await get_redis_client().delete(f"user:{user_id}:selected_timeframe")
+        await redis.delete(f"user:{user_id}:selected_timeframe")
         
         # 이미 선택된 심볼 가져오기 (없으면 빈 문자열)
-        selected_symbol = await get_redis_client().get(f"user:{user_id}:selected_symbol") or ""
+        selected_symbol = await redis.get(f"user:{user_id}:selected_symbol") or ""
         
         # 타임프레임 옵션 리스트
         timeframes = ['1m', '3m', '5m', '15m', '30m', '1H', '4H']
@@ -1181,12 +1227,14 @@ async def handle_back_to_timeframe(callback: types.CallbackQuery) -> None:
 @router.message(Command("sl"))
 async def sl_command(message: types.Message) -> None:
     """SL 설정 명령어"""
+    redis = await get_redis_client()
     if message.from_user is None or message.text is None:
         return
     user_id = message.from_user.id
-    okx_uid_bytes = await get_redis_client().get(f"user:{user_id}:okx_uid")
+    okx_uid_bytes = await redis.get(f"user:{user_id}:okx_uid")
     okx_uid = okx_uid_bytes.decode('utf-8') if isinstance(okx_uid_bytes, bytes) else okx_uid_bytes if okx_uid_bytes else None
     if not is_allowed_user(okx_uid):
+        print("접근 권한 없음. trading.py", okx_uid)
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
     args = message.text.split()[1:] if len(message.text.split()) > 1 else []
@@ -1226,7 +1274,7 @@ async def sl_command(message: types.Message) -> None:
             
             # 방향에 따라 SL 가격 검증
             position_key = f"user:{user_id}:position:{symbol}:{direction}"
-            position_data = await get_redis_client().hgetall(position_key)
+            position_data = await redis.hgetall(position_key)
             
             if not position_data:
                 await message.reply(f"❌ {symbol}에 {direction} 포지션이 없습니다.")
@@ -1250,8 +1298,8 @@ async def sl_command(message: types.Message) -> None:
                     return
             
             # SL 정보 저장
-            await get_redis_client().hset(position_key, "sl_price", str(sl_price))
-            await get_redis_client().hset(position_key, "sl_triggered", "false")
+            await redis.hset(position_key, "sl_price", str(sl_price))
+            await redis.hset(position_key, "sl_triggered", "false")
             
             # 손실 계산
             loss_percent = 0.0
@@ -1285,7 +1333,7 @@ async def sl_command(message: types.Message) -> None:
             return
         
         position_key = f"user:{user_id}:position:{symbol}:{direction}"
-        position_data = await get_redis_client().hgetall(position_key)
+        position_data = await redis.hgetall(position_key)
         
         if not position_data:
             await message.reply(f"❌ {symbol}에 {direction} 포지션이 없습니다.")
@@ -1347,14 +1395,14 @@ async def sl_command(message: types.Message) -> None:
             return
         
         position_key = f"user:{user_id}:position:{symbol}:{direction}"
-        position_data = await get_redis_client().hgetall(position_key)
+        position_data = await redis.hgetall(position_key)
         
         if not position_data:
             await message.reply(f"❌ {symbol}에 {direction} 포지션이 없습니다.")
             return
         
         # SL 정보 삭제
-        await get_redis_client().hdel(position_key, "sl_price", "sl_triggered")
+        await redis.hdel(position_key, "sl_price", "sl_triggered")
         
         await message.reply(f"✅ {symbol} {direction} 포지션의 스탑로스 설정이 삭제되었습니다.")
         
@@ -1367,10 +1415,11 @@ async def sl_command(message: types.Message) -> None:
 @router.message(Command("tp"))
 async def tp_command(message: types.Message) -> None:
     """TP 설정 명령어"""
+    redis = await get_redis_client()
     if message.from_user is None or message.text is None:
         return
     user_id = message.from_user.id
-    okx_uid_bytes = await get_redis_client().get(f"user:{user_id}:okx_uid")
+    okx_uid_bytes = await redis.get(f"user:{user_id}:okx_uid")
     okx_uid = okx_uid_bytes.decode('utf-8') if isinstance(okx_uid_bytes, bytes) else okx_uid_bytes if okx_uid_bytes else None
     if not is_allowed_user(okx_uid):
         await message.reply("⛔ 접근 권한이 없습니다.")
@@ -1419,7 +1468,7 @@ async def tp_command(message: types.Message) -> None:
             
             # 방향에 따라 TP 가격 검증
             position_key = f"user:{user_id}:position:{symbol}:{direction}"
-            position_data = await get_redis_client().hgetall(position_key)
+            position_data = await redis.hgetall(position_key)
             
             if not position_data:
                 await message.reply(f"❌ {symbol}에 {direction} 포지션이 없습니다.")
@@ -1455,9 +1504,9 @@ async def tp_command(message: types.Message) -> None:
             # TP 정보 저장
             tp_hit_status = [False] * len(tp_prices)
             
-            await get_redis_client().hset(position_key, "tp_prices", json.dumps(tp_prices))
-            await get_redis_client().hset(position_key, "tp_sizes", json.dumps(tp_sizes))
-            await get_redis_client().hset(position_key, "tp_hit_status", json.dumps(tp_hit_status))
+            await redis.hset(position_key, "tp_prices", json.dumps(tp_prices))
+            await redis.hset(position_key, "tp_sizes", json.dumps(tp_sizes))
+            await redis.hset(position_key, "tp_hit_status", json.dumps(tp_hit_status))
             
             # 응답 메시지
             response = (
@@ -1484,7 +1533,7 @@ async def tp_command(message: types.Message) -> None:
             return
         
         position_key = f"user:{user_id}:position:{symbol}:{direction}"
-        position_data = await get_redis_client().hgetall(position_key)
+        position_data = await redis.hgetall(position_key)
         
         if not position_data:
             await message.reply(f"❌ {symbol}에 {direction} 포지션이 없습니다.")
@@ -1549,14 +1598,14 @@ async def tp_command(message: types.Message) -> None:
             return
         
         position_key = f"user:{user_id}:position:{symbol}:{direction}"
-        position_data = await get_redis_client().hgetall(position_key)
+        position_data = await redis.hgetall(position_key)
         
         if not position_data:
             await message.reply(f"❌ {symbol}에 {direction} 포지션이 없습니다.")
             return
         
         # TP 정보 삭제
-        await get_redis_client().hdel(position_key, "tp_prices", "tp_sizes", "tp_hit_status")
+        await redis.hdel(position_key, "tp_prices", "tp_sizes", "tp_hit_status")
         
         await message.reply(f"✅ {symbol} {direction} 포지션의 모든 TP 설정이 삭제되었습니다.")
         

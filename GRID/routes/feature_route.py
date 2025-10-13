@@ -84,10 +84,10 @@ async def get_redis_connection() -> aioredis.Redis:
 ## 사용 시나리오
 
 **권장 사용 케이스:**
-- 🔄 **복구 모드와 함께 사용**: `/recovery_mode` 호출 전에 실행
+-  **복구 모드와 함께 사용**: `/recovery_mode` 호출 전에 실행
 - 📋 **서버 점검 전**: 데이터 손실 방지를 위한 백업
 - ⏰ **정기적인 백업**: 크론잡으로 주기적 실행 (예: 매 10분)
-- 🛠️ **수동 백업**: 중요한 작업 전 수동으로 실행
+-  **수동 백업**: 중요한 작업 전 수동으로 실행
 
 ## 지원 거래소
 
@@ -116,7 +116,7 @@ async def get_redis_connection() -> aioredis.Redis:
 """,
     responses={
         200: {
-            "description": "✅ 심볼 정보 저장 성공",
+            "description": " 심볼 정보 저장 성공",
             "content": {
                 "application/json": {
                     "example": {
@@ -134,7 +134,7 @@ async def get_redis_connection() -> aioredis.Redis:
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -168,7 +168,7 @@ async def get_redis_connection() -> aioredis.Redis:
             }
         },
         503: {
-            "description": "🔧 서비스 이용 불가",
+            "description": " 서비스 이용 불가",
             "content": {
                 "application/json": {
                     "examples": {
@@ -320,19 +320,19 @@ async def restart_single_user(exchange_id: str, user_id: int, request_body_str: 
 ## 사용 시나리오
 
 **운영 시나리오:**
-- ✅ **서버 다운 후 복구**: 예상치 못한 서버 다운 후 모든 봇 일괄 복원
-- ✅ **업데이트 배포**: 코드 업데이트 후 모든 봇 재시작 필요 시
-- ✅ **오류 복구**: 시스템 오류로 일부 봇이 멈춘 경우 일괄 복구
-- ✅ **설정 변경 적용**: Redis 설정 변경 후 즉시 반영 필요 시
-- ✅ **WebSocket 재연결**: WebSocket 연결 문제 발생 시
+-  **서버 다운 후 복구**: 예상치 못한 서버 다운 후 모든 봇 일괄 복원
+-  **업데이트 배포**: 코드 업데이트 후 모든 봇 재시작 필요 시
+-  **오류 복구**: 시스템 오류로 일부 봇이 멈춘 경우 일괄 복구
+-  **설정 변경 적용**: Redis 설정 변경 후 즉시 반영 필요 시
+-  **WebSocket 재연결**: WebSocket 연결 문제 발생 시
 
-## ⚠️ 중요 경고
+##  중요 경고
 
 **관리자 전용 작업:**
-- 🚨 **모든 사용자에게 영향**: 실행 중인 모든 봇이 재시작됩니다
-- 🚨 **포지션 유지**: 기존 포지션은 그대로 유지되며 거래 계속됩니다
-- 🚨 **일시적 중단**: 재시작 중 3-10초간 거래 중단됩니다
-- 🚨 **관리자 권한 필요**: 프로덕션 환경에서는 인증 필수
+-  **모든 사용자에게 영향**: 실행 중인 모든 봇이 재시작됩니다
+-  **포지션 유지**: 기존 포지션은 그대로 유지되며 거래 계속됩니다
+-  **일시적 중단**: 재시작 중 3-10초간 거래 중단됩니다
+-  **관리자 권한 필요**: 프로덕션 환경에서는 인증 필수
 
 **권장 사용 시간:**
 - 한국 시간 기준 새벽 3-4시 (거래량 낮은 시간)
@@ -354,7 +354,7 @@ async def restart_single_user(exchange_id: str, user_id: int, request_body_str: 
 """,
     responses={
         200: {
-            "description": "✅ 재시작 성공",
+            "description": " 재시작 성공",
             "content": {
                 "application/json": {
                     "example": {
@@ -372,7 +372,7 @@ async def restart_single_user(exchange_id: str, user_id: int, request_body_str: 
             }
         },
         207: {
-            "description": "⚠️ 부분 성공 - 일부 봇 재시작 실패",
+            "description": " 부분 성공 - 일부 봇 재시작 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -398,7 +398,7 @@ async def restart_single_user(exchange_id: str, user_id: int, request_body_str: 
             }
         },
         400: {
-            "description": "❌ 요청 실패 - 설정 오류",
+            "description": " 요청 실패 - 설정 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -429,7 +429,7 @@ async def restart_single_user(exchange_id: str, user_id: int, request_body_str: 
             }
         },
         500: {
-            "description": "💥 서버 오류 - 재시작 실패",
+            "description": " 서버 오류 - 재시작 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -462,7 +462,7 @@ async def restart_single_user(exchange_id: str, user_id: int, request_body_str: 
             }
         },
         503: {
-            "description": "🔧 서비스 이용 불가",
+            "description": " 서비스 이용 불가",
             "content": {
                 "application/json": {
                     "examples": {
@@ -609,7 +609,7 @@ async def restart_running_bots(request: Request) -> ResponseDto[None]:
 }
 ```
 
-## ⚠️ 주의사항
+##  주의사항
 
 - 봇 시작 전 API 키 권한 확인 필수 (거래, 읽기 권한 필요)
 - 레버리지가 높을수록 청산 리스크 증가
@@ -619,7 +619,7 @@ async def restart_running_bots(request: Request) -> ResponseDto[None]:
 """,
     responses={
         200: {
-            "description": "✅ 봇 시작 성공",
+            "description": " 봇 시작 성공",
             "content": {
                 "application/json": {
                     "example": {
@@ -639,7 +639,7 @@ async def restart_running_bots(request: Request) -> ResponseDto[None]:
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 파라미터 오류 또는 봇 이미 실행 중",
+            "description": " 잘못된 요청 - 파라미터 오류 또는 봇 이미 실행 중",
             "content": {
                 "application/json": {
                     "examples": {
@@ -693,7 +693,7 @@ async def restart_running_bots(request: Request) -> ResponseDto[None]:
             }
         },
         401: {
-            "description": "🔒 인증 실패 - API 키 오류",
+            "description": " 인증 실패 - API 키 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -772,7 +772,7 @@ async def restart_running_bots(request: Request) -> ResponseDto[None]:
             }
         },
         422: {
-            "description": "❌ 처리 불가 - 잔고 부족 또는 시장 조건 부적합",
+            "description": " 처리 불가 - 잔고 부족 또는 시장 조건 부적합",
             "content": {
                 "application/json": {
                     "examples": {
@@ -819,7 +819,7 @@ async def restart_running_bots(request: Request) -> ResponseDto[None]:
             }
         },
         500: {
-            "description": "💥 서버 오류 - 내부 처리 실패",
+            "description": " 서버 오류 - 내부 처리 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -864,7 +864,7 @@ async def restart_running_bots(request: Request) -> ResponseDto[None]:
             }
         },
         503: {
-            "description": "🔧 서비스 이용 불가 - 거래소 또는 시스템 점검 중",
+            "description": " 서비스 이용 불가 - 거래소 또는 시스템 점검 중",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1021,7 +1021,7 @@ async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: Ba
             grid_num, leverage, stop_loss, user_id, custom_stop, telegram_id,force_restart
         )
         await redis.hset(f"{exchange_name}:user:{user_id}", 'is_stopped', '0')
-        print('🍏🔹😇👆',job_id)
+        print('',job_id)
 
         updated_state: BotStateDto = await bot_state_service.set_bot_state(
             new_state=BotStateDto(
@@ -1101,15 +1101,15 @@ async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: Ba
 ## 주문 취소 범위
 
 **취소되는 주문:**
-- ✅ 대기 중인 지정가 주문 (limit orders)
-- ✅ 부분 체결된 주문의 미체결 부분
+-  대기 중인 지정가 주문 (limit orders)
+-  부분 체결된 주문의 미체결 부분
 
 **취소되지 않는 주문:**
-- ❌ 이미 체결 완료된 주문
-- ❌ 시장가 주문 (즉시 체결됨)
-- ❌ 다른 거래소의 주문
+-  이미 체결 완료된 주문
+-  시장가 주문 (즉시 체결됨)
+-  다른 거래소의 주문
 
-## ⚠️ 주의사항
+##  주의사항
 
 **Best-Effort 방식:**
 - 취소 실패 시에도 `True` 반환 (best-effort)
@@ -1136,7 +1136,7 @@ POST /cancel_all_limit_orders?exchange_name=okx&user_id=0000
 """,
     responses={
         200: {
-            "description": "✅ 주문 취소 시도 완료",
+            "description": " 주문 취소 시도 완료",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1153,7 +1153,7 @@ POST /cancel_all_limit_orders?exchange_name=okx&user_id=0000
             }
         },
         400: {
-            "description": "❌ 요청 오류",
+            "description": " 요청 오류",
             "content": {
                 "application/json": {
                     "example": False
@@ -1161,7 +1161,7 @@ POST /cancel_all_limit_orders?exchange_name=okx&user_id=0000
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "example": False
@@ -1229,9 +1229,9 @@ async def cancel_all_limit_orders(exchange_name='okx' ,user_id=0000) :
 
 **권장 사용 케이스:**
 - 📋 **계획된 서버 점검**: 점검 시작 전 데이터 백업
-- 🔄 **업데이트 배포**: 새 버전 배포 전 상태 저장
-- ⚡ **긴급 재시작**: 예기치 않은 문제로 재시작 필요 시
-- 🛠️ **인프라 작업**: Redis 또는 데이터베이스 유지보수 전
+-  **업데이트 배포**: 새 버전 배포 전 상태 저장
+-  **긴급 재시작**: 예기치 않은 문제로 재시작 필요 시
+-  **인프라 작업**: Redis 또는 데이터베이스 유지보수 전
 
 ## 복구 플래그와 TTL
 
@@ -1257,7 +1257,7 @@ async def cancel_all_limit_orders(exchange_name='okx' ,user_id=0000) :
 """,
     responses={
         200: {
-            "description": "✅ 복구 모드 활성화 성공",
+            "description": " 복구 모드 활성화 성공",
             "content": {
                 "application/json": {
                     "example": {
@@ -1273,7 +1273,7 @@ async def cancel_all_limit_orders(exchange_name='okx' ,user_id=0000) :
             }
         },
         400: {
-            "description": "❌ 활성화 실패 - 파라미터 오류",
+            "description": " 활성화 실패 - 파라미터 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1293,7 +1293,7 @@ async def cancel_all_limit_orders(exchange_name='okx' ,user_id=0000) :
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1352,10 +1352,10 @@ async def recovery_mode(exchange_name='okx', ttl = 600):
 - **enter_strategy** (string): 진입 전략 (`long`, `short`, `long-short`)
 - **user_id** (integer): 사용자 ID
 
-## ⚠️ 중요 주의사항
+##  중요 주의사항
 
 **포지션 처리:**
-- ⚠️ **봇 중지 시 보유 포지션은 유지됩니다**
+-  **봇 중지 시 보유 포지션은 유지됩니다**
 - 포지션을 정리하려면 먼저 `/sell/all` 또는 `/sell` 엔드포인트 호출 필요
 - 미청산 포지션은 시장 변동에 따라 손실 위험 존재
 
@@ -1370,7 +1370,7 @@ async def recovery_mode(exchange_name='okx', ttl = 600):
 """,
     responses={
         200: {
-            "description": "✅ 봇 중지 성공",
+            "description": " 봇 중지 성공",
             "content": {
                 "application/json": {
                     "example": {
@@ -1383,7 +1383,7 @@ async def recovery_mode(exchange_name='okx', ttl = 600):
             }
         },
         400: {
-            "description": "❌ 중지 실패 - 봇을 찾을 수 없거나 이미 종료됨",
+            "description": " 중지 실패 - 봇을 찾을 수 없거나 이미 종료됨",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1422,7 +1422,7 @@ async def recovery_mode(exchange_name='okx', ttl = 600):
             }
         },
         404: {
-            "description": "🔍 봇 상태를 찾을 수 없음",
+            "description": " 봇 상태를 찾을 수 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1443,7 +1443,7 @@ async def recovery_mode(exchange_name='okx', ttl = 600):
             }
         },
         409: {
-            "description": "⚠️ 충돌 - 봇이 다른 작업 중",
+            "description": " 충돌 - 봇이 다른 작업 중",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1476,7 +1476,7 @@ async def recovery_mode(exchange_name='okx', ttl = 600):
             }
         },
         500: {
-            "description": "💥 서버 오류 - 중지 프로세스 실패",
+            "description": " 서버 오류 - 중지 프로세스 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1521,7 +1521,7 @@ async def recovery_mode(exchange_name='okx', ttl = 600):
             }
         },
         503: {
-            "description": "🔧 서비스 이용 불가 - Redis 연결 실패",
+            "description": " 서비스 이용 불가 - Redis 연결 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1654,10 +1654,10 @@ async def stop_task_only(dto: StopFeatureDto, request: Request) -> ResponseDto[B
 - **exchange_name** (string): 거래소 이름
 - **user_id** (integer): 사용자 ID
 
-## ⚠️ 중요 경고
+##  중요 경고
 
 **되돌릴 수 없는 작업:**
-- ❌ **이 작업은 취소하거나 되돌릴 수 없습니다**
+-  **이 작업은 취소하거나 되돌릴 수 없습니다**
 - 실행 즉시 모든 포지션이 시장가로 청산됩니다
 - 확인 없이 즉시 실행되므로 신중하게 사용하세요
 
@@ -1680,7 +1680,7 @@ async def stop_task_only(dto: StopFeatureDto, request: Request) -> ResponseDto[B
 """,
     responses={
         200: {
-            "description": "✅ 전체 매도 성공",
+            "description": " 전체 매도 성공",
             "content": {
                 "application/json": {
                     "example": {
@@ -1697,7 +1697,7 @@ async def stop_task_only(dto: StopFeatureDto, request: Request) -> ResponseDto[B
             }
         },
         400: {
-            "description": "❌ 매도 실패 - 요청 오류",
+            "description": " 매도 실패 - 요청 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1727,7 +1727,7 @@ async def stop_task_only(dto: StopFeatureDto, request: Request) -> ResponseDto[B
             }
         },
         401: {
-            "description": "🔒 인증 실패 - API 키 오류",
+            "description": " 인증 실패 - API 키 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1748,7 +1748,7 @@ async def stop_task_only(dto: StopFeatureDto, request: Request) -> ResponseDto[B
             }
         },
         422: {
-            "description": "❌ 처리 불가 - 거래 조건 불만족",
+            "description": " 처리 불가 - 거래 조건 불만족",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1818,7 +1818,7 @@ async def stop_task_only(dto: StopFeatureDto, request: Request) -> ResponseDto[B
             }
         },
         500: {
-            "description": "💥 서버 오류 - 내부 처리 실패",
+            "description": " 서버 오류 - 내부 처리 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1852,7 +1852,7 @@ async def stop_task_only(dto: StopFeatureDto, request: Request) -> ResponseDto[B
             }
         },
         503: {
-            "description": "🔧 서비스 이용 불가 - 거래소 점검",
+            "description": " 서비스 이용 불가 - 거래소 점검",
             "content": {
                 "application/json": {
                     "examples": {
@@ -1982,7 +1982,7 @@ async def sell_all_coins(dto: CoinSellAllFeatureDto) -> ResponseDto[Any | None]:
 """,
     responses={
         200: {
-            "description": "✅ 선택 코인 매도 성공",
+            "description": " 선택 코인 매도 성공",
             "content": {
                 "application/json": {
                     "example": {
@@ -2001,7 +2001,7 @@ async def sell_all_coins(dto: CoinSellAllFeatureDto) -> ResponseDto[Any | None]:
             }
         },
         400: {
-            "description": "❌ 매도 실패 - 요청 오류",
+            "description": " 매도 실패 - 요청 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -2057,7 +2057,7 @@ async def sell_all_coins(dto: CoinSellAllFeatureDto) -> ResponseDto[Any | None]:
             }
         },
         401: {
-            "description": "🔒 인증 실패 - API 키 오류",
+            "description": " 인증 실패 - API 키 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -2078,7 +2078,7 @@ async def sell_all_coins(dto: CoinSellAllFeatureDto) -> ResponseDto[Any | None]:
             }
         },
         404: {
-            "description": "🔍 포지션을 찾을 수 없음",
+            "description": " 포지션을 찾을 수 없음",
             "content": {
                 "application/json": {
                     "examples": {
@@ -2100,7 +2100,7 @@ async def sell_all_coins(dto: CoinSellAllFeatureDto) -> ResponseDto[Any | None]:
             }
         },
         422: {
-            "description": "❌ 처리 불가 - 거래 조건 불만족",
+            "description": " 처리 불가 - 거래 조건 불만족",
             "content": {
                 "application/json": {
                     "examples": {
@@ -2136,7 +2136,7 @@ async def sell_all_coins(dto: CoinSellAllFeatureDto) -> ResponseDto[Any | None]:
             }
         },
         500: {
-            "description": "💥 서버 오류 - 내부 처리 실패",
+            "description": " 서버 오류 - 내부 처리 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -2169,7 +2169,7 @@ async def sell_all_coins(dto: CoinSellAllFeatureDto) -> ResponseDto[Any | None]:
             }
         },
         503: {
-            "description": "🔧 서비스 이용 불가",
+            "description": " 서비스 이용 불가",
             "content": {
                 "application/json": {
                     "examples": {

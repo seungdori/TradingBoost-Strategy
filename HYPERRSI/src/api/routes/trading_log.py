@@ -89,11 +89,11 @@ class OrderLogsResponse(BaseModel):
 
 ## 사용 시나리오
 
-- 📊 **활동성 모니터링**: 봇이 정상적으로 실행되고 있는지 확인
+-  **활동성 모니터링**: 봇이 정상적으로 실행되고 있는지 확인
 - ⏰ **실행 주기 확인**: 마지막 실행 시간으로 멈춤 여부 감지
-- 🔍 **문제 진단**: 실행 횟수가 너무 적으면 설정 오류 의심
-- 📈 **통계 분석**: 시간대별 실행 빈도 분석
-- 🎯 **성과 측정**: 실행 횟수 대비 거래 횟수 비율 계산
+-  **문제 진단**: 실행 횟수가 너무 적으면 설정 오류 의심
+-  **통계 분석**: 시간대별 실행 빈도 분석
+-  **성과 측정**: 실행 횟수 대비 거래 횟수 비율 계산
 
 ## 예시 요청
 
@@ -107,7 +107,7 @@ curl "http://localhost:8000/trading-logs/646396755365762614"
 """,
     responses={
         200: {
-            "description": "✅ 실행 이력 조회 성공",
+            "description": " 실행 이력 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -230,7 +230,7 @@ async def fetch_trading_logs(user_id: str) -> TradingLogResponse:
 
 ## 주의사항
 
-⚠️ **이 작업은 되돌릴 수 없습니다!**
+ **이 작업은 되돌릴 수 없습니다!**
 
 - 삭제된 데이터는 복구 불가능
 - 현재 열린 포지션이 있어도 Redis에서는 삭제됨
@@ -239,11 +239,11 @@ async def fetch_trading_logs(user_id: str) -> TradingLogResponse:
 
 ## 사용 시나리오
 
-- 🔄 **데이터 리셋**: 포지션 추적 데이터 초기화
-- 🛠️ **불일치 해결**: Redis와 실제 포지션 간 불일치 수정
-- 🚨 **긴급 상황**: 버그로 인한 잘못된 데이터 제거
+-  **데이터 리셋**: 포지션 추적 데이터 초기화
+-  **불일치 해결**: Redis와 실제 포지션 간 불일치 수정
+-  **긴급 상황**: 버그로 인한 잘못된 데이터 제거
 - 🧪 **테스트 환경**: 테스트 후 데이터 정리
-- 📊 **전략 변경**: 새로운 전략 시작 전 초기화
+-  **전략 변경**: 새로운 전략 시작 전 초기화
 
 ## 예시 요청
 
@@ -262,7 +262,7 @@ done
 """,
     responses={
         200: {
-            "description": "✅ 데이터 정리 성공",
+            "description": " 데이터 정리 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -312,7 +312,7 @@ done
             }
         },
         500: {
-            "description": "💥 서버 내부 오류",
+            "description": " 서버 내부 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -438,11 +438,11 @@ async def cleanup_trading_data(user_id: str, symbol: str) -> CleanupResponse:
 
 ## 사용 시나리오
 
-- 📜 **거래 이력 조회**: 모든 주문 활동 확인
-- 📊 **통계 분석**: action_type별 주문 빈도 분석
-- 🔍 **문제 추적**: 특정 주문 이벤트 조사
-- 💰 **수익 계산**: PnL 로그로 누적 수익 계산
-- 📈 **전략 평가**: 진입/청산 패턴 분석
+-  **거래 이력 조회**: 모든 주문 활동 확인
+-  **통계 분석**: action_type별 주문 빈도 분석
+-  **문제 추적**: 특정 주문 이벤트 조사
+-  **수익 계산**: PnL 로그로 누적 수익 계산
+-  **전략 평가**: 진입/청산 패턴 분석
 
 ## 예시 요청
 
@@ -462,7 +462,7 @@ curl "http://localhost:8000/order-logs/user/1709556958?limit=10&offset=0"
 """,
     responses={
         200: {
-            "description": "✅ 주문 로그 조회 성공",
+            "description": " 주문 로그 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -566,7 +566,7 @@ curl "http://localhost:8000/order-logs/user/1709556958?limit=10&offset=0"
             }
         },
         500: {
-            "description": "💥 서버 내부 오류",
+            "description": " 서버 내부 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -690,11 +690,11 @@ async def get_user_order_logs(
 
 ## 사용 시나리오
 
-- 📅 **월별 통계**: 특정 월의 모든 거래 로그 조회
-- 📊 **기간별 분석**: 특정 기간 동안의 거래 패턴 분석
-- 🔍 **사용자 추적**: 특정 사용자의 기간별 활동 조회
-- 💰 **수익 계산**: 기간 내 모든 PnL 집계
-- 🎯 **전략 평가**: 날짜별 성과 비교 분석
+-  **월별 통계**: 특정 월의 모든 거래 로그 조회
+-  **기간별 분석**: 특정 기간 동안의 거래 패턴 분석
+-  **사용자 추적**: 특정 사용자의 기간별 활동 조회
+-  **수익 계산**: 기간 내 모든 PnL 집계
+-  **전략 평가**: 날짜별 성과 비교 분석
 - 🏢 **관리자 모니터링**: 전체 사용자 활동 추적 (user_id=None)
 
 ## 예시 요청
@@ -718,7 +718,7 @@ curl "http://localhost:8000/order-logs/date-range?start_date=2025-01-15&end_date
 """,
     responses={
         200: {
-            "description": "✅ 날짜 범위 로그 조회 성공",
+            "description": " 날짜 범위 로그 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -846,7 +846,7 @@ curl "http://localhost:8000/order-logs/date-range?start_date=2025-01-15&end_date
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 날짜 형식 오류",
+            "description": " 잘못된 요청 - 날짜 형식 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -867,7 +867,7 @@ curl "http://localhost:8000/order-logs/date-range?start_date=2025-01-15&end_date
             }
         },
         500: {
-            "description": "💥 서버 내부 오류",
+            "description": " 서버 내부 오류",
             "content": {
                 "application/json": {
                     "examples": {

@@ -332,12 +332,12 @@ async def update_blacklist(
 """
 Migration Checklist:
 
-2. ✅ Use dependency injection for database session
-3. ✅ Add input validation (Pydantic + sanitizers)
-4. ✅ Implement structured exception handling
-5. ✅ Add structured logging with context
-6. ✅ Use service layer for business logic
-7. ✅ Return ResponseDto for consistent API responses
+2.  Use dependency injection for database session
+3.  Add input validation (Pydantic + sanitizers)
+4.  Implement structured exception handling
+5.  Add structured logging with context
+6.  Use service layer for business logic
+7.  Return ResponseDto for consistent API responses
 8. [ ] Add database models for Blacklist/Whitelist tables
 9. [ ] Implement actual SQLAlchemy queries in repository
 10. [ ] Add unit tests with mocked dependencies

@@ -14,13 +14,14 @@ async def deactivate_all_trading():
     모든 사용자의 트레이딩을 중지시킵니다.
     """
     try:
+        redis = await get_redis_client()
         # 모든 사용자의 trading:status를 stopped로 설정
-        user_keys = await get_redis_client().keys("user:*:trading:status")
+        user_keys = await redis.keys("user:*:trading:status")
         stop_count = 0
         
         for key in user_keys:
-            if await get_redis_client().get(key) == "running":
-                await get_redis_client().set(key, "stopped")
+            if await redis.get(key) == "running":
+                await redis.set(key, "stopped")
                 print(f"STOPPED: {key}")
                 stop_count += 1
         

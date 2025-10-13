@@ -37,6 +37,7 @@ async def send_telegram_message(message: str, okx_uid: str, debug: bool = False)
         debug: 디버그 모드 여부
     """
     try:
+        redis = await get_redis_client()
         # 메시지 큐에 추가
         message_data = {
             "type": "text",
@@ -50,11 +51,11 @@ async def send_telegram_message(message: str, okx_uid: str, debug: bool = False)
 
         # 메시지 큐에 추가
         queue_key = MESSAGE_QUEUE_KEY.format(okx_uid=okx_uid)
-        await get_redis_client().rpush(queue_key, json.dumps(message_data))
+        await redis.rpush(queue_key, json.dumps(message_data))
 
         # 메시지 처리 플래그 설정
         processing_flag = MESSAGE_PROCESSING_FLAG.format(okx_uid=okx_uid)
-        await get_redis_client().set(processing_flag, "1", ex=60)  # 60초 후 만료
+        await redis.set(processing_flag, "1", ex=60)  # 60초 후 만료
 
         if debug:
             okx_uid = str(587662504768345929)
@@ -78,15 +79,16 @@ async def get_telegram_id_from_okx_uid(okx_uid: str) -> Optional[Dict]:
         dict: 텔레그램 ID 정보 또는 None
     """
     try:
+        redis = await get_redis_client()
         # 모든 사용자 키를 검색하기 위한 패턴
         pattern = "user:*:okx_uid"
-        keys = await get_redis_client().keys(pattern)
+        keys = await redis.keys(pattern)
 
         valid_telegram_ids = []
 
         for key in keys:
             # Redis 키에서 저장된 OKX UID 값 가져오기
-            stored_uid = await get_redis_client().get(key)
+            stored_uid = await redis.get(key)
 
             # stored_uid 값 처리 (bytes일 수도 있고 str일 수도 있음)
             stored_uid_str = stored_uid.decode() if isinstance(stored_uid, bytes) else stored_uid
@@ -97,12 +99,12 @@ async def get_telegram_id_from_okx_uid(okx_uid: str) -> Optional[Dict]:
                 user_key = key.decode() if isinstance(key, bytes) else key
                 user_id = user_key.split(':')[1]
 
-                # 숫자로 시작하는 텔레그램 ID만 추가 (OKX UID는 일반적으로 매우 긴 숫자)
-                if user_id.isdigit() and len(user_id) < 15:
+                # 숫자로 시작하는 텔레그램 ID만 추가 (13자리 미만은 텔레그램 ID)
+                if user_id.isdigit() and len(user_id) < 13:
                     # 최근 활동 시간 확인 (가능한 경우)
                     last_activity = 0
                     try:
-                        stats = await get_redis_client().hgetall(f"user:{user_id}:stats")
+                        stats = await redis.hgetall(f"user:{user_id}:stats")
                         if stats and b'last_trade_date' in stats:
                             last_trade_date = stats[b'last_trade_date'] if isinstance(stats[b'last_trade_date'], bytes) else stats[b'last_trade_date'].encode()
                             last_activity = int(last_trade_date.decode() or '0')
@@ -143,8 +145,9 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> Optional[str]:
         str: OKX UID 또는 None
     """
     try:
+        redis = await get_redis_client()
         # 텔레그램 ID로 OKX UID 조회
-        okx_uid = await get_redis_client().get(f"user:{telegram_id}:okx_uid")
+        okx_uid = await redis.get(f"user:{telegram_id}:okx_uid")
         if okx_uid:
             return okx_uid.decode() if isinstance(okx_uid, bytes) else okx_uid
         return None
@@ -163,14 +166,14 @@ async def get_identifier(user_id: str) -> str:
     Returns:
         str: OKX UID
     """
-    # 11글자 이하면 텔레그램 ID로 간주하고 변환
-    if len(str(user_id)) <= 11:
+    # 13자리 미만이면 텔레그램 ID로 간주하고 변환
+    if len(str(user_id)) < 13:
         okx_uid = await get_okx_uid_from_telegram_id(user_id)
         if not okx_uid:
             logger.error(f"텔레그램 ID {user_id}에 대한 OKX UID를 찾을 수 없습니다")
             return str(user_id)  # 변환 실패 시 원래 ID 반환
         return okx_uid
-    # 12글자 이상이면 이미 OKX UID로 간주
+    # 13자리 이상이면 이미 OKX UID로 간주
     return str(user_id)
 
 
@@ -182,20 +185,21 @@ async def process_telegram_messages(user_id: str):
         user_id: 사용자 ID
     """
     try:
+        redis = await get_redis_client()
         # 처리 중 플래그 확인
         processing_flag = MESSAGE_PROCESSING_FLAG.format(okx_uid=user_id)
-        flag_exists = await get_redis_client().exists(processing_flag)
+        flag_exists = await redis.exists(processing_flag)
 
         if not flag_exists:
             return
 
         # 메시지 큐에서 메시지 가져오기
         queue_key = MESSAGE_QUEUE_KEY.format(okx_uid=user_id)
-        message_data = await get_redis_client().lpop(queue_key)
+        message_data = await redis.lpop(queue_key)
 
         if not message_data:
             # 큐가 비어있으면 처리 중 플래그 제거
-            await get_redis_client().delete(processing_flag)
+            await redis.delete(processing_flag)
             return
 
         # 메시지 데이터 파싱
@@ -210,11 +214,16 @@ async def process_telegram_messages(user_id: str):
             if telegram_data and "primary_telegram_id" in telegram_data:
                 user_telegram_id = telegram_data["primary_telegram_id"]
             else:
-                logger.error(f"텔레그램 ID 조회 결과가 없습니다: {telegram_data}")
-                user_telegram_id = user_id
+                logger.warning(f"[{user_id}] 텔레그램 ID 조회 실패 - 메시지 전송 건너뜀. OKX UID에 연결된 텔레그램 계정이 없습니다.")
+                # 메시지를 전송할 수 없으므로 다음 메시지로 넘어감
+                asyncio.create_task(process_telegram_messages(user_id))
+                return
         except Exception as e:
-            logger.error(f"텔레그램 ID 조회 오류: {str(e)}")
-            user_telegram_id = user_id
+            logger.error(f"[{user_id}] 텔레그램 ID 조회 중 오류: {str(e)}")
+            traceback.print_exc()
+            # 오류 발생 시에도 메시지 전송 건너뜀
+            asyncio.create_task(process_telegram_messages(user_id))
+            return
 
         # 메시지 타입에 따라 처리
         if message_type == "text":
@@ -229,9 +238,11 @@ async def process_telegram_messages(user_id: str):
 
             try:
                 await bot.send_message(chat_id=str(user_telegram_id), text=message)
+                logger.debug(f"[{user_id}] 텔레그램 메시지 전송 성공: chat_id={user_telegram_id}")
             except telegram.error.BadRequest as e:
                 if "Chat not found" in str(e):
-                    logger.warning(f"텔레그램 메시지 전송 실패 (Chat not found): {user_telegram_id} - {message}")
+                    logger.warning(f"[{user_id}] 텔레그램 메시지 전송 실패 (Chat not found): chat_id={user_telegram_id}")
+                    logger.warning(f"[{user_id}] 해당 사용자가 봇을 시작(/start)하지 않았거나 차단한 것 같습니다.")
                 else:
                     # 다른 BadRequest 오류는 다시 발생시킴
                     raise e
@@ -249,4 +260,4 @@ async def process_telegram_messages(user_id: str):
 
         # 오류 발생 시 처리 중 플래그 제거
         processing_flag = MESSAGE_PROCESSING_FLAG.format(okx_uid=user_id)
-        await get_redis_client().delete(processing_flag)
+        await redis.delete(processing_flag)

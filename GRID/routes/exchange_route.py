@@ -44,7 +44,7 @@ router = APIRouter(prefix="/exchange", tags=["exchange"])
 """,
     responses={
         200: {
-            "description": "✅ 지갑 정보 조회 성공",
+            "description": " 지갑 정보 조회 성공",
             "content": {
                 "application/json": {
                     "example": {
@@ -62,7 +62,7 @@ router = APIRouter(prefix="/exchange", tags=["exchange"])
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 지원하지 않는 거래소",
+            "description": " 잘못된 요청 - 지원하지 않는 거래소",
             "content": error_content(
                 message="Unknown exchange name: invalid_exchange",
                 path="/exchange/{exchange_name}/wallet",
@@ -73,7 +73,7 @@ router = APIRouter(prefix="/exchange", tags=["exchange"])
             ),
         },
         401: {
-            "description": "🔒 인증 실패 - API 키 오류",
+            "description": " 인증 실패 - API 키 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -140,7 +140,7 @@ router = APIRouter(prefix="/exchange", tags=["exchange"])
             ),
         },
         500: {
-            "description": "💥 서버 오류 - 내부 처리 실패",
+            "description": " 서버 오류 - 내부 처리 실패",
             "content": error_content(
                 message="Failed to fetch wallet information",
                 path="/exchange/{exchange_name}/wallet",
@@ -153,7 +153,7 @@ router = APIRouter(prefix="/exchange", tags=["exchange"])
             ),
         },
         503: {
-            "description": "🔧 거래소 서비스 이용 불가",
+            "description": " 거래소 서비스 이용 불가",
             "content": {
                 "application/json": {
                     "examples": {
@@ -248,7 +248,7 @@ async def get_wallet(exchange_name: str) -> ResponseDto[WalletDto | None]:
 """,
     responses={
         200: {
-            "description": "✅ 포지션 조회 성공",
+            "description": " 포지션 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -298,7 +298,7 @@ async def get_wallet(exchange_name: str) -> ResponseDto[WalletDto | None]:
             }
         },
         400: {
-            "description": "❌ 잘못된 요청",
+            "description": " 잘못된 요청",
             "content": {
                 "application/json": {
                     "example": {
@@ -311,7 +311,7 @@ async def get_wallet(exchange_name: str) -> ResponseDto[WalletDto | None]:
             }
         },
         401: {
-            "description": "🔒 인증 실패",
+            "description": " 인증 실패",
             "content": {
                 "application/json": {
                     "example": {
@@ -327,7 +327,7 @@ async def get_wallet(exchange_name: str) -> ResponseDto[WalletDto | None]:
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "example": {
@@ -343,7 +343,7 @@ async def get_wallet(exchange_name: str) -> ResponseDto[WalletDto | None]:
             }
         },
         503: {
-            "description": "🔧 거래소 서비스 불가",
+            "description": " 거래소 서비스 불가",
             "content": {
                 "application/json": {
                     "example": {
@@ -413,7 +413,7 @@ async def get_balance(exchange_name: str) -> ResponseDto[List[Any]]:
 """,
     responses={
         200: {
-            "description": "✅ API 키 조회 성공",
+            "description": " API 키 조회 성공",
             "content": {
                 "application/json": {
                     "examples": {
@@ -448,7 +448,7 @@ async def get_balance(exchange_name: str) -> ResponseDto[List[Any]]:
             }
         },
         404: {
-            "description": "❌ API 키 없음",
+            "description": " API 키 없음",
             "content": {
                 "application/json": {
                     "example": {
@@ -465,7 +465,7 @@ async def get_balance(exchange_name: str) -> ResponseDto[List[Any]]:
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "example": {
@@ -533,25 +533,25 @@ async def get_exchange_keys(exchange_name: str) -> ResponseDto[ApiKeyDto]:
 
 ## 보안 주의사항
 
-⚠️ **API 키 권한 설정**
+ **API 키 권한 설정**
 - **필수 권한**: 읽기 (Read), 거래 (Trade)
 - **권장하지 않음**: 출금 (Withdraw), 자금 이체 (Transfer)
 - **이유**: 키 유출 시 피해 최소화
 
-⚠️ **키 관리**
+ **키 관리**
 - IP 화이트리스트 설정 권장
 - 주기적인 키 갱신 (3-6개월)
 - 2FA 인증 활성화
 - 절대 공개 저장소에 커밋하지 말 것
 
-⚠️ **전송 보안**
+ **전송 보안**
 - HTTPS 필수
 - 평문 키는 요청 시에만 전송
 - 저장 시 AES-256 암호화
 """,
     responses={
         200: {
-            "description": "✅ API 키 등록/업데이트 성공",
+            "description": " API 키 등록/업데이트 성공",
             "content": {
                 "application/json": {
                     "example": {
@@ -572,7 +572,7 @@ async def get_exchange_keys(exchange_name: str) -> ResponseDto[ApiKeyDto]:
             }
         },
         400: {
-            "description": "❌ 잘못된 요청 - 키 형식 오류",
+            "description": " 잘못된 요청 - 키 형식 오류",
             "content": {
                 "application/json": {
                     "examples": {
@@ -605,7 +605,7 @@ async def get_exchange_keys(exchange_name: str) -> ResponseDto[ApiKeyDto]:
             }
         },
         401: {
-            "description": "🔒 인증 실패 - 키 검증 실패",
+            "description": " 인증 실패 - 키 검증 실패",
             "content": {
                 "application/json": {
                     "examples": {
@@ -676,7 +676,7 @@ async def get_exchange_keys(exchange_name: str) -> ResponseDto[ApiKeyDto]:
             }
         },
         500: {
-            "description": "💥 서버 오류",
+            "description": " 서버 오류",
             "content": {
                 "application/json": {
                     "example": {
@@ -692,7 +692,7 @@ async def get_exchange_keys(exchange_name: str) -> ResponseDto[ApiKeyDto]:
             }
         },
         503: {
-            "description": "🔧 거래소 서비스 불가",
+            "description": " 거래소 서비스 불가",
             "content": {
                 "application/json": {
                     "example": {

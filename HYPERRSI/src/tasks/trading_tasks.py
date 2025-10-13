@@ -7,6 +7,14 @@ import time
 import traceback
 from contextlib import asynccontextmanager, contextmanager
 
+# nest_asyncio import - Celery worker에서 이벤트 루프 중첩 실행 허용
+try:
+    import nest_asyncio
+    nest_asyncio.apply()
+except ImportError:
+    logger = logging.getLogger(__name__)
+    logger.warning("nest_asyncio not installed. Event loop nesting may fail.")
+
 # from HYPERRSI.src.core.event_loop_manager import EventLoopManager  # 이벤트 루프 매니저 제거
 from datetime import datetime, timedelta, timezone
 from types import TracebackType
@@ -45,6 +53,8 @@ async def trading_context(okx_uid: str, symbol: str) -> AsyncGenerator[None, Non
     모든 리소스가 적절히 정리되도록 보장합니다.
     """
     # 태스크와 리소스 추적
+
+    redis = await get_redis_client()
     task = asyncio.current_task()
     local_resources: List[Any] = []
     
@@ -75,7 +85,7 @@ async def trading_context(okx_uid: str, symbol: str) -> AsyncGenerator[None, Non
         
         # 태스크 상태 정리 (okx_uid 사용)
         try:
-            await get_redis_client().delete(REDIS_KEY_TASK_RUNNING.format(okx_uid=okx_uid))
+            await redis.delete(REDIS_KEY_TASK_RUNNING.format(okx_uid=okx_uid))
         except Exception as e:
             logger.error(f"[{okx_uid}] Redis 정리 중 오류: {str(e)}")
 
@@ -182,58 +192,78 @@ def run_async(coroutine, timeout=45):
     """
     비동기 코루틴을 동기적으로 실행하는 유틸리티 함수
 
-    각 호출마다 독립된 이벤트 루프를 생성하여 Celery worker 간 격리 보장
+    nest_asyncio가 적용되어 있어 이미 실행 중인 이벤트 루프에서도 안전하게 실행 가능
     타임아웃 및 리소스 정리 지원
+
+    Solo pool 모드에서는 이벤트 루프를 재사용하여 Redis 연결 문제를 방지
     """
-    # 새로운 이벤트 루프 생성 (Celery worker 프로세스마다 격리)
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    global _loop
+
+    # 기존 글로벌 이벤트 루프가 있고 닫히지 않았다면 재사용
+    if _loop is not None and not _loop.is_closed():
+        loop = _loop
+        logger.debug("기존 글로벌 이벤트 루프 재사용")
+        should_close = False
+    else:
+        # 이벤트 루프가 없거나 닫혀있으면 새로 생성
+        try:
+            # 먼저 실행 중인 이벤트 루프가 있는지 확인
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                logger.debug("닫힌 이벤트 루프 감지, 새 루프 생성")
+            else:
+                logger.debug("기존 이벤트 루프 재사용")
+        except RuntimeError:
+            # 이벤트 루프가 없으면 새로 생성
+            logger.debug("새 이벤트 루프 생성")
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        # 글로벌 루프로 저장 (재사용을 위해)
+        _loop = loop
+        should_close = False  # Solo pool에서는 이벤트 루프를 닫지 않음
+
+        # 이벤트 루프 생성/변경 시 Redis 클라이언트 초기화
+        try:
+            from HYPERRSI.src.core.database import init_global_redis_clients
+            logger.debug("이벤트 루프에서 Redis 클라이언트 재초기화 중...")
+            loop.run_until_complete(init_global_redis_clients())
+            logger.debug("Redis 클라이언트 재초기화 완료")
+        except Exception as redis_init_error:
+            logger.warning(f"Redis 클라이언트 재초기화 실패 (계속 진행): {str(redis_init_error)}")
 
     try:
-        # 코루틴을 태스크로 생성
-        task = loop.create_task(coroutine)
-
-        # wait_for로 타임아웃 설정
-        return loop.run_until_complete(asyncio.wait_for(task, timeout=timeout))
+        # wait_for로 타임아웃 설정하여 실행
+        return loop.run_until_complete(asyncio.wait_for(coroutine, timeout=timeout))
     except asyncio.TimeoutError:
         logger.warning(f"비동기 작업이 타임아웃되었습니다 ({timeout}초)")
-        if not task.done():
-            task.cancel()
-            # 취소된 태스크 정리
-            try:
-                loop.run_until_complete(task)
-            except asyncio.CancelledError:
-                logger.info("태스크가 성공적으로 취소되었습니다")
         raise
     except Exception as e:
         logger.error(f"비동기 작업 실행 중 오류: {str(e)}")
         raise
     finally:
-        try:
-            # 미완료 태스크 정리
-            pending = asyncio.all_tasks(loop)
-            for t in pending:
-                if not t.done():
-                    t.cancel()
-
-            # 취소된 태스크 대기 및 정리
-            if pending:
-                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-
-            # 비동기 제너레이터 정리
-            loop.run_until_complete(loop.shutdown_asyncgens())
-        except Exception as cleanup_error:
-            logger.debug(f"이벤트 루프 정리 중 오류 (무시됨): {str(cleanup_error)}")
-        finally:
-            # 이벤트 루프 종료
-            loop.close()
+        # Solo pool 모드에서는 이벤트 루프를 닫지 않음 (재사용)
+        # 단, 미완료 태스크는 정리
+        if not should_close:
+            try:
+                pending = asyncio.all_tasks(loop)
+                for t in pending:
+                    # 현재 실행 중인 태스크는 제외하고 취소
+                    if not t.done() and t != asyncio.current_task(loop):
+                        t.cancel()
+            except Exception as cleanup_error:
+                logger.debug(f"태스크 정리 중 오류 (무시됨): {str(cleanup_error)}")
 
 # 태스크 실행 상태 관리 함수들
 async def check_if_running(okx_uid: str) -> bool: # user_id -> okx_uid
     """
     사용자의 트레이딩 상태가 여전히 'running'인지 확인
     """
-    status = await get_redis_client().get(REDIS_KEY_TRADING_STATUS.format(okx_uid=okx_uid))
+
+    redis = await get_redis_client()
+    status = await redis.get(REDIS_KEY_TRADING_STATUS.format(okx_uid=okx_uid))
     
     # 바이트 문자열을 디코딩
     if isinstance(status, bytes):
@@ -249,16 +279,20 @@ async def set_trading_status(okx_uid: str, status: str) -> None: # user_id -> ok
     """
     사용자의 트레이딩 상태 설정
     """
+
+    redis = await get_redis_client()
     key = REDIS_KEY_TRADING_STATUS.format(okx_uid=okx_uid)
-    await get_redis_client().set(key, status)
+    await redis.set(key, status)
     logger.info(f"[{okx_uid}] 트레이딩 상태를 '{status}'로 설정")
 
 async def set_symbol_status(okx_uid: str, symbol: str, status: str) -> None: # user_id -> okx_uid
     """
     특정 심볼에 대한 트레이딩 상태 설정
     """
+
+    redis = await get_redis_client()
     key = REDIS_KEY_SYMBOL_STATUS.format(okx_uid=okx_uid, symbol=symbol)
-    await get_redis_client().set(key, status)
+    await redis.set(key, status)
     logger.info(f"[{okx_uid}] {symbol} 심볼 상태를 '{status}'로 설정")
 
 async def set_task_running(okx_uid: str, running: bool = True, expiry: int = 900) -> None: # user_id -> okx_uid
@@ -266,20 +300,22 @@ async def set_task_running(okx_uid: str, running: bool = True, expiry: int = 900
     사용자의 태스크 실행 상태를 설정
     만료 시간을 설정하여 비정상 종료 시에만 만료되도록 함
     """
+
+    redis = await get_redis_client()
     status_key = REDIS_KEY_TASK_RUNNING.format(okx_uid=okx_uid)
     
     if running:
         # 현재 시간도 함께 저장하여 시작 시간 추적
         current_time = datetime.now().timestamp()
-        await get_redis_client().delete(status_key)
-        await get_redis_client().hset(status_key, mapping={
+        await redis.delete(status_key)
+        await redis.hset(status_key, mapping={
             "status": "running",
             "started_at": str(current_time)
         })
-        await get_redis_client().expire(status_key, expiry)
+        await redis.expire(status_key, expiry)
         logger.debug(f"[{okx_uid}] 태스크 상태를 'running'으로 설정 (만료: {expiry}초)")
     else:
-        await get_redis_client().delete(status_key)
+        await redis.delete(status_key)
         logger.debug(f"[{okx_uid}] 태스크 상태를 삭제함")
 
 async def is_task_running(okx_uid: str) -> bool: # user_id -> okx_uid
@@ -288,23 +324,25 @@ async def is_task_running(okx_uid: str) -> bool: # user_id -> okx_uid
     실행 중이면서도 오래된 태스크인 경우 상태를 초기화하는 로직 추가
     Redis 키 타입 오류 처리 추가
     """
+
+    redis = await get_redis_client()
     status_key = REDIS_KEY_TASK_RUNNING.format(okx_uid=okx_uid)
     
     try:
         # 키 타입 확인 (hash인지 검증)
-        key_type = await get_redis_client().type(status_key)
+        key_type = await redis.type(status_key)
         
         # 키가 없거나 해시가 아닌 경우
         if key_type == "none" or key_type != "hash":
             if key_type != "none":
                 logger.warning(f"[{okx_uid}] 태스크 상태 키가 잘못된 타입({key_type})입니다. 초기화합니다.")
-                await get_redis_client().delete(status_key)
+                await redis.delete(status_key)
             else:
                 logger.debug(f"[{okx_uid}] 태스크 상태 없음 (실행 중 아님)")
             return False
             
         # 정상적인 해시 타입이면 값을 가져옴
-        status = await get_redis_client().hgetall(status_key)
+        status = await redis.hgetall(status_key)
         
         if not status:
             logger.debug(f"[{okx_uid}] 태스크 상태 없음 (실행 중 아님)")
@@ -319,7 +357,7 @@ async def is_task_running(okx_uid: str) -> bool: # user_id -> okx_uid
                 # 60초 이상 실행 중인 경우 비정상으로 간주하고 초기화
                 if current_time - started_at > 60:
                     logger.warning(f"[{okx_uid}] 오래된 태스크 감지 (60초 초과). 상태 초기화함")
-                    await get_redis_client().delete(status_key)
+                    await redis.delete(status_key)
                     return False
                     
                 elapsed = int(current_time - started_at)
@@ -340,6 +378,8 @@ async def update_last_execution(okx_uid: str, success: bool, error_message: Opti
     """
     마지막 실행 정보 업데이트
     """
+
+    redis = await get_redis_client()
     key = REDIS_KEY_LAST_EXECUTION.format(okx_uid=okx_uid)
     data: Dict[str, Any] = {
         "timestamp": datetime.now().timestamp(),
@@ -349,20 +389,22 @@ async def update_last_execution(okx_uid: str, success: bool, error_message: Opti
     if error_message:
         data["error"] = error_message
     
-    await get_redis_client().set(key, json.dumps(data))
+    await redis.set(key, json.dumps(data))
 
 async def get_active_trading_users(): # 내부 로직 변경 필요
     """
     Redis에서 'running' 상태인 모든 활성 사용자 정보(OKX UID 기준) 가져오기
     오류 처리 강화
     """
+
+    redis = await get_redis_client()
     active_users = []
     cursor = '0'
     pattern = 'user:*:trading:status' # 스캔 패턴 변경
 
     try:
         while cursor != '0':
-            cursor, keys = await get_redis_client().scan(cursor=cursor, match=pattern, count=100)
+            cursor, keys = await redis.scan(cursor=cursor, match=pattern, count=100)
 
             for key in keys:
                 try:
@@ -375,14 +417,14 @@ async def get_active_trading_users(): # 내부 로직 변경 필요
                     okx_uid = key_parts[1] # okx_uid 추출
 
                     # 상태 키 타입 확인
-                    key_type = await get_redis_client().type(key)
+                    key_type = await redis.type(key)
 
                     # 올바른 타입(string)이 아니면 다음으로
                     if key_type != "string":
                         logger.warning(f"[{okx_uid}] 트레이딩 상태 키가 잘못된 타입({key_type})입니다.")
                         continue
 
-                    status = await get_redis_client().get(key)
+                    status = await redis.get(key)
                     
                     # 바이트 문자열을 디코딩
                     if isinstance(status, bytes):
@@ -401,7 +443,7 @@ async def get_active_trading_users(): # 내부 로직 변경 필요
                             if is_running:
                                 # 오래된 태스크가 있다면 강제로 초기화
                                 task_key = REDIS_KEY_TASK_RUNNING.format(okx_uid=okx_uid)
-                                status_data = await get_redis_client().hgetall(task_key)
+                                status_data = await redis.hgetall(task_key)
 
                                 if "started_at" in status_data:
                                     started_at = float(status_data["started_at"])
@@ -410,20 +452,20 @@ async def get_active_trading_users(): # 내부 로직 변경 필요
                                     # 30초 이상 실행 중인 경우 비정상으로 간주하고 초기화
                                     if current_time - started_at > 30:
                                         logger.warning(f"[{okx_uid}] 오래된 태스크 상태 초기화 (30초 초과)")
-                                        await get_redis_client().delete(task_key)
+                                        await redis.delete(task_key)
 
 
                             if not is_running:
                                 # 선호도 정보 가져오기 (okx_uid 사용)
                                 pref_key = REDIS_KEY_PREFERENCES.format(okx_uid=okx_uid) # 변경된 키 사용
-                                pref_type = await get_redis_client().type(pref_key)
+                                pref_type = await redis.type(pref_key)
 
                                 if pref_type != "hash":
                                     logger.warning(f"[{okx_uid}] 선호도 키가 잘못된 타입({pref_type})입니다.")
                                     # 선호도 정보가 없으면 이 사용자를 처리할 수 없으므로 스킵
                                     continue
 
-                                preference = await get_redis_client().hgetall(pref_key)
+                                preference = await redis.hgetall(pref_key)
                                 symbol = preference.get("symbol", "unknown")
                                 timeframe = preference.get("timeframe", "unknown")
 
@@ -439,7 +481,7 @@ async def get_active_trading_users(): # 내부 로직 변경 필요
                                 try:
                                     # 마지막 로그 시간 가져오기 (okx_uid 사용)
                                     last_log_key = REDIS_KEY_LAST_LOG_TIME.format(okx_uid=okx_uid)
-                                    last_log_time = await get_redis_client().get(last_log_key)
+                                    last_log_time = await redis.get(last_log_key)
 
                                     if last_log_time:
                                         last_time = float(last_log_time)
@@ -455,9 +497,9 @@ async def get_active_trading_users(): # 내부 로직 변경 필요
                                     logger.info(f"활성 트레이더 로깅 okx_uid={okx_uid}, symbol={symbol}, timeframe={timeframe}")
                                     # 마지막 로그 시간 업데이트
                                     try:
-                                        await get_redis_client().set(last_log_key, str(current_time))
+                                        await redis.set(last_log_key, str(current_time))
                                         # 키 만료 시간 설정 (선택 사항 - 청소를 위해)
-                                        await get_redis_client().expire(last_log_key, 86400)  # 1일 후 만료
+                                        await redis.expire(last_log_key, 86400)  # 1일 후 만료
                                     except Exception as update_err:
                                         logger.debug(f"[{okx_uid}] 로그 시간 업데이트 중 오류: {str(update_err)}")
 
@@ -491,13 +533,15 @@ async def acquire_okx_lock(okx_uid: str, symbol: str, timeframe: str, ttl: int =
     :param ttl: 락의 유효시간(초)
     :return: 락 획득 성공 여부
     """
+
+    redis = await get_redis_client()
     lock_key = REDIS_KEY_USER_LOCK.format(okx_uid=okx_uid, symbol=symbol, timeframe=timeframe) # 변경된 키 사용 (이름은 유지)
     lock_value = f"{datetime.now().timestamp()}:{threading.get_ident()}"
     acquired = False
 
     try:
         # 락 획득 시도 (SETNX 패턴)
-        acquired = await get_redis_client().set(lock_key, lock_value, nx=True, ex=ttl)
+        acquired = await redis.set(lock_key, lock_value, nx=True, ex=ttl)
 
         if acquired:
             logger.debug(f"[{okx_uid}] 락 획득 성공: {symbol}/{timeframe}")
@@ -510,9 +554,9 @@ async def acquire_okx_lock(okx_uid: str, symbol: str, timeframe: str, ttl: int =
         if acquired:
             try:
                 # 내가 설정한 락인지 확인 후 삭제
-                current_value = await get_redis_client().get(lock_key)
+                current_value = await redis.get(lock_key)
                 if current_value == lock_value:
-                    await get_redis_client().delete(lock_key)
+                    await redis.delete(lock_key)
                     logger.debug(f"[{okx_uid}] 락 해제 완료: {symbol}/{timeframe}")
             except Exception as e:
                 logger.error(f"[{okx_uid}] 락 해제 중 오류: {str(e)}")
@@ -603,51 +647,26 @@ def execute_trading_cycle(self: Any, okx_uid: str, symbol: str, timeframe: str, 
     # 타임아웃 보호 컨텍스트 사용
     with timeout_protection():
         try:
-            # 이전에 hanging된 태스크가 있을 경우를 대비해 강제 초기화 (okx_uid 사용)
-            run_async(set_task_running(okx_uid, True, expiry=60), timeout=5)
-
             # 실제 비동기 로직 실행 - 타임아웃 45초 설정 (okx_uid 전달)
+            # 모든 비동기 작업을 _execute_trading_cycle 내에서 처리
             result: Dict[str, Any] = run_async(
                 _execute_trading_cycle(okx_uid, task_id, symbol, timeframe, restart),
                 timeout=45
             )
-
-            # 성공적인 실행 기록 (okx_uid 사용)
-            run_async(update_last_execution(okx_uid, True), timeout=5)
 
             # 태스크 실행 시간 기록
             execution_time = time.time() - start_time
             if execution_time > 10:
                 logger.warning(f"[{okx_uid}] 트레이딩 사이클 완료: 실행 시간={execution_time:.2f}초")
 
-            # 상태 해제 (okx_uid 사용)
-            run_async(set_task_running(okx_uid, False), timeout=5)
-
             return result
         except asyncio.TimeoutError:
             error_message = "비동기 작업이 내부 타임아웃을 초과했습니다"
             logger.error(f"[{okx_uid}] {error_message}")
-
-            # 오류 정보 저장 및 상태 정리 (okx_uid 사용)
-            try:
-                run_async(update_last_execution(okx_uid, False, error_message), timeout=5)
-                run_async(set_task_running(okx_uid, False), timeout=5)
-            except Exception as cleanup_err:
-                logger.error(f"[{okx_uid}] 타임아웃 후 정리 중 오류: {str(cleanup_err)}")
-
             return {"status": "error", "error": error_message}
         except Exception as e:
             error_message = str(e)
             logger.error(f"[{okx_uid}] 트레이딩 사이클 실행 중 오류 발생: {error_message}", exc_info=True)
-
-            # 오류 정보 저장 (okx_uid 사용)
-            try:
-                run_async(update_last_execution(okx_uid, False, error_message), timeout=5)
-                # 문제 발생 시에도 task_running 해제 (okx_uid 사용)
-                run_async(set_task_running(okx_uid, False), timeout=5)
-            except Exception as cleanup_err:
-                logger.error(f"[{okx_uid}] 오류 후 정리 중 추가 오류: {str(cleanup_err)}")
-
             return {"status": "error", "error": error_message}
 
 async def _execute_trading_cycle(
@@ -656,86 +675,137 @@ async def _execute_trading_cycle(
     """
     실제 비동기 트레이딩 로직 (OKX UID 기반)
     컨텍스트 매니저 패턴 적용
+    모든 async 작업을 단일 이벤트 루프에서 처리
     """
-    # 재시작 모드일 때는 락 관련 문제를 무시하도록 플래그 설정
-    lock_key = REDIS_KEY_USER_LOCK.format(okx_uid=okx_uid, symbol=symbol, timeframe=timeframe)
-    
-    # 재시작 모드이거나 첫 실행일 경우 기존 락 삭제
-    if restart:
-        try:
-            lock_exists = await get_redis_client().exists(lock_key)
-            if lock_exists:
-                logger.info(f"[{okx_uid}] 재시작 모드: 기존 락 강제 삭제 {symbol}/{timeframe}")
-                await get_redis_client().delete(lock_key)
-                # 잠시 대기하여 완전히 삭제되도록 함
-                await asyncio.sleep(0.5)
-        except Exception as lock_err:
-            logger.warning(f"[{okx_uid}] 기존 락 삭제 중 오류 (무시됨): {str(lock_err)}")
-    
-    # 락 획득 시도 (okx_uid 사용)
-    async with acquire_okx_lock(okx_uid, symbol, timeframe, ttl=60) as lock_acquired: # acquire_user_lock -> acquire_okx_lock
-        if not lock_acquired:
-            logger.warning(f"[{okx_uid}] {symbol}/{timeframe}에 대한 락 획득 실패. 이미 다른 프로세스가 실행 중입니다.")
-            return {"status": "skipped", "message": "이미 다른 프로세스가 실행 중입니다."}
+    # 상태 추적 변수
+    success = False
+    error_message: Optional[str] = None
 
-        try:
-            # 쿨다운 키 삭제 - 첫 실행에서 쿨다운 무시를 위해
-            if restart:
-                for direction in ["long", "short"]:
-                    cooldown_key = f"user:{okx_uid}:cooldown:{symbol}:{direction}"
-                    try:
-                        cooldown_exists = await get_redis_client().exists(cooldown_key)
-                        if cooldown_exists:
-                            logger.info(f"[{okx_uid}] 재시작 모드: 쿨다운 삭제 {symbol}/{direction}")
-                            await get_redis_client().delete(cooldown_key)
-                    except Exception as cooldown_err:
-                        logger.warning(f"[{okx_uid}] 쿨다운 삭제 중 오류 (무시됨): {str(cooldown_err)}")
+    redis = await get_redis_client()
 
-            # 상태 확인 - 실패 시 재시도 (okx_uid 사용)
-            is_running = False
-            retry_count = 0
-            while retry_count < 3:
+    try:
+        # 1. 태스크 실행 상태를 True로 설정 (60초 만료)
+        await set_task_running(okx_uid, True, expiry=60)
+
+        lock_key = REDIS_KEY_USER_LOCK.format(okx_uid=okx_uid, symbol=symbol, timeframe=timeframe)
+
+        # 재시작 모드이거나 첫 실행일 경우 기존 락 삭제
+        if restart:
+            try:
+                # 이벤트 루프가 열려있는지 확인
                 try:
-                    is_running = await check_if_running(okx_uid)
-                    break
-                except Exception as check_err:
-                    logger.warning(f"[{okx_uid}] 상태 확인 실패 (시도 {retry_count+1}/3): {str(check_err)}")
-                    retry_count += 1
+                    loop = asyncio.get_running_loop()
+                    if loop.is_closed():
+                        logger.warning(f"[{okx_uid}] 이벤트 루프가 닫혀있어 락 삭제를 건너뜁니다")
+                    else:
+                        lock_exists = await redis.exists(lock_key)
+                        if lock_exists:
+                            logger.info(f"[{okx_uid}] 재시작 모드: 기존 락 강제 삭제 {symbol}/{timeframe}")
+                            await redis.delete(lock_key)
+                            # 잠시 대기하여 완전히 삭제되도록 함
+                            await asyncio.sleep(0.5)
+                except RuntimeError:
+                    # 실행 중인 이벤트 루프가 없는 경우
+                    logger.debug(f"[{okx_uid}] 실행 중인 이벤트 루프 없음, 락 삭제 건너뜀")
+            except Exception as lock_err:
+                logger.debug(f"[{okx_uid}] 기존 락 삭제 중 오류 (무시됨): {str(lock_err)}")
+
+        # 락 획득 시도 (okx_uid 사용)
+        async with acquire_okx_lock(okx_uid, symbol, timeframe, ttl=60) as lock_acquired: # acquire_user_lock -> acquire_okx_lock
+            if not lock_acquired:
+                logger.warning(f"[{okx_uid}] {symbol}/{timeframe}에 대한 락 획득 실패. 이미 다른 프로세스가 실행 중입니다.")
+                error_message = "이미 다른 프로세스가 실행 중입니다."
+                await update_last_execution(okx_uid, success, error_message)
+                return {"status": "skipped", "message": error_message}
+
+            try:
+                # 쿨다운 키 삭제 - 첫 실행에서 쿨다운 무시를 위해
+                if restart:
+                    for direction in ["long", "short"]:
+                        cooldown_key = f"user:{okx_uid}:cooldown:{symbol}:{direction}"
+                        try:
+                            # 이벤트 루프 상태 확인
+                            try:
+                                loop = asyncio.get_running_loop()
+                                if not loop.is_closed():
+                                    cooldown_exists = await redis.exists(cooldown_key)
+                                    if cooldown_exists:
+                                        logger.info(f"[{okx_uid}] 재시작 모드: 쿨다운 삭제 {symbol}/{direction}")
+                                        await redis.delete(cooldown_key)
+                            except RuntimeError:
+                                logger.debug(f"[{okx_uid}] 실행 중인 이벤트 루프 없음, 쿨다운 삭제 건너뜀")
+                        except Exception as cooldown_err:
+                            logger.debug(f"[{okx_uid}] 쿨다운 삭제 중 오류 (무시됨): {str(cooldown_err)}")
+
+                # 상태 확인 - 실패 시 재시도 (okx_uid 사용)
+                is_running = False
+                retry_count = 0
+                while retry_count < 3:
+                    try:
+                        is_running = await check_if_running(okx_uid)
+                        break
+                    except Exception as check_err:
+                        logger.warning(f"[{okx_uid}] 상태 확인 실패 (시도 {retry_count+1}/3): {str(check_err)}")
+                        retry_count += 1
+                        await asyncio.sleep(1)
+
+                if retry_count == 3:
+                    logger.warning(f"[{okx_uid}] 상태 확인에 최대 시도 횟수 도달 -> 기본값으로 계속 진행")
+                    is_running = True  # 확인 불가 시 기본값으로 진행
+
+                logger.debug(f"[{okx_uid}] 트레이딩 상태 확인 결과: {is_running}")
+
+                if is_running:
+                    # 컨텍스트 매니저를 통한 실행으로 확실한 자원 정리 (okx_uid 사용)
+                    # restart 파라미터를 그대로 전달하여 execute_trading_logic에서도 재시작 모드 인식
+                    await execute_trading_with_context(
+                        okx_uid=okx_uid, symbol=symbol, timeframe=timeframe, restart=restart
+                    )
+
+                    # 다음 사이클까지 작은 지연 추가
                     await asyncio.sleep(1)
 
-            if retry_count == 3:
-                logger.warning(f"[{okx_uid}] 상태 확인에 최대 시도 횟수 도달 -> 기본값으로 계속 진행")
-                is_running = True  # 확인 불가 시 기본값으로 진행
+                    # 성공 상태 기록
+                    success = True
+                    await update_last_execution(okx_uid, success)
+                    return {"status": "success", "message": f"[{okx_uid}] 트레이딩 사이클 완료"}
+                else:
+                    # 중지 상태일 경우 태스크 ID 삭제 및 상태 업데이트 (okx_uid 사용)
+                    await redis.delete(REDIS_KEY_TASK_ID.format(okx_uid=okx_uid))
+                    await set_trading_status(okx_uid, "stopped")
+                    # user_id 대신 okx_uid를 보내는 것이 맞는지 확인 필요. 우선 그대로 둠.
+                    await send_telegram_message(f"⚠️[{okx_uid}] User의 상태를 Stopped로 강제 변경6.", okx_uid, debug=True)
+                    await set_symbol_status(okx_uid, symbol, "stopped")
 
-            logger.debug(f"[{okx_uid}] 트레이딩 상태 확인 결과: {is_running}")
+                    logger.info(f"[{okx_uid}] 트레이딩 중지 상태 감지 - 사이클 실행 중단")
+                    success = True  # 정상 중지는 성공으로 간주
+                    await update_last_execution(okx_uid, success)
+                    return {"status": "stopped", "message": "트레이딩이 중지되었습니다."}
 
-            if is_running:
-                # 컨텍스트 매니저를 통한 실행으로 확실한 자원 정리 (okx_uid 사용)
-                # restart 파라미터를 그대로 전달하여 execute_trading_logic에서도 재시작 모드 인식
-                await execute_trading_with_context(
-                    okx_uid=okx_uid, symbol=symbol, timeframe=timeframe, restart=restart
-                )
+            except Exception as e:
+                logger.error(f"[{okx_uid}] 트레이딩 사이클 오류: {str(e)}", exc_info=True)
+                error_message = str(e)
+                success = False
+                await update_last_execution(okx_uid, success, error_message)
+                raise  # 상위 함수에서 처리하도록 예외 전파
 
-                # 다음 사이클까지 작은 지연 추가
-                await asyncio.sleep(1)
+    except Exception as e:
+        # 최상위 예외 처리
+        error_message = str(e)
+        success = False
+        logger.error(f"[{okx_uid}] _execute_trading_cycle 최상위 오류: {error_message}", exc_info=True)
+        try:
+            await update_last_execution(okx_uid, success, error_message)
+        except Exception as update_err:
+            logger.error(f"[{okx_uid}] update_last_execution 실패: {str(update_err)}")
+        raise
 
-                return {"status": "success", "message": f"[{okx_uid}] 트레이딩 사이클 완료"}
-            else:
-                # 중지 상태일 경우 태스크 ID 삭제 및 상태 업데이트 (okx_uid 사용)
-                await get_redis_client().delete(REDIS_KEY_TASK_ID.format(okx_uid=okx_uid))
-                await set_trading_status(okx_uid, "stopped")
-                # user_id 대신 okx_uid를 보내는 것이 맞는지 확인 필요. 우선 그대로 둠.
-                await send_telegram_message(f"⚠️[{okx_uid}] User의 상태를 Stopped로 강제 변경6.", okx_uid, debug=True)
-                await set_symbol_status(okx_uid, symbol, "stopped")
-
-                logger.info(f"[{okx_uid}] 트레이딩 중지 상태 감지 - 사이클 실행 중단")
-                return {"status": "stopped", "message": "트레이딩이 중지되었습니다."}
-
-        except Exception as e:
-            logger.error(f"[{okx_uid}] 트레이딩 사이클 오류: {str(e)}", exc_info=True)
-            # 실행 실패 시 task_running 명시적 해제 (okx_uid 사용)
-            await get_redis_client().delete(REDIS_KEY_TASK_RUNNING.format(okx_uid=okx_uid))
-            raise  # 상위 함수에서 처리하도록 예외 전파
+    finally:
+        # 항상 task_running 상태를 False로 설정
+        try:
+            await set_task_running(okx_uid, False)
+        except Exception as cleanup_err:
+            logger.error(f"[{okx_uid}] set_task_running cleanup 실패: {str(cleanup_err)}")
 
 # 애플리케이션 종료 시 이벤트 루프 정리 함수
 def cleanup_event_loop():

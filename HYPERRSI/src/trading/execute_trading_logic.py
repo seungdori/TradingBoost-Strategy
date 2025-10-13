@@ -40,12 +40,13 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> str:
     Returns:
         str: OKX UID
     """
-    redis_client = get_redis_client()
+
+    redis = await get_redis_client()
     try:
         # 텔레그램 ID로 OKX UID 조회
         key = f"user:{telegram_id}:okx_uid"
         logger.info(f"[DEBUG] Redis에서 OKX UID 조회 시도: {key}")
-        okx_uid = await get_redis_client().get(key)
+        okx_uid = await redis.get(key)
         logger.info(f"[DEBUG] Redis 조회 결과: {okx_uid}, type: {type(okx_uid)}")
         if okx_uid:
             result = okx_uid.decode() if isinstance(okx_uid, bytes) else okx_uid
@@ -67,20 +68,22 @@ async def get_identifier(user_id: str) -> str:
     Returns:
         str: OKX UID
     """
-    # 11글자 이하면 텔레그램 ID로 간주하고 변환
-    if len(str(user_id)) <= 11:
+    # 13자리 미만이면 텔레그램 ID로 간주하고 변환
+    if len(str(user_id)) < 13:
         okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
         if not okx_uid:
             logger.error(f"텔레그램 ID {user_id}에 대한 OKX UID를 찾을 수 없습니다")
             return str(user_id)  # 변환 실패 시 원래 ID 반환
         logger.info(f"텔레그램 ID {user_id} -> OKX UID {okx_uid} 변환 성공")
         return okx_uid
-    # 12글자 이상이면 이미 OKX UID로 간주
+    # 13자리 이상이면 이미 OKX UID로 간주
     return str(user_id)
 
 
 # ======== 메인 트레이딩 로직 ========
 async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, restart = False):
+
+    redis = await get_redis_client()
     start_time_loop = datetime.now()
     """
     - 주기적으로:
@@ -92,7 +95,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
     
     # 원본 user_id를 telegram_id로 저장 (텔레그램 메시지 전송용)
     original_user_id = user_id
-    telegram_id = user_id if len(str(user_id)) <= 11 else None
+    telegram_id = user_id if len(str(user_id)) < 13 else None
     try: 
         user_id = await get_identifier(user_id)
     except Exception as e:
@@ -102,14 +105,12 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
         logger.error(f"유효하지 않은 사용자 ID: {original_user_id}")
         return
 
-    redis_client = get_redis_client()
-
     # get_identifier가 원래 ID를 그대로 반환한 경우 (변환 실패)
     # 이는 텔레그램 ID인데 OKX UID를 찾지 못한 경우
     # OKX UID에서 텔레그램 ID 조회 (telegram_id가 없는 경우)
     if not telegram_id:
         try:
-            telegram_id_bytes = await get_redis_client().get(f"okx_uid_to_telegram:{user_id}")
+            telegram_id_bytes = await redis.get(f"okx_uid_to_telegram:{user_id}")
             if telegram_id_bytes:
                 telegram_id = telegram_id_bytes.decode() if isinstance(telegram_id_bytes, bytes) else telegram_id_bytes
         except Exception as e:
@@ -128,8 +129,8 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
 
         # Redis 연결 확인
         #logger.warning("Redis 연결 확인 중")
-        await get_redis_client().ping()
-        await get_redis_client().set(f"user:{user_id}:trading:status", "running")
+        await redis.ping()
+        await redis.set(f"user:{user_id}:trading:status", "running")
         #logger.warning(f"Redis 상태 업데이트 완료: user:{user_id}:trading:status = running")
 
     except Exception as e:
@@ -156,7 +157,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
             
             await send_telegram_message(f"⚠️ {error_msg}\n User의 상태를 Stopped로 강제 변경.", user_id, debug=True)
             await send_telegram_message(f"에러가 발생했습니다. 잠시 후에 다시 시도해주세요.", user_id)
-            await get_redis_client().set(f"user:{user_id}:trading:status", "stopped")
+            await redis.set(f"user:{user_id}:trading:status", "stopped")
         except Exception as telegram_error:
             logger.error(f"텔레그램 메시지 전송 실패: {str(telegram_error)}", exc_info=True)
         
@@ -174,25 +175,25 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
         user_settings = await redis_service.get_user_settings(user_id)
         if not user_settings:
             await send_telegram_message("⚠️ 트레이딩 설정 오류\n""─────────────────────\n""사용자 설정을 찾을 수 없습니다.\n""/settings 명령어로 설정을 확인해주세요.",user_id)
-            await get_redis_client().set(f"user:{user_id}:trading:status", "stopped")
+            await redis.set(f"user:{user_id}:trading:status", "stopped")
             return
         entry_fail_count_key = f"user:{user_id}:entry_fail_count"
-        await get_redis_client().delete(entry_fail_count_key)
+        await redis.delete(entry_fail_count_key)
         active_key = f"user:{user_id}:preferences"
         
         # 매개변수로 전달된 symbol이 없는 경우에만 Redis에서 가져옴
         if symbol is None:
-            symbol = await get_redis_client().hget(active_key, "symbol")
+            symbol = await redis.hget(active_key, "symbol")
             if not symbol:
                 symbol = 'BTC-USDT-SWAP'
                 
         if timeframe is None:   
-            timeframe = await get_redis_client().hget(active_key, "timeframe")
+            timeframe = await redis.hget(active_key, "timeframe")
             if not timeframe:
                 timeframe = '1m'
         if not symbol or not timeframe:
             await send_telegram_message("⚠️ 트레이딩 설정 오류\n""─────────────────────\n""심볼 또는 타임프레임이 설정되지 않았습니다.\n""설정을 확인하고 다시 시작해주세요.",user_id)
-            await get_redis_client().set(f"user:{user_id}:trading:status", "stopped")
+            await redis.set(f"user:{user_id}:trading:status", "stopped")
             await send_telegram_message(f"⚠️[{user_id}] User의 상태를 Stopped로 강제 변경1.", user_id, debug=True)
             return
         
@@ -246,7 +247,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                     f"설정을 수정하고 다시 시작해주세요.",
                     user_id
                 )
-                await get_redis_client().set(f"user:{user_id}:trading:status", "stopped")
+                await redis.set(f"user:{user_id}:trading:status", "stopped")
                 await send_telegram_message(f"⚠️[{user_id}] User의 상태를 Stopped로 강제 변경2.", user_id, debug=True)
                 return
             
@@ -265,8 +266,8 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
             timeframe_long_lock_key = f"user:{user_id}:position_lock:{symbol}:long:{tf_str}"
             timeframe_short_lock_key = f"user:{user_id}:position_lock:{symbol}:short:{tf_str}"
             print(f"[{user_id}] 타임프레임 잠금 키: {timeframe_long_lock_key}, {timeframe_short_lock_key}")
-            await get_redis_client().delete(timeframe_long_lock_key)
-            await get_redis_client().delete(timeframe_short_lock_key)
+            await redis.delete(timeframe_long_lock_key)
+            await redis.delete(timeframe_short_lock_key)
             logger.info(f"[{user_id}] 트레이딩 시작 메시지 전송 시도. OKX UID: {user_id}, telegram_id: {telegram_id}")
             try:
                 result = await send_telegram_message(trading_start_msg, user_id)
@@ -291,10 +292,10 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
             # 기존 main_position_direction 키가 있으면 삭제
             main_position_key = f"user:{user_id}:position:{symbol}:main_position_direction"
             hedging_position_key = f"user:{user_id}:position:{symbol}:hedging_position_direction"
-            if await get_redis_client().exists(main_position_key):
-                await get_redis_client().delete(main_position_key)
-            if await get_redis_client().exists(hedging_position_key):
-                await get_redis_client().delete(hedging_position_key)
+            if await redis.exists(main_position_key):
+                await redis.delete(main_position_key)
+            if await redis.exists(hedging_position_key):
+                await redis.delete(hedging_position_key)
 
 
 
@@ -316,7 +317,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
 
         #print(f"레버리지: {leverage}, 현재 레버리지: {current_leverage}")
         is_hedge_mode, tdMode = await trading_service.get_position_mode(user_id, symbol)
-        is_running = await get_redis_client().get(f"user:{user_id}:trading:status")
+        is_running = await redis.get(f"user:{user_id}:trading:status")
         if not restart:
             try:
                 if leverage > 1.0 and current_leverage != leverage:
@@ -375,17 +376,17 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
             #print("설정 업데이트 호출")
             tf_str = get_timeframe(timeframe)
             current_price = await get_current_price(symbol, tf_str)
-            settings_str = await get_redis_client().get(f"user:{user_id}:settings")
+            settings_str = await redis.get(f"user:{user_id}:settings")
             candle_key = f"candles_with_indicators:{symbol}:{tf_str}"
-            raw_data = await get_redis_client().lindex(candle_key, -1)
+            raw_data = await redis.lindex(candle_key, -1)
             if not raw_data:
                 # 15분에 한 번만 알림을 보내도록 제한
                 alert_key = f"candle_data_alert_sent:{user_id}:{symbol}:{tf_str}"
-                already_sent = await get_redis_client().get(alert_key)
+                already_sent = await redis.get(alert_key)
                 if not already_sent:
                     await send_telegram_message("⚠️ 캔들 데이터를 찾을 수 없습니다.\n관리자에게 문의해주세요.", user_id, debug=True )
                     # 15분(900초) 동안 알림 재전송 방지
-                    await get_redis_client().setex(alert_key, 3600, "1")
+                    await redis.setex(alert_key, 3600, "1")
                 return
             candle_data = json.loads(raw_data)
             #print("atr_value: ", atr_value)
@@ -399,7 +400,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                 logger.error(f"설정을 찾을 수 없음: user_id={user_id}")
                 return
             #print("설정 업데이트 완료")
-            trading_status = await get_redis_client().get(f"user:{user_id}:trading:status")
+            trading_status = await redis.get(f"user:{user_id}:trading:status")
             # 바이트 문자열을 디코딩
             if isinstance(trading_status, bytes):
                 trading_status = trading_status.decode('utf-8')
@@ -414,7 +415,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                 )
                 return
             #=======================================
-            trading_status = await get_redis_client().get(f"user:{user_id}:trading:status")
+            trading_status = await redis.get(f"user:{user_id}:trading:status")
             if trading_status != "running":
                 print(f"[{user_id}] 트레이딩 중지 상태: {trading_status}")
             #=======================================
@@ -442,22 +443,22 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
             redis_key = f"candles_with_indicators:{symbol}:{tf_str}"
             #print(f"[{user_id}] redis_key: {redis_key}")
             # 여러 캔들 데이터를 가져옵니다 (최소 마지막 14개)
-            raw_data_list = await get_redis_client().lrange(redis_key, -14, -1)
+            raw_data_list = await redis.lrange(redis_key, -14, -1)
             #print(f"[{user_id}] raw_data_list: {raw_data_list}") #<-- 1h 정상 작동
             if not raw_data_list or len(raw_data_list) < 2:  # 최소 2개 이상의 데이터가 필요
-                raw_data = await get_redis_client().lindex(redis_key, -1)
+                raw_data = await redis.lindex(redis_key, -1)
                 if not raw_data:
                     # 15분에 한 번만 알림을 보내도록 제한
                     alert_key = f"candle_data_alert_sent:{user_id}:{symbol}:{tf_str}"
-                    already_sent = await get_redis_client().get(alert_key)
+                    already_sent = await redis.get(alert_key)
                     if not already_sent:
                         await send_telegram_message("⚠️ 캔들 데이터를 찾을 수 없습니다.\n관리자에게 문의해주세요.", user_id, debug=True)
                         # 15분(900초) 동안 알림 재전송 방지
-                        await get_redis_client().setex(alert_key, 3600, "1")
+                        await redis.setex(alert_key, 3600, "1")
                     return
 
             #=======================================
-            trading_status = await get_redis_client().get(f"user:{user_id}:trading:status")
+            trading_status = await redis.get(f"user:{user_id}:trading:status")
             if trading_status != "running":
                 print(f"[{user_id}] 트레이딩 중지 상태: {trading_status}")
             #=======================================
@@ -495,7 +496,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
             if current_position:  # 포지션이 있는 경우
                 try:
                     min_size_key = f"user:{user_id}:position:{symbol}:min_sustain_contract_size"
-                    min_sustain_contract_size = await get_redis_client().get(min_size_key)
+                    min_sustain_contract_size = await redis.get(min_size_key)
                     if min_sustain_contract_size is None:
                         min_sustain_contract_size = 0.01
             
@@ -539,14 +540,14 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                     await send_telegram_message(f"⚠️ 포지션 청산 오류: {str(e)}", user_id, debug=True)
             # 마지막 포지션 출력 시간 체크
             last_print_key = f"user:{user_id}:last_position_print_time"
-            last_print_time = await get_redis_client().get(last_print_key)
+            last_print_time = await redis.get(last_print_key)
             current_time = int(time.time())
             
             if not last_print_time or (current_time - int(last_print_time)) >= 300:  # 300초 = 5분
                 logger.debug(f"Current Position : {current_position}")
-                await get_redis_client().set(last_print_key, str(current_time))
+                await redis.set(last_print_key, str(current_time))
             
-            trading_status = await get_redis_client().get(f"user:{user_id}:trading:status")
+            trading_status = await redis.get(f"user:{user_id}:trading:status")
             if trading_status != "running":
                 logger.debug(f"💚trading_status2: {trading_status}")
             if not current_position:
@@ -556,7 +557,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                     symbol, timeframe,
                     current_rsi, rsi_signals, current_state
                 )
-                trading_status = await get_redis_client().get(f"user:{user_id}:trading:status")
+                trading_status = await redis.get(f"user:{user_id}:trading:status")
                 if trading_status is None:
                     logger.info(f"⚠️Not FOUND [{user_id}] Trading Status!!. Trading Status :  {trading_status}")
                     await send_telegram_message(f"⚠️Not FOUND [{user_id}] Trading Status!!. Trading Status :  {trading_status}", user_id, debug=True)
@@ -566,7 +567,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                 try:
                     #print("포지션이 있다고 출력 됨.")
                     main_position_direction_key = f"user:{user_id}:position:{symbol}:main_position_direction"
-                    direction = await get_redis_client().get(main_position_direction_key)
+                    direction = await redis.get(main_position_direction_key)
                     if direction is None:
                         direction = "any"
                     await handle_existing_position(
@@ -574,7 +575,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                         symbol, timeframe,
                         current_position, current_rsi, rsi_signals, current_state, side = direction
                     )
-                    trading_status = await get_redis_client().get(f"user:{user_id}:trading:status")
+                    trading_status = await redis.get(f"user:{user_id}:trading:status")
                     if trading_status != "running":
                         logger.info(f"[{user_id}] 💚trading_status3: {trading_status}")
                 except Exception as e:
@@ -600,7 +601,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
             logger.debug(f"[{user_id}] 트레이딩 로직 루프 완료. 현재 RSI: {current_rsi}, 현재 상태: {current_state}") # 디버깅용
 
             #=======================================
-            trading_status = await get_redis_client().get(f"user:{user_id}:trading:status")
+            trading_status = await redis.get(f"user:{user_id}:trading:status")
             #print("🧡trading_status1: ", trading_status)
             #=======================================
         end_time_loop = datetime.now()
@@ -619,7 +620,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
             #print("trading_service 종료")
         
         # 트레이딩 종료 여부 확인 및 로그 기록
-        trading_status = await get_redis_client().get(f"user:{user_id}:trading:status")
+        trading_status = await redis.get(f"user:{user_id}:trading:status")
         if trading_status == "stopped":
             # 가장 먼저 로그를 기록
             log_bot_stop(user_id=user_id, symbol=symbol, reason="사용자 요청 또는 시스템에 의한 종료")

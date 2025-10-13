@@ -10,6 +10,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
+import os
 
 from HYPERRSI.src.core.config import settings
 from shared.database.redis_helper import get_redis_client
@@ -23,10 +24,10 @@ try:
     API_PORT = 8000
 except AttributeError:
     API_PORT = 8000
-    
-API_BASE_URL = "/api"
 
-allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267"]
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000/api")
+
+allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267","586156710277369942"]
 def is_allowed_user(user_id: Optional[str]) -> bool:
     """허용된 사용자인지 확인"""
     if user_id is None:
@@ -62,8 +63,9 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> Optional[str]:
         Optional[str]: OKX UID or None
     """
     try:
+        redis = await get_redis_client()
         # 텔레그램 ID로 OKX UID 조회
-        okx_uid = await get_redis_client().get(f"user:{telegram_id}:okx_uid")
+        okx_uid = await redis.get(f"user:{telegram_id}:okx_uid")
         if okx_uid:
             return okx_uid.decode() if isinstance(okx_uid, bytes) else okx_uid
         return None
@@ -81,14 +83,14 @@ async def get_identifier(user_id: str) -> str:
     Returns:
         str: OKX UID
     """
-    # 11글자 이하면 텔레그램 ID로 간주하고 변환
-    if len(str(user_id)) <= 11:
+    # 13자리 미만이면 텔레그램 ID로 간주하고 변환
+    if len(str(user_id)) < 13:
         okx_uid = await get_okx_uid_from_telegram_id(user_id)
         if not okx_uid:
             logger.error(f"텔레그램 ID {user_id}에 대한 OKX UID를 찾을 수 없습니다")
             return str(user_id)  # 변환 실패 시 원래 ID 반환
         return okx_uid
-    # 12글자 이상이면 이미 OKX UID로 간주
+    # 13자리 이상이면 이미 OKX UID로 간주
     return str(user_id)
 
 # API 요청 헬퍼 함수
@@ -144,8 +146,9 @@ async def get_dual_side_settings_fallback(user_id: str) -> Dict[str, Any]:
     # user_id를 OKX UID로 변환
     okx_uid = await get_identifier(str(user_id))
 
+    redis = await get_redis_client()
     settings_key = f"user:{okx_uid}:dual_side"
-    settings = await get_redis_client().hgetall(settings_key)
+    settings = await redis.hgetall(settings_key)
 
     # 문자열 값을 적절한 타입으로 변환
     parsed_settings: Dict[str, Any] = {}
@@ -167,36 +170,49 @@ async def update_dual_side_settings_fallback(user_id: str, settings: dict) -> No
     """Redis에 직접 양방향 매매 설정을 저장합니다."""
     # user_id를 OKX UID로 변환
     okx_uid = await get_identifier(str(user_id))
-    
+
+    redis = await get_redis_client()
     settings_key = f"user:{okx_uid}:dual_side"
     settings_to_save = {k: str(v).lower() if isinstance(v, bool) else str(v) for k, v in settings.items()}
-    await get_redis_client().hset(settings_key, mapping=settings_to_save)
-    
+    await redis.hset(settings_key, mapping=settings_to_save)
+
     # JSON 설정에도 use_dual_side_entry 값 동기화
     if 'use_dual_side_entry' in settings:
         settings_key_og = f"user:{okx_uid}:settings"
-        current_settings = await get_redis_client().get(settings_key_og)
+        current_settings = await redis.get(settings_key_og)
         if current_settings:
             settings_dict = json.loads(current_settings)
             settings_dict['use_dual_side_entry'] = settings['use_dual_side_entry']
-            await get_redis_client().set(settings_key_og, json.dumps(settings_dict))
+            await redis.set(settings_key_og, json.dumps(settings_dict))
 
 # =========================
 # /dual_settings 명령어
 # =========================
 
 @router.message(Command("dual_settings"))
+
 async def dual_side_settings_command(message: types.Message) -> None:
     """듀얼 사이드 매매(헷지) 설정 메뉴"""
     if message.from_user is None:
         return
-    telegram_id = message.from_user.id
-    # 텔레그램 ID를 OKX UID로 변환
-    user_id = await get_identifier(str(telegram_id))
-    okx_uid = await get_redis_client().get(f"user:{user_id}:okx_uid")
+    telegram_id = str(message.from_user.id)
+
+    # 텔레그램 ID로 OKX UID 매핑 조회
+    redis = await get_redis_client()
+    okx_uid = await redis.get(f"user:{telegram_id}:okx_uid")
+
+    if okx_uid:
+        okx_uid = okx_uid.decode() if isinstance(okx_uid, bytes) else okx_uid
+    else:
+        # 매핑이 없으면 get_identifier로 변환 시도 (fallback)
+        okx_uid = await get_identifier(telegram_id)
+
     if not is_allowed_user(okx_uid):
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
+
+    # 이후 모든 작업에서 okx_uid 사용
+    user_id = okx_uid
     # API를 통해 설정 로드
     settings = await get_dual_side_settings_api(user_id)
     if not settings:
@@ -213,6 +229,7 @@ async def dual_side_settings_command(message: types.Message) -> None:
 # "현재 설정 확인" 버튼 핸들러
 # -------------------------------
 @router.callback_query(F.data == "dual_show_current")
+
 async def handle_show_current(callback: types.CallbackQuery) -> None:
     """현재 설정 정보를 다시 보여주는 콜백."""
     if callback.from_user is None or callback.message is None:
@@ -1019,7 +1036,8 @@ async def initialize_dual_side_settings_fallback(user_id: str) -> None:
     """Redis에 직접 듀얼 사이드 설정을 기본값으로 초기화합니다."""
     # user_id를 OKX UID로 변환
     okx_uid = await get_identifier(str(user_id))
-    
+
+    redis = await get_redis_client()
     settings_key = f"user:{okx_uid}:dual_side"
     default_settings = {
         'use_dual_side_entry': 'false',  # 기본값 추가
@@ -1036,13 +1054,14 @@ async def initialize_dual_side_settings_fallback(user_id: str) -> None:
         'dual_side_pyramiding_limit': '1',
         'close_main_on_hedge_tp': 'false'  # 기본값으로 메인 포지션 유지
     }
-    await get_redis_client().delete(settings_key)
-    await get_redis_client().hset(settings_key, mapping=default_settings)
+    await redis.delete(settings_key)
+    await redis.hset(settings_key, mapping=default_settings)
 
 # -------------------------------
 # "파라미딩 제한 설정" 버튼 핸들러
 # -------------------------------
 @router.callback_query(F.data == "dual_set_pyramiding_limit")
+
 async def handle_pyramiding_limit_setting(callback: types.CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None or callback.message is None:
         return

@@ -17,6 +17,7 @@ import asyncpg
 
 from shared.config import settings
 from shared.logging import get_logger
+from shared.utils.uid_validator import UIDValidator, UIDType
 
 logger = get_logger(__name__)
 
@@ -193,6 +194,26 @@ class TimescaleUserService:
     ) -> Optional[TimescaleUserRecord]:
         """Ensure an app_users row exists for the given OKX UID."""
 
+        # UID 검증
+        try:
+            okx_uid = UIDValidator.ensure_okx_uid(okx_uid)
+            logger.info(f"✅ OKX UID 검증 성공: {okx_uid} (길이: {len(okx_uid)})")
+        except ValueError as e:
+            logger.error(f"❌ OKX UID 검증 실패: {e}")
+            # 텔레그램 ID가 잘못 전달된 경우 감지
+            detected_type = UIDValidator.detect_uid_type(okx_uid)
+            if detected_type == UIDType.TELEGRAM_ID:
+                logger.warning(f"⚠️ Telegram ID가 OKX UID로 전달되었습니다: {okx_uid}")
+            raise
+
+        if telegram_id:
+            try:
+                telegram_id = UIDValidator.ensure_telegram_id(telegram_id)
+                logger.info(f"✅ Telegram ID 검증 성공: {telegram_id} (길이: {len(telegram_id)})")
+            except ValueError as e:
+                logger.error(f"❌ Telegram ID 검증 실패: {e}")
+                raise
+
         # Attempt to locate the user by OKX UID first
         existing = await cls.fetch_user(okx_uid)
         if existing is not None:
@@ -241,7 +262,7 @@ class TimescaleUserService:
                             updated_at
                         )
                         VALUES (
-                            $1, $2, TRUE, $3, $3, $4, $5, TRUE, TRUE, TRUE, TRUE, now(), now()
+                            $1, $2, TRUE, $3::text, $3::text, $4, $5, TRUE, TRUE, TRUE, TRUE, now(), now()
                         )
                         RETURNING id
                     """,
@@ -294,8 +315,8 @@ class TimescaleUserService:
                     """
                         UPDATE app_users
                            SET telegram_linked = TRUE,
-                               telegram_id = $2,
-                               telegram_userid = $2,
+                               telegram_id = $2::text,
+                               telegram_userid = $2::text,
                                telegram_username = COALESCE($3, telegram_username),
                                okx_uid = COALESCE(okx_uid, $4),
                                okx_linked = TRUE,
@@ -500,3 +521,179 @@ class TimescaleUserService:
 
         async with TimescalePool.acquire() as conn:
             await conn.execute(query, *values)
+
+    # =====================================================
+    # User Settings Methods
+    # =====================================================
+
+    @classmethod
+    async def get_user_settings(
+        cls,
+        identifier: str,
+        setting_type: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        사용자 설정 조회
+
+        Args:
+            identifier: OKX UID, telegram ID, 또는 user ID
+            setting_type: 설정 타입 ('preferences', 'params', 'dual_side')
+                         None이면 모든 타입 반환
+
+        Returns:
+            설정 레코드 리스트
+        """
+        query = """
+            SELECT * FROM get_user_settings($1, $2)
+        """
+
+        async with TimescalePool.acquire() as conn:
+            records = await conn.fetch(query, str(identifier), setting_type)
+
+        return [_record_to_dict(record) for record in records]
+
+    @classmethod
+    async def upsert_user_settings(
+        cls,
+        user_id: str,
+        okx_uid: str,
+        telegram_id: Optional[str],
+        setting_type: str,
+        settings: Dict[str, Any]
+    ) -> Optional[str]:
+        """
+        사용자 설정 업서트 (insert or update)
+
+        Args:
+            user_id: TimescaleDB user ID (UUID)
+            okx_uid: OKX UID
+            telegram_id: Telegram ID (optional)
+            setting_type: 설정 타입 ('preferences', 'params', 'dual_side')
+            settings: 설정 데이터 딕셔너리
+
+        Returns:
+            생성/업데이트된 설정 ID
+        """
+        import json
+
+        query = """
+            SELECT upsert_user_settings($1::uuid, $2, $3, $4, $5::jsonb)
+        """
+
+        async with TimescalePool.acquire() as conn:
+            setting_id = await conn.fetchval(
+                query,
+                user_id,
+                okx_uid,
+                telegram_id,
+                setting_type,
+                json.dumps(settings)
+            )
+
+        return str(setting_id) if setting_id else None
+
+    @classmethod
+    async def save_all_user_settings(
+        cls,
+        identifier: str,
+        preferences: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        dual_side: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """
+        사용자의 모든 설정을 한 번에 저장
+
+        Args:
+            identifier: OKX UID, telegram ID, 또는 user ID
+            preferences: 트레이딩 기본 설정
+            params: 트레이딩 파라미터 설정
+            dual_side: 양방향 매매 설정
+
+        Returns:
+            성공 여부
+        """
+        # identifier 타입 감지 및 로깅
+        UIDValidator.log_uid_info(identifier, context="save_all_user_settings")
+
+        record = await cls.fetch_user(identifier)
+        if record is None:
+            logger.error(f"User not found: {identifier}")
+            return False
+
+        user_id = record.user["id"]
+        okx_uid = record.user.get("okx_uid") or record.api.get("okx_uid") if record.api else None
+        telegram_id = record.user.get("telegram_id")
+
+        if not okx_uid:
+            logger.error(f"OKX UID not found for user: {identifier}")
+            return False
+
+        # OKX UID 검증
+        try:
+            okx_uid = UIDValidator.ensure_okx_uid(okx_uid)
+            logger.info(f"✅ 저장할 OKX UID 검증 성공: {okx_uid}")
+        except ValueError as e:
+            logger.error(f"❌ 저장할 OKX UID 검증 실패: {e}")
+            detected_type = UIDValidator.detect_uid_type(okx_uid)
+            if detected_type == UIDType.TELEGRAM_ID:
+                logger.error(f"⚠️ 심각한 오류: Telegram ID가 OKX UID로 저장되어 있습니다: {okx_uid}")
+                logger.error(f"   데이터베이스 수정이 필요합니다!")
+            return False
+
+        try:
+            if preferences is not None:
+                await cls.upsert_user_settings(
+                    user_id=user_id,
+                    okx_uid=okx_uid,
+                    telegram_id=telegram_id,
+                    setting_type="preferences",
+                    settings=preferences
+                )
+
+            if params is not None:
+                await cls.upsert_user_settings(
+                    user_id=user_id,
+                    okx_uid=okx_uid,
+                    telegram_id=telegram_id,
+                    setting_type="params",
+                    settings=params
+                )
+
+            if dual_side is not None:
+                await cls.upsert_user_settings(
+                    user_id=user_id,
+                    okx_uid=okx_uid,
+                    telegram_id=telegram_id,
+                    setting_type="dual_side",
+                    settings=dual_side
+                )
+
+            logger.info(f"Saved settings to TimescaleDB for user: {okx_uid}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to save settings for user {identifier}: {e}")
+            return False
+
+    @classmethod
+    async def get_setting_by_type(
+        cls,
+        identifier: str,
+        setting_type: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        특정 타입의 설정만 조회
+
+        Args:
+            identifier: OKX UID, telegram ID, 또는 user ID
+            setting_type: 설정 타입 ('preferences', 'params', 'dual_side')
+
+        Returns:
+            설정 데이터 또는 None
+        """
+        settings = await cls.get_user_settings(identifier, setting_type)
+        if not settings:
+            return None
+
+        # 가장 최신 설정 반환
+        return settings[0].get("settings") if settings else None
