@@ -13,7 +13,7 @@ from typing import Dict, List
 
 import psutil
 
-from HYPERRSI.src.core.database import check_redis_connection, reconnect_redis
+from shared.database.redis import ping_redis as check_redis_connection, reconnect_redis
 from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger
 

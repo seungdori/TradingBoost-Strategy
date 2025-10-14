@@ -40,11 +40,10 @@ manager = ConnectionManager()
 
 from shared.config import settings
 
-REDIS_PASSWORD = settings.REDIS_PASSWORD
-
 redis_manager = RedisConnectionManager()
 
-
+# Use shared Redis pool - import from GRID.core.redis
+from GRID.core.redis import get_redis_connection as _get_grid_redis
 
 class QuitException(Exception):
     pass
@@ -57,37 +56,15 @@ async def add_user_log(user_id: int, log_message: str) -> None:
     await manager.add_user_message(user_id, message)
     #print("[LOG ADDED]", message)
 
-
-
-pool: aioredis.ConnectionPool
-if REDIS_PASSWORD:
-    pool = aioredis.ConnectionPool.from_url(
-        'redis://localhost', 
-        max_connections=150,
-        encoding='utf-8', 
-        decode_responses=True,
-        password=REDIS_PASSWORD
-    )
-    redis_client = aioredis.Redis(connection_pool=pool) 
-else:
-    pool = aioredis.ConnectionPool.from_url(
-        'redis://localhost', 
-        max_connections=150,
-        encoding='utf-8', 
-        decode_responses=True
-    )
-    redis_client = aioredis.Redis(connection_pool=pool)
-
 MAX_RETRIES = 3
 RETRY_DELAY = 3  # 재시도 사이의 대기 시간(초)
 
 # retry_async is now imported from shared.utils
 
-
-
-
+# Use shared Redis pool through GRID.core.redis
 async def get_redis_connection():
-    return redis_client
+    """Get Redis connection from shared pool"""
+    return await _get_grid_redis()
 
 #================================================================================================
 # GET SYMBOLS

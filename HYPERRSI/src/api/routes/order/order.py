@@ -21,7 +21,7 @@ from HYPERRSI.src.api.exchange.models import (
     OrderType,
 )
 from HYPERRSI.src.config import settings
-from HYPERRSI.src.core.database import TradingCache
+from shared.cache import TradingCache
 from HYPERRSI.src.core.logger import error_logger
 from HYPERRSI.src.trading.cancel_trigger_okx import TriggerCancelClient
 from HYPERRSI.telegram_message import send_telegram_message

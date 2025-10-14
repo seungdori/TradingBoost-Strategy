@@ -9,7 +9,7 @@ import traceback
 from typing import List, Optional, Tuple
 
 from HYPERRSI.src.api.routes.order import update_stop_loss_order
-from HYPERRSI.src.core.database import TradingCache
+from shared.cache import TradingCache
 from HYPERRSI.src.trading.models import UpdateStopLossRequest
 from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger

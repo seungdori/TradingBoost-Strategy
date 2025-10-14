@@ -13,10 +13,10 @@ from typing import Dict, List, Optional, Set, Union
 
 import aiohttp
 import certifi
-from core.logger import get_logger
 
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
-from HYPERRSI.src.core.database import redis_client
+from HYPERRSI.src.core.logger import get_logger
+from shared.database.redis import get_redis
 
 logger = get_logger(__name__)
 
@@ -54,11 +54,12 @@ class OKXWebsocketManager:
             try:
                 current_time = time.time()
                 # Redis에서 활성 사용자 목록 가져오기
-                keys = await redis_client.keys("user:*:trading:status")
+                redis = await get_redis()
+                keys = await redis.keys("user:*:trading:status")
                 active_user_ids = []
                 
                 for key in keys:
-                    status = await redis_client.get(key)
+                    status = await redis.get(key)
                     if status == "running":
                         user_id = key.split(":")[1]
                         active_user_ids.append(user_id)
@@ -72,7 +73,7 @@ class OKXWebsocketManager:
                 for user_id in active_user_ids:
                     if user_id not in self.active_users:
                         api_key_hash = f"user:{user_id}:api:keys"
-                        api_info = await redis_client.hgetall(api_key_hash)
+                        api_info = await redis.hgetall(api_key_hash)
                         
                         if api_info and 'api_key' in api_info and 'api_secret' in api_info and 'passphrase' in api_info:
                             asyncio.create_task(self.connect_user_websocket(
@@ -271,23 +272,24 @@ class OKXWebsocketManager:
     async def _handle_positions(self, user_id: str, positions: List[Dict]):
         """포지션 정보 처리 및 TP 레벨 체크"""
         try:
+            redis = await get_redis()
             # 기존 포지션 정보 가져오기 (TP 정보 포함)
             existing_positions = {}
             position_pattern = f"user:{user_id}:position"
-            existing_keys = await redis_client.keys(position_pattern)
+            existing_keys = await redis.keys(position_pattern)
             
             for key in existing_keys:
                 if ":summary" not in key:  # 요약 정보 제외
                     # 키가 해시 타입인지 확인
-                    key_type = await redis_client.type(key)
+                    key_type = await redis.type(key)
                     if key_type == "hash":
-                        pos_data = await redis_client.hgetall(key)
+                        pos_data = await redis.hgetall(key)
                         if pos_data:
                             existing_positions[key] = pos_data
                     else:
                         # 해시 타입이 아닌 경우 삭제하고 로그 기록
                         logger.warning(f"Deleting non-hash key: {key} of type {key_type}")
-                        await redis_client.delete(key)
+                        await redis.delete(key)
             
             # 새 포지션 정보 처리
             for position in positions:
@@ -305,7 +307,7 @@ class OKXWebsocketManager:
                         current_price = float(position.get('last', '0'))
                     
                     # tp_state 가져오기
-                    tp_state = await redis_client.hget(position_key, "tp_state")
+                    tp_state = await redis.hget(position_key, "tp_state")
                     if tp_state is None:
                         tp_state = "0"
                     
@@ -366,14 +368,14 @@ class OKXWebsocketManager:
                                 current_tp_state = int(tp_state)
                                 if current_tp_state < tp_level:
                                     tp_state = str(tp_level)
-                                    await redis_client.hset(position_key, "tp_state", str(tp_state))
+                                    await redis.hset(position_key, "tp_state", str(tp_state))
                                 
                                 # TP 상태 업데이트
                                 tp['status'] = 'filled'
                                 
                                 # get_tp 키 설정
                                 get_tp_key = f"get_tp{tp_level}"
-                                await redis_client.hset(position_key, get_tp_key, "true")
+                                await redis.hset(position_key, get_tp_key, "true")
                                 
                                 # 알림 전송
                                 filled_qty = float(tp.get('size', 0))
@@ -399,7 +401,7 @@ class OKXWebsocketManager:
                                 )
                                 
                                 # 브레이크이븐 처리
-                                settings = await redis_client.hgetall(f"user:{user_id}:settings")
+                                settings = await redis.hgetall(f"user:{user_id}:settings")
                                 use_break_even_tp1 = settings.get('use_break_even', 'false').lower() == 'true'
                                 use_break_even_tp2 = settings.get('use_break_even_tp2', 'false').lower() == 'true'
                                 use_break_even_tp3 = settings.get('use_break_even_tp3', 'false').lower() == 'true'
@@ -410,7 +412,7 @@ class OKXWebsocketManager:
                                         user_id, symbol, direction, entry_price, 
                                         contracts_amount, tp_level
                                     )
-                                    await redis_client.hset(position_key, "sl_price", str(entry_price))
+                                    await redis.hset(position_key, "sl_price", str(entry_price))
                                     
                                 elif (use_break_even_tp2 and tp_level == 2 and len(tp_prices) > 0):
                                     # TP1 가격으로 이동
@@ -421,7 +423,7 @@ class OKXWebsocketManager:
                                             user_id, symbol, direction, tp1_price, 
                                             contracts_amount, tp_level
                                         )
-                                        await redis_client.hset(position_key, "sl_price", tp1_price)
+                                        await redis.hset(position_key, "sl_price", tp1_price)
                                         
                                 elif (use_break_even_tp3 and tp_level == 3 and len(tp_prices) > 1):
                                     # TP2 가격으로 이동
@@ -432,7 +434,7 @@ class OKXWebsocketManager:
                                             user_id, symbol, direction, tp2_price, 
                                             contracts_amount, tp_level
                                         )
-                                        await redis_client.hset(position_key, "sl_price", tp2_price)
+                                        await redis.hset(position_key, "sl_price", tp2_price)
                         
                         # 모든 TP가 체결되었는지 확인
                         is_last_tp = all(tp.get('status') != 'active' for tp in tp_data)
@@ -445,7 +447,7 @@ class OKXWebsocketManager:
                             )
                         
                         # 업데이트된 tp_data 저장
-                        await redis_client.hset(position_key, "tp_data", json.dumps(tp_data))
+                        await redis.hset(position_key, "tp_data", json.dumps(tp_data))
                     
                     # 포지션 정보를 해시로 저장
                     position_data = {
@@ -465,8 +467,8 @@ class OKXWebsocketManager:
                         "updated_at": datetime.now().isoformat()
                     }
                     
-                    await redis_client.hset(position_key, mapping=position_data)
-                    await redis_client.expire(position_key, 86400)  # 24시간 유효기간 설정
+                    await redis.hset(position_key, mapping=position_data)
+                    await redis.expire(position_key, 86400)  # 24시간 유효기간 설정
             
             # 종합 포지션 상태 업데이트
             summary_key = f"user:{user_id}:position:summary"
@@ -474,16 +476,17 @@ class OKXWebsocketManager:
                 "count": len(positions),
                 "updated_at": datetime.now().isoformat()
             }
-            await redis_client.hset(summary_key, mapping=summary_data)
+            await redis.hset(summary_key, mapping=summary_data)
                     
         except Exception as e:
             logger.error(f"Error handling positions for user {user_id}: {e}")
     
-    async def _send_tp_alert(self, user_id: str, symbol: str, direction: str, tp_level: int, 
+    async def _send_tp_alert(self, user_id: str, symbol: str, direction: str, tp_level: int,
                             tp_price: Union[str, float], current_price: float,
                             pnl: float = 0, filled_qty: float = 0):
         """TP 도달 시 알림 전송"""
         try:
+            redis = await get_redis()
             # 텔레그램 봇 설정 가져오기
             direction_emoji = "🟢 롱" if direction == "long" else "🔴 숏"
             
@@ -512,17 +515,18 @@ class OKXWebsocketManager:
                 "pnl": str(pnl),
                 "timestamp": datetime.now().isoformat()
             }
-            await redis_client.hset(alert_key, mapping=alert_data)
-            await redis_client.expire(alert_key, 604800)  # 7일간 유효
+            await redis.hset(alert_key, mapping=alert_data)
+            await redis.expire(alert_key, 604800)  # 7일간 유효
             
         except Exception as e:
             logger.error(f"Error sending TP alert for user {user_id}: {e}")
     
-    async def _move_sl_to_break_even(self, user_id: str, symbol: str, side: str, 
-                                    break_even_price: float, contracts_amount: float, 
+    async def _move_sl_to_break_even(self, user_id: str, symbol: str, side: str,
+                                    break_even_price: float, contracts_amount: float,
                                     tp_index: int = 0):
         """거래소 API를 사용해 SL(Stop Loss) 가격을 break_even_price로 업데이트"""
         try:
+            redis = await get_redis()
             from HYPERRSI.src.api.routes.order import update_stop_loss_order
 
             # side가 long 또는 buy이면 order_side는 sell, side가 short 또는 sell이면 order_side는 buy
@@ -550,7 +554,7 @@ class OKXWebsocketManager:
             ))
             
             position_key = f"user:{user_id}:position:{symbol}:{side}"
-            await redis_client.hset(position_key, "sl_price", break_even_price)
+            await redis.hset(position_key, "sl_price", break_even_price)
             return result
             
         except Exception as e:
@@ -558,12 +562,13 @@ class OKXWebsocketManager:
             asyncio.create_task(send_telegram_message(f"SL 이동 오류: {str(e)}", user_id, debug=True))
             return None
             
-    async def _save_tp_pnl_data(self, user_id: str, symbol: str, order_id: str, 
-                               tp_index: int, pnl: float, filled_price: float, 
-                               filled_qty: float, entry_price: float, side: str, 
+    async def _save_tp_pnl_data(self, user_id: str, symbol: str, order_id: str,
+                               tp_index: int, pnl: float, filled_price: float,
+                               filled_qty: float, entry_price: float, side: str,
                                pos_side: str, expiry_days: int = 7):
         """TP 체결 시 PnL 정보를 Redis에 저장하는 함수"""
         try:
+            redis = await get_redis()
             # 개별 TP PnL 데이터 저장
             pnl_key = f"user:{user_id}:pnl:{symbol}:{order_id}:tp{tp_index}"
             pnl_data = {
@@ -575,25 +580,26 @@ class OKXWebsocketManager:
                 "side": side,
                 "pos_side": pos_side
             }
-            await redis_client.hset(pnl_key, mapping=pnl_data)
+            await redis.hset(pnl_key, mapping=pnl_data)
             
             # 만료 시간 설정
-            await redis_client.expire(pnl_key, 60 * 60 * 24 * expiry_days)
+            await redis.expire(pnl_key, 60 * 60 * 24 * expiry_days)
             
             # 누적 PnL 업데이트
             total_pnl_key = f"user:{user_id}:total_pnl:{symbol}"
-            current_total_pnl = float(await redis_client.get(total_pnl_key) or 0)
-            await redis_client.set(total_pnl_key, str(current_total_pnl + pnl))
+            current_total_pnl = float(await redis.get(total_pnl_key) or 0)
+            await redis.set(total_pnl_key, str(current_total_pnl + pnl))
             
             logger.info(f"Saved TP{tp_index} PnL data for user {user_id}: {pnl_data}")
             
         except Exception as e:
             logger.error(f"Error saving PnL data: {str(e)}")
     
-    async def _save_to_completed_history(self, user_id: str, position_data: dict, 
+    async def _save_to_completed_history(self, user_id: str, position_data: dict,
                                         order_info: dict, close_type: str):
         """완료된 거래를 completed_history에 저장하는 함수"""
         try:
+            redis = await get_redis()
             symbol = position_data.get("symbol")
             if not symbol:
                 logger.error(f"Symbol not found in position data for user {user_id}")
@@ -607,7 +613,7 @@ class OKXWebsocketManager:
                 
             cooldown_key = f"user:{user_id}:cooldown:{symbol}:{pos_direction}"
             cooldown_seconds = 300  # 5분
-            await redis_client.set(cooldown_key, "true", ex=cooldown_seconds)
+            await redis.set(cooldown_key, "true", ex=cooldown_seconds)
             completed_key = f"user:{user_id}:completed_history"
             
             if order_info:
@@ -650,10 +656,10 @@ class OKXWebsocketManager:
                 trade_info["pnl_percent"] = (pnl / (entry_price * size)) * 100 if entry_price * size > 0 else 0
 
             # completed_history에 저장
-            await redis_client.lpush(completed_key, json.dumps(trade_info))
+            await redis.lpush(completed_key, json.dumps(trade_info))
             
             # 옵션: 히스토리 크기 제한 (예: 최근 1000개만 유지)
-            await redis_client.ltrim(completed_key, 0, 999)
+            await redis.ltrim(completed_key, 0, 999)
             
             logger.info(f"Saved to completed history - user:{user_id}, symbol:{trade_info['symbol']}, pnl:{trade_info['pnl']}")
             
@@ -663,8 +669,9 @@ class OKXWebsocketManager:
     async def _handle_orders(self, user_id: str, orders: List[Dict]):
         """활성 주문 정보 처리"""
         try:
+            redis = await get_redis()
             # 열린 주문 파이프라인
-            pipeline = redis_client.pipeline()
+            pipeline = redis.pipeline()
             
             for order in orders:
                 symbol = order.get('instId', '')
@@ -712,7 +719,8 @@ class OKXWebsocketManager:
     async def _handle_orders_history(self, user_id: str, orders: List[Dict]):
         """체결된 주문 히스토리 처리"""
         try:
-            pipeline = redis_client.pipeline()
+            redis = await get_redis()
+            pipeline = redis.pipeline()
             
             for order in orders:
                 symbol = order.get('instId', '')

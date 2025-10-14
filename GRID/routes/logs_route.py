@@ -18,25 +18,18 @@ import logging
 
 from shared.config import settings
 
-REDIS_PASSWORD = settings.REDIS_PASSWORD
+# Use shared Redis pool
+from GRID.core.redis import get_redis_connection as _get_grid_redis
 
-if REDIS_PASSWORD:
-    pool: aioredis.ConnectionPool = aioredis.ConnectionPool.from_url(
-        settings.REDIS_URL,
-        max_connections=30,
-        encoding='utf-8',
-        decode_responses=True,
-        password=REDIS_PASSWORD
-    )
-    redis_client: aioredis.Redis = cast(aioredis.Redis, aioredis.Redis(connection_pool=pool))
-else:
-    pool = aioredis.ConnectionPool.from_url(
-        settings.REDIS_URL,
-        max_connections=30,
-        encoding='utf-8',
-        decode_responses=True
-    )
-    redis_client = cast(aioredis.Redis, aioredis.Redis(connection_pool=pool))
+# Global redis_client for backward compatibility
+redis_client: aioredis.Redis | None = None
+
+async def _ensure_redis() -> aioredis.Redis:
+    """Ensure redis_client is initialized from shared pool"""
+    global redis_client
+    if redis_client is None:
+        redis_client = await _get_grid_redis()
+    return redis_client
 class ConnectedUsersResponse(BaseModel):
     connected_users: List[int]
     count: int  # List[int]가 아닌 int로 수정
@@ -55,10 +48,8 @@ class LogResponse(BaseModel):
 TRADING_SERVER_URL = os.getenv('TRADING_SERVER_URL', 'localhost:8000')
 
 async def get_redis_connection() -> aioredis.Redis:
-    if REDIS_PASSWORD:
-        return await aioredis.from_url(settings.REDIS_URL, encoding='utf-8', decode_responses=True, password=REDIS_PASSWORD)
-    else:
-        return await aioredis.from_url(settings.REDIS_URL, encoding='utf-8', decode_responses=True)
+    """Get Redis connection from shared pool"""
+    return await _ensure_redis()
 
 def convert_date_to_timestamp(date_str: str | None) -> float | None:
     """Convert date string to Unix timestamp"""
@@ -1128,9 +1119,9 @@ async def delete_user_messages(user_id: Union[str, int]) -> dict[str, str]:
         user_id (int): 메시지를 삭제할 사용자 ID
     """
     try:
+        redis = await _ensure_redis()
         key = f"user:{user_id}:messages"
-        if redis_client:
-            await redis_client.delete(key)
+        await redis.delete(key)
         return {"status": "success", "message": f"All messages deleted for user {user_id}"}
     except Exception as e:
         raise HTTPException(

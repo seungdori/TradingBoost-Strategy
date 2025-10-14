@@ -8,12 +8,8 @@ import asyncio
 import json
 import traceback
 from datetime import datetime
+from typing import TYPE_CHECKING
 
-from HYPERRSI.src.api.routes.order import (
-    ClosePositionRequest,
-    close_position,
-    update_stop_loss_order,
-)
 from HYPERRSI.src.core.error_handler import log_error
 from HYPERRSI.src.trading.dual_side_entry import get_user_dual_side_settings
 from shared.database.redis_helper import get_redis_client
@@ -22,6 +18,14 @@ from shared.logging import get_logger, log_order
 from .telegram_service import get_identifier, send_telegram_message
 from .trailing_stop_handler import activate_trailing_stop
 from .utils import get_user_settings, is_true_value
+
+# Lazy import for circular dependency resolution
+if TYPE_CHECKING:
+    from HYPERRSI.src.api.routes.order import (
+        ClosePositionRequest,
+        close_position,
+        update_stop_loss_order,
+    )
 
 logger = get_logger(__name__)
 
@@ -36,22 +40,29 @@ def __getattr__(name):
 async def move_sl_to_break_even(user_id: str, symbol: str, side: str, break_even_price: float, contracts_amount: float, tp_index: int = 0, is_hedge: bool = False):
     """
     거래소 API를 사용해 SL(Stop Loss) 가격을 break_even_price로 업데이트.
-    
+
     Args:
         user_id: 사용자 ID (텔레그램 ID 또는 OKX UID)
     """
+    # Lazy import to avoid circular dependency
+    from HYPERRSI.src.api.routes.order import (
+        ClosePositionRequest,
+        close_position,
+        update_stop_loss_order,
+    )
+
     try:
         redis = await get_redis_client()
         # user_id를 OKX UID로 변환
         okx_uid = await get_identifier(str(user_id))
-        
+
         # side가 long 또는 buy이면 order_side는 sell, side가 short 또는 sell이면 order_side는 buy
         order_side = "sell"
         if side == "long" or side == "buy":
             order_side = "sell"
         elif side == "short" or side == "sell":
             order_side = "buy"
-            
+
         result = await update_stop_loss_order(
                         new_sl_price=break_even_price,
                         symbol=symbol,
@@ -213,10 +224,13 @@ async def move_sl_to_break_even(user_id: str, symbol: str, side: str, break_even
 async def process_break_even_settings(user_id: str, symbol: str, order_type: str, position_data: dict):
     """
     TP 주문 체결 시 사용자 설정에 따라 브레이크이븐 처리를 수행합니다.
-    
+
     Args:
         user_id: 사용자 ID (텔레그램 ID 또는 OKX UID)
     """
+    # Lazy import to avoid circular dependency
+    from HYPERRSI.src.api.routes.order import ClosePositionRequest, close_position
+
     try:
         redis = await get_redis_client()
         # user_id를 OKX UID로 변환

@@ -30,16 +30,7 @@ task_logger = get_task_logger('trading_tasks.check_and_execute_trading')
 task_logger.setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-# Initialize Redis clients immediately for Celery context
-# This must happen before importing any modules that use redis_client
-try:
-    from HYPERRSI.src.core.database import init_global_redis_clients
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(init_global_redis_clients())
-    logger.info("Celery module: Redis clients initialized at module level")
-except Exception as e:
-    logger.warning(f"Could not initialize Redis at module level: {e}. Will retry in worker_process_init.")
+# Redis clients are initialized lazily when first accessed
 
 # 시그널 핸들러 함수 추가
 def signal_handler(signum, frame):
@@ -91,13 +82,7 @@ def init_worker():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-        # Initialize Redis clients for Celery worker
-        try:
-            from HYPERRSI.src.core.database import init_global_redis_clients
-            loop.run_until_complete(init_global_redis_clients())
-            logger.info("Celery worker: Redis clients initialized")
-        except Exception as redis_error:
-            logger.error(f"Failed to initialize Redis clients in Celery worker: {redis_error}")
+        # Redis clients are initialized lazily when first accessed
 
         logger.debug("Celery 워커 초기화 완료: 이벤트 루프 설정됨")
     except Exception as e:
@@ -109,16 +94,7 @@ def setup_worker_process(**kwargs):
     """워커 프로세스 초기화 시 Redis 및 시그널 핸들러 설정"""
     logger.info("워커 프로세스 초기화: Redis 및 시그널 핸들러 설정")
 
-    # Redis 초기화 (모듈 import 전에 수행)
-    try:
-        import asyncio
-
-        from HYPERRSI.src.core.database import init_global_redis_clients
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(init_global_redis_clients())
-        logger.info("Celery worker process: Redis clients initialized")
-    except Exception as redis_error:
-        logger.error(f"Failed to initialize Redis in worker process: {redis_error}")
+    # Redis clients are initialized lazily when first accessed
 
     # 시그널 핸들러 설정
     signal.signal(signal.SIGINT, signal_handler)

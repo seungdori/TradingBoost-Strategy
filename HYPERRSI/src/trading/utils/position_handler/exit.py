@@ -127,7 +127,7 @@ async def handle_trend_reversal_exit(
                 symbol=symbol,
                 side=side,
                 current_position=current_position,
-                redis_client=redis_client
+                redis_client=redis
             )
 
             # Cleanup Redis data
@@ -135,7 +135,7 @@ async def handle_trend_reversal_exit(
                 user_id=user_id,
                 symbol=symbol,
                 side=side,
-                redis_client=redis_client
+                redis_client=redis
             )
 
         except Exception as e:
@@ -209,7 +209,7 @@ async def _update_stats_on_close(
     try:
         # Get position info from Redis
         position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side)
-        position_info = await redis.hgetall(position_key)
+        position_info = await redis_client.hgetall(position_key)
 
         # Calculate PnL
         size = current_position.size
@@ -274,23 +274,23 @@ async def _cleanup_redis_on_close(
     """
     try:
         # Delete all position-related keys
-        await redis.delete(f"user:{user_id}:position:{symbol}:entry_price")
+        await redis_client.delete(f"user:{user_id}:position:{symbol}:entry_price")
 
         # Delete DCA count for both sides
         long_dca_count_key = DCA_COUNT_KEY.format(user_id=user_id, symbol=symbol, side="long")
         short_dca_count_key = DCA_COUNT_KEY.format(user_id=user_id, symbol=symbol, side="short")
-        await redis.delete(long_dca_count_key)
-        await redis.delete(short_dca_count_key)
+        await redis_client.delete(long_dca_count_key)
+        await redis_client.delete(short_dca_count_key)
 
         # Delete DCA levels for both sides
         long_dca_levels_key = DCA_LEVELS_KEY.format(user_id=user_id, symbol=symbol, side="long")
         short_dca_levels_key = DCA_LEVELS_KEY.format(user_id=user_id, symbol=symbol, side="short")
-        await redis.delete(long_dca_levels_key)
-        await redis.delete(short_dca_levels_key)
+        await redis_client.delete(long_dca_levels_key)
+        await redis_client.delete(short_dca_levels_key)
 
         # Delete position data
         position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side)
-        await redis.delete(position_key)
+        await redis_client.delete(position_key)
 
         # Reinitialize position data
         await init_user_position_data(user_id, symbol, side)

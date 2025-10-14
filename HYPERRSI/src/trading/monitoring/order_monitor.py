@@ -9,20 +9,23 @@ import json
 import time
 import traceback
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from HYPERRSI.src.api.dependencies import get_exchange_context
-from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
-from HYPERRSI.src.api.routes.order.order import (
-    close_position,
-    get_algo_order_info,
-    get_order_detail,
-)
 from shared.database.redis_helper import get_redis_client
+
+# Lazy imports to avoid circular dependencies
+if TYPE_CHECKING:
+    from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
+    from HYPERRSI.src.api.routes.order.order import (
+        close_position,
+        get_algo_order_info,
+        get_order_detail,
+    )
 from shared.logging import get_logger, log_order
 from shared.utils import contracts_to_qty
 
-from .break_even_handler import move_sl_to_break_even
+# Lazy import to avoid circular dependency - import at usage point
 from .position_validator import (
     check_and_cleanup_orders,
     check_position_exists,
@@ -683,6 +686,11 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                         await send_telegram_message(f"[{okx_uid}] 반대 포지션 손절 후에 포지션 존재 여부: {position_exists}", okx_uid, debug = True)
                         if position_exists:
                             logger.error(f"반대포지션 손절 트리거 체결 이후에도 {symbol} {position_side} 포지션이 여전히 존재함. 직접 종료합니다.")
+
+                            # Lazy import to avoid circular dependency
+                            from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
+                            from HYPERRSI.src.api.routes.order.order import close_position
+
                             close_request = ClosePositionRequest(
                                 close_type="market",
                                 price=price,
@@ -864,6 +872,8 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                             
                             if use_break_even_tp1 and entry_price > 0 and contracts_amount > 0:
                                 logger.info(f"TP1 체결: SL을 브레이크이븐({entry_price})으로 이동합니다.")
+                                # Lazy import to avoid circular dependency
+                                from .break_even_handler import move_sl_to_break_even
                                 asyncio.create_task(move_sl_to_break_even(
                                     user_id=user_id,
                                     symbol=symbol,
@@ -996,6 +1006,11 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                 # 포지션이 존재한다면 직접 종료
                 if position_exists:
                     logger.info(f"브레이크이븐 설정 후 {symbol} {position_side} 포지션이 여전히 존재함. 직접 종료합니다.")
+
+                    # Lazy import to avoid circular dependency
+                    from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
+                    from HYPERRSI.src.api.routes.order.order import close_position
+
                     close_request = ClosePositionRequest(
                         close_type="market",
                         price=price,

@@ -14,7 +14,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.dialects.postgresql import insert
 
 from HYPERRSI.src.core.config import settings
-from HYPERRSI.src.core.database import get_async_session
+from shared.database.session import get_transactional_db
 from HYPERRSI.src.core.models.database import TickSizeModel
 from shared.logging import get_logger
 
@@ -126,7 +126,7 @@ class AsyncTickSizeManager:
         tasks = [self.fetch_tick_sizes(exchange) for exchange in exchanges]
         results = await asyncio.gather(*tasks)
 
-        async with get_async_session() as session:
+        async with get_transactional_db() as session:
             for exchange, tick_sizes in zip(exchanges, results):
                 for item in tick_sizes:
                     # Upsert using PostgreSQL INSERT ... ON CONFLICT
@@ -153,7 +153,7 @@ class AsyncTickSizeManager:
 
     async def update_cache(self):
         """Update Redis cache from PostgreSQL"""
-        async with get_async_session() as session:
+        async with get_transactional_db() as session:
             result = await session.execute(select(TickSizeModel))
             tick_sizes = result.scalars().all()
 
@@ -175,7 +175,7 @@ class AsyncTickSizeManager:
             return float(cached_value)
         else:
             # Cache miss - fetch from database
-            async with get_async_session() as session:
+            async with get_transactional_db() as session:
                 result = await session.execute(
                     select(TickSizeModel).where(
                         and_(

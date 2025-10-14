@@ -14,8 +14,7 @@ from HYPERRSI.src.api.routes.order import ClosePositionRequest, close_position
 from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger, log_order
 
-from .break_even_handler import process_break_even_settings
-from .order_monitor import check_order_status, update_order_status
+# Lazy imports to avoid circular dependencies - import at usage point
 from .telegram_service import get_identifier, send_telegram_message
 from .utils import (
     SUPPORTED_SYMBOLS,
@@ -327,7 +326,11 @@ async def check_and_cleanup_orders(user_id: str, symbol: str, direction: str):
             
         # 2. 각 주문의 상태 확인
         logger.info(f"사용자 {user_id}의 {symbol} {direction} 방향의 {len(orders_to_check)}개 주문 상태 확인")
-        
+
+        # Lazy imports to avoid circular dependencies
+        from .break_even_handler import process_break_even_settings
+        from .order_monitor import check_order_status, update_order_status
+
         for order_data in orders_to_check:
             order_id = order_data.get("order_id")
             order_type = get_actual_order_type(order_data)

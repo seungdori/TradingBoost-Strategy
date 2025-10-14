@@ -13,19 +13,21 @@ import sys
 import time
 import traceback
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, TYPE_CHECKING
 
 import psutil
 
 from HYPERRSI.src.api.dependencies import get_exchange_context
-from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
-from HYPERRSI.src.api.routes.order.order import close_position
-from HYPERRSI.src.core.database import check_redis_connection, reconnect_redis
+from shared.database.redis import ping_redis as check_redis_connection, reconnect_redis
+
+# Lazy imports to avoid circular dependencies
+if TYPE_CHECKING:
+    from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
+    from HYPERRSI.src.api.routes.order.order import close_position
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger, log_order
 
-from .break_even_handler import process_break_even_settings
 from .order_monitor import (
     check_missing_orders,
     check_order_status,
@@ -207,14 +209,17 @@ async def monitor_orders_loop():
                                 # 트레일링 스탑 조건 충족 시
                                 if ts_hit:
                                     # SL 주문 ID 확인
-                                    
-                                    
+
+                                    # Lazy import to avoid circular dependency
+                                    from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
+                                    from HYPERRSI.src.api.routes.order.order import close_position
+
                                     close_request = ClosePositionRequest(
                                         close_type="market",
                                         price=current_price,
                                         close_percent=100
                                     )
-                                    
+
                                     await close_position(
                                         symbol=symbol,
                                         close_request=close_request,
@@ -536,7 +541,10 @@ async def monitor_orders_loop():
                                                             )
                                                         except Exception as e:
                                                             logger.error(f"TP 주문 체결 로깅 실패: {str(e)}")
-                                                        
+
+                                                        # Lazy import to avoid circular dependency
+                                                        from .break_even_handler import process_break_even_settings
+
                                                         # 사용자 설정에 따른 브레이크이븐/트레일링스탑 처리
                                                         asyncio.create_task(process_break_even_settings(
                                                             user_id=str(user_id),

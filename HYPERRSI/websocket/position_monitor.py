@@ -10,7 +10,7 @@ import time
 
 import websockets
 
-from HYPERRSI.src.core.database import redis_client
+from shared.database.redis import get_redis
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -129,6 +129,7 @@ class OKXWebsocketClient:
 
     async def handle_public_messages(self):
         """공개 채널(tickers)에서 들어오는 메시지를 Redis에 저장"""
+        redis = await get_redis()
         while self.running:
             try:
                 message = await self.public_ws.recv()
@@ -144,7 +145,7 @@ class OKXWebsocketClient:
                     if channel == "tickers":
                         redis_key = f"ws:okx:tickers:{inst_id}"
                         # data["data"]는 리스트 형태
-                        await redis_client.set(redis_key, json.dumps(data["data"]))
+                        await redis.set(redis_key, json.dumps(data["data"]))
                         #logger.debug(f"[OKX] Updated ticker data in Redis: {redis_key}")
             except websockets.exceptions.ConnectionClosed:
                 logger.warning("[OKX] Public WebSocket connection closed.")
@@ -162,6 +163,7 @@ class OKXWebsocketClient:
             logger.warning("[OKX] Private websocket is disabled or not connected.")
             return
 
+        redis = await get_redis()
         while self.running:
             try:
                 message = await self.private_ws.recv()
@@ -184,13 +186,13 @@ class OKXWebsocketClient:
 
                             # 예시) ws:user:1709556958:BTC-USDT-SWAP:long
                             redis_key = f"ws:user:{user_id}:{inst_id}:{side}"
-                            await redis_client.set(redis_key, json.dumps(pos))
+                            await redis.set(redis_key, json.dumps(pos))
                             logger.debug(f"[OKX] Updated position => {redis_key}")
 
                     elif channel == "orders":
                         # 주문 정보도 여러 개가 들어올 수 있음 => 통째로 저장
                         redis_key = f"ws:user:{user_id}:{inst_id}:open_orders"
-                        await redis_client.set(redis_key, json.dumps(payload))
+                        await redis.set(redis_key, json.dumps(payload))
                         logger.debug(f"[OKX] Updated orders => {redis_key}")
 
             except websockets.exceptions.ConnectionClosed:
@@ -221,13 +223,14 @@ class OKXWebsocketClient:
         
 async def main():
     try:
+        redis = await get_redis()
         key = f"user:1709556958:api:keys"
-        key_type = await redis_client.type(key)
+        key_type = await redis.type(key)
         logger.info(f"Redis key type: {key_type}")
         
         # Redis type 명령어는 문자열로 반환되므로 정확한 비교 필요
         if key_type == b'hash' or key_type == 'hash':
-            api_keys = await redis_client.hgetall(key)
+            api_keys = await redis.hgetall(key)
             if not api_keys:
                 logger.error("API 키를 찾을 수 없습니다")
                 return
@@ -243,7 +246,7 @@ async def main():
             )
         else:
             # 문자열 타입인 경우
-            api_keys = await redis_client.get(key)
+            api_keys = await redis.get(key)
             if not api_keys:
                 logger.error("API 키를 찾을 수 없습니다")
                 return

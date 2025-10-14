@@ -120,7 +120,8 @@ async def create_position_message(
                 f"{float(stop_loss):,.2f} $"
             ])
 
-        from HYPERRSI.src.core.database import redis_client
+        from shared.database.redis import get_redis
+        redis = await get_redis()
         dca_key = f"user:{user_id}:position:{symbol}:{position_type}:dca_levels"
 
         try:
@@ -133,7 +134,7 @@ async def create_position_message(
         except Exception as e:
             last_filled_price = current_price
 
-        dca_levels = await redis_client.lrange(dca_key, 0, -1)
+        dca_levels = await redis.lrange(dca_key, 0, -1)
         if not dca_levels:
             dca_levels = await calculate_dca_levels(entry_price, last_filled_price, settings, position_type, atr_value, current_price, user_id)
             await update_dca_levels_redis(user_id, symbol, dca_levels, position_type)

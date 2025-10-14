@@ -1,8 +1,3 @@
-# Auto-configure PYTHONPATH for monorepo structure
-from shared.utils.path_config import configure_pythonpath
-
-configure_pythonpath()
-
 import asyncio
 import logging
 import os
@@ -32,17 +27,11 @@ from HYPERRSI.src.api.routes import (
     user,
 )
 
-# Legacy imports (for backward compatibility)
-from HYPERRSI.src.core.database import init_db, init_global_redis_clients
+# Infrastructure imports
 from HYPERRSI.src.core.error_handler import log_error
-from HYPERRSI.src.services.redis_service import init_redis
-
-# New infrastructure imports
 from shared.config import settings as app_settings
-from shared.database.redis import close_redis
-from shared.database.redis import init_redis as init_new_redis
-from shared.database.session import close_db
-from shared.database.session import init_db as init_new_db
+from shared.database.redis import close_redis, init_redis
+from shared.database.session import close_db, init_db
 from shared.docs.openapi import attach_standard_error_examples
 from shared.errors import register_exception_handlers
 from shared.errors.middleware import RequestIDMiddleware
@@ -65,13 +54,19 @@ task_tracker = TaskTracker(name="hyperrsi-main")
 
 
 def handle_exception(loop, context):
-    """비동기 예외 핸들러"""
+    """비동기 예외 핸들러 - 종료 중 발생하는 예외 필터링"""
     if 'exception' in context:
         exc = context['exception']
-        if isinstance(exc, asyncio.CancelledError) and _is_shutting_down:
-            # 종료 중 발생하는 CancelledError는 무시
+        # 종료 중 발생하는 정상적인 예외들 무시
+        if _is_shutting_down and isinstance(exc, (asyncio.CancelledError, RuntimeError)):
             return
-    logger.error(f"Caught exception: {context}")
+        # RuntimeError for event loop stopped는 종료 시 정상
+        if isinstance(exc, RuntimeError) and "Event loop stopped" in str(exc):
+            return
+
+    # 비정상적인 예외만 로깅
+    if not _is_shutting_down:
+        logger.error(f"Caught exception: {context}")
 
 async def shutdown(signal_name: str):
     """
@@ -140,31 +135,42 @@ async def lifespan(app: FastAPI):
 
         handle_signals()
 
-        # Initialize new infrastructure
-        await init_new_db()
-        await init_new_redis()
-
-        # Legacy database initialization
+        # Initialize infrastructure
         await init_db()
         await init_redis()
-
-        # Initialize global Redis clients for legacy code compatibility
-        await init_global_redis_clients()
 
         logger_new.info("HYPERRSI application startup complete")
         logger.info("Starting application...")
 
         yield
 
+    except Exception as e:
+        logger.error(f"Error during application lifecycle: {e}", exc_info=True)
     finally:
-        if not _is_shutting_down:
-            logger_new.info("Shutting down HYPERRSI application")
-            logger.info("Shutting down application...")
+        logger_new.info("Shutting down HYPERRSI application")
+        logger.info("Shutting down application...")
 
-            # Cleanup new infrastructure
-            await close_db()
-            await close_redis()
+        try:
+            # Cleanup infrastructure connections with timeout
+            cleanup_tasks = [
+                asyncio.create_task(close_db(), name="close_db"),
+                asyncio.create_task(close_redis(), name="close_redis")
+            ]
 
+            # Wait for cleanup with timeout
+            await asyncio.wait(cleanup_tasks, timeout=5.0)
+
+            # Check if any tasks failed
+            for task in cleanup_tasks:
+                if task.done() and not task.cancelled():
+                    try:
+                        task.result()
+                    except Exception as e:
+                        logger.error(f"Cleanup task {task.get_name()} failed: {e}")
+
+        except Exception as e:
+            logger.error(f"Error during final cleanup: {e}", exc_info=True)
+        finally:
             logger_new.info("HYPERRSI application shutdown complete")
 
 # FastAPI 앱 설정
@@ -287,6 +293,10 @@ app.include_router(stats.router, prefix="/api")
 app.include_router(status.router, prefix="/api")
 app.include_router(user.router, prefix="/api")
 app.include_router(okx.router, prefix="/api")
+
+# Add Redis pool monitoring endpoint
+from shared.api.health import router as health_router
+app.include_router(health_router, prefix="/api", tags=["health"])
 
 app.include_router(chart.router)
 app.mount("/src/static", StaticFiles(directory=static_dir), name="static")

@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     REDIS_PURE_URL: str = f"redis://{REDIS_HOST}:{REDIS_PORT}"
     REDIS_DB: int = 0
     REDIS_URL: str = f"redis://{REDIS_HOST}:{REDIS_PORT}"
+    REDIS_MAX_CONNECTIONS: int = int(os.environ.get("REDIS_MAX_CONNECTIONS", "200"))
+    REDIS_HEALTH_CHECK_INTERVAL: int = 15
 
     def init_redis_url(self):
         if not self.REDIS_URL:

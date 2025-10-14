@@ -7,7 +7,7 @@ from fastapi.security import OAuth2PasswordBearer
 from position_monitor import OKXWebsocketClient
 
 from HYPERRSI.src.api.dependencies import get_user_api_keys
-from HYPERRSI.src.core.database import redis_client
+from shared.database.redis import get_redis
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -138,8 +138,9 @@ async def get_ticker(symbol: str = Path(..., description="거래 심볼")):
     """
     현재 시세 정보를 조회합니다.
     """
+    redis = await get_redis()
     ticker_key = f"ws:okx:tickers:{symbol}"
-    ticker_data = await redis_client.get(ticker_key)
+    ticker_data = await redis.get(ticker_key)
     return json.loads(ticker_data) if ticker_data else {}
 
 @app.get("/api/position/{user_id}", tags=["position"])
@@ -151,8 +152,9 @@ async def get_position(
     """
     현재 포지션 정보를 조회합니다.
     """
+    redis = await get_redis()
     position_key = f"ws:user:{user_id}:{symbol}:{side}"
-    position_data = await redis_client.get(position_key)
+    position_data = await redis.get(position_key)
     return json.loads(position_data) if position_data else {}
 
 @app.get("/api/orders/{user_id}", tags=["orders"])
@@ -163,8 +165,9 @@ async def get_orders(
     """
     현재 주문 정보를 조회합니다.
     """
+    redis = await get_redis()
     open_orders_key = f"ws:user:{user_id}:{symbol}:open_orders"
-    orders_data = await redis_client.get(open_orders_key)
+    orders_data = await redis.get(open_orders_key)
     return json.loads(orders_data) if orders_data else {}
 
 @app.websocket("/ws/{telegram_id}")
@@ -217,6 +220,7 @@ async def websocket_endpoint(websocket: WebSocket, telegram_id: str):
 
         while True:
             # Redis에서 최신 데이터 조회
+            redis = await get_redis()
             ticker_key = f"ws:okx:tickers:BTC-USDT-SWAP"
             
             # posSide가 "long" 혹은 "net"으로 들어올 수 있으니 우선 long key / net key 모두 봐도 됨
@@ -226,11 +230,11 @@ async def websocket_endpoint(websocket: WebSocket, telegram_id: str):
             position_short_key = f"ws:user:{telegram_id}:BTC-USDT-SWAP:short"
             open_orders_key = f"ws:user:{telegram_id}:BTC-USDT-SWAP:open_orders"
             
-            ticker_data = await redis_client.get(ticker_key)
-            position_long_data = await redis_client.get(position_long_key)
-            position_net_data = await redis_client.get(position_net_key)   # 필요하면 추가
-            position_short_data = await redis_client.get(position_short_key)
-            open_orders_data = await redis_client.get(open_orders_key)
+            ticker_data = await redis.get(ticker_key)
+            position_long_data = await redis.get(position_long_key)
+            position_net_data = await redis.get(position_net_key)   # 필요하면 추가
+            position_short_data = await redis.get(position_short_key)
+            open_orders_data = await redis.get(open_orders_key)
             
             # 예: posSide가 net일 경우 position_long 자리가 비어 있을 수 있으니
             # net 데이터가 있으면 long 자리로도 보여줄 수 있음 (원하는 방식대로 조정)

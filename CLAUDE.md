@@ -21,21 +21,21 @@ TradingBoost-Strategy/
 └── shared/            # Common modules (config, exchange APIs, utilities)
 ```
 
-### PYTHONPATH - 자동 설정됨! ✅
+### PYTHONPATH - Editable Install Required ✅
 
-**모든 파일이 자동으로 경로를 설정합니다.** PYTHONPATH 설정 불필요!
+**개발 환경 설정 (필수):**
 
-각 실행 파일(main.py, app.py, celery_task.py 등)에 다음 코드가 포함되어 있습니다:
-
-```python
-import sys
-from pathlib import Path
-project_root = Path(__file__).parent.parent.resolve()
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
+프로젝트 루트에서 editable install을 실행하세요:
+```bash
+pip install -e .
 ```
 
-**그냥 실행하면 됩니다:**
+이 명령어는:
+- 프로젝트를 Python path에 추가합니다
+- 코드 변경사항이 즉시 반영됩니다
+- 모든 absolute imports가 정상 작동합니다
+
+**설치 후 바로 실행:**
 
 ```bash
 cd HYPERRSI && python main.py
@@ -44,11 +44,6 @@ cd GRID && python main.py
 # 또는 프로젝트 루트에서
 ./run_hyperrsi.sh
 ./run_grid.sh
-```
-
-**추가 옵션 (선택사항):** 더 깔끔한 설정을 원하면 editable install:
-```bash
-pip install -e .
 ```
 
 ### Import Patterns
@@ -71,17 +66,20 @@ from services import bot_state_service
 ```python
 # ✅ Correct - absolute imports with HYPERRSI prefix
 from HYPERRSI.src.api.routes import trading, account
-from HYPERRSI.src.core.logger import get_logger
-from HYPERRSI.src.services.redis_service import init_redis
+from shared.logging import get_logger
+from shared.database.redis import init_redis
 
 # ❌ Wrong - relative imports
 from src.api.routes import trading
 ```
 
-**Shared Modules**:
+**Shared Modules** (infrastructure):
 ```python
 # ✅ Correct - absolute imports with shared prefix
 from shared.config import get_settings
+from shared.database.session import get_db, init_db
+from shared.database.redis import get_redis, init_redis
+from shared.cache import Cache, TradingCache
 from shared.exchange_apis.exchange_store import ExchangeStore
 from shared.utils.retry import retry_async
 ```
@@ -212,9 +210,9 @@ cd GRID && python jobs/celery_test.py
 ### Database Management
 
 ```bash
-# HYPERRSI database initialization
+# HYPERRSI database initialization (shared infrastructure)
 cd HYPERRSI
-python -c "from HYPERRSI.src.core.database import init_db; import asyncio; asyncio.run(init_db())"
+python -c "from shared.database.session import init_db; import asyncio; asyncio.run(init_db())"
 
 # GRID database initialization
 cd GRID
@@ -279,10 +277,12 @@ Both strategies use WebSockets for real-time data:
 ### Import Errors
 
 If you see `ModuleNotFoundError`:
-1. **First try**: Run `pip install -e .` from project root (one-time setup)
-2. **Or verify**: main.py files have auto-configuration code at the top
+1. **Required**: Run `pip install -e .` from project root (one-time setup)
+2. Verify virtual environment is activated
 3. Check imports use absolute paths (GRID.*, HYPERRSI.*, shared.*)
 4. Ensure you're running from correct directory
+
+**Note**: The project now requires `pip install -e .` for proper import resolution. The old auto-configuration code has been removed in favor of standard Python package installation.
 
 ### Celery Issues (HYPERRSI)
 

@@ -12,7 +12,6 @@ import logging
 import signal
 
 from HYPERRSI.src.bot.handlers import setup_bot, shutdown_bot
-from HYPERRSI.src.core.database import init_db, init_global_redis_clients
 from HYPERRSI.src.services.redis_service import init_redis
 from shared.logging import get_logger
 
@@ -24,11 +23,7 @@ logger = get_logger(__name__)
 async def main():
     try:
         # 초기화
-        await init_db()
         await init_redis()
-
-        # Initialize global Redis clients for shared.database.redis_helper
-        await init_global_redis_clients()
 
         # 봇 설정
         bot, dp = await setup_bot()

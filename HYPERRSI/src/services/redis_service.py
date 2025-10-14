@@ -14,9 +14,8 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 from prometheus_client import Counter, Histogram
-from redis.asyncio import ConnectionPool, Redis
+from redis.asyncio import Redis
 
-from HYPERRSI.src.core import database as _database_module
 from shared.constants.default_settings import (
     DEFAULT_PARAMS_SETTINGS,
     DIRECTION_OPTIONS,
@@ -25,24 +24,13 @@ from shared.constants.default_settings import (
     SETTINGS_CONSTRAINTS,
     TP_SL_OPTIONS,
 )
+from shared.database.redis import get_redis, RedisConnectionPool
 from shared.database.redis_helper import get_redis_client
 from shared.errors import ConfigurationException, DatabaseException, ValidationException
 from shared.logging import get_logger
 from shared.utils import retry_decorator
 
 logger = get_logger(__name__)
-
-# Dynamic redis_client access - returns current initialized client
-def __getattr__(name):
-    """
-    Module-level __getattr__ for dynamic attribute access.
-    Allows redis_client to be accessed after initialization.
-    """
-    if name == 'redis_client':
-        # Return the current redis_client from database module
-        # This ensures we always get the initialized client
-        return _database_module.redis_client
-    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 class RedisService:
     _instance = None
@@ -75,81 +63,66 @@ class RedisService:
             self._cache_ttl: Dict[str, float] = {}
             logger.info("RedisService initialized with external Redis client")
             return
-            
+
         # 이미 초기화 된 경우 중복 초기화 방지
         if self._redis is not None and self == RedisService._instance:
             return
-            
-        # 1) env에서 기본값 읽어오기
-        if host is None:
-            host = os.getenv('REDIS_HOST', 'localhost')
-        if port is None:
-            port = int(os.getenv('REDIS_PORT', '6379'))
-        if db is None:
-            db = int(os.getenv('REDIS_DB', '0'))
 
-        if password is None:
-            # env에서 읽었는데 없거나, 빈 값이면 None 처리
-            env_pass = os.getenv('REDIS_PASSWORD', '')
-            password = env_pass if env_pass else None
+        # shared 연결 풀 사용 (중복 풀 생성 방지)
+        logger.info("RedisService initializing with shared connection pool")
 
-        logger.info(f"RedisService initializing: host={host}, port={port}, db={db}, password={'YES' if password else 'NO'}")
-        
-        try:    
-            # 연결 풀 설정
-            password = os.getenv('REDIS_PASSWORD', None)
-            self._pool = ConnectionPool(
-                host=host,
-                port=port,
-                db=db,
-                decode_responses=True,
-                password=password,
-                max_connections=100,  # 동시 접속자 수에 맞게 조정
-                health_check_interval=30
-            )
-            self._redis = Redis(connection_pool=self._pool)
+        try:
+            # shared.database.redis의 전역 풀 사용
+            # 실제 Redis 클라이언트는 _get_redis() 메서드에서 비동기로 획득
+            self._pool = None  # shared 풀 사용으로 독립 풀 불필요
+            self._redis = None  # 지연 초기화 (async context에서만 접근)
             self._local_cache = {}  # 메모리 캐시 추가
             self._cache_ttl = {}
+            logger.info("RedisService initialized successfully (using shared pool)")
         except Exception as e:
             logger.error(f"Redis initialization failed: {e}")
             raise
 
-    
+
+    async def _ensure_redis(self) -> Redis:
+        """Ensure Redis client is initialized from shared pool"""
+        if self._redis is None:
+            self._redis = await get_redis()
+        return self._redis
+
     @property
     def redis(self):
+        """
+        Deprecated: Use async methods instead.
+        This property is kept for backward compatibility but will return None.
+        """
+        logger.warning("Accessing .redis property synchronously is deprecated. Use async methods.")
         return self._redis
 
     async def ping(self) -> None:
         try:
-            if self._redis is None:
-                raise ConnectionError("Redis client not initialized")
-            await self._redis.ping()
+            redis = await self._ensure_redis()
+            await redis.ping()
             logger.info("Redis connection established successfully")
-        except ConnectionError as e:
+        except Exception as e:
             logger.error(f"Failed to connect to Redis: {str(e)}")
             raise
+
     async def close(self) -> None:
-        if self._redis is not None:
-            await self._redis.close()
-            self._redis = None
+        """Close is handled by shared pool, no-op here"""
+        logger.info("RedisService close() called - connection managed by shared pool")
+        self._redis = None
+
     @property
     def is_connected(self) -> bool:
-        if self._redis is None:
-            return False
-        try:
-            # 비동기 컨텍스트 외부에서도 사용 가능하도록 수정
-            # 실제 연결 상태는 ping() 메서드를 통해 확인해야 함
-            return self._redis is not None and self._pool is not None
-        except Exception as e:
-            logger.error(f"Redis 연결 상태 확인 중 오류: {str(e)}")
-            return False
+        """Check if Redis client exists (actual connection checked via ping)"""
+        return self._redis is not None
     
     @retry_decorator(max_retries=3, delay=4.0, backoff=2.0)
     async def get_user_settings(self, user_id: str) -> Optional[Dict[str, Any]]:
         with self.operation_duration.time():
             try:
-                if self._redis is None:
-                    raise ConnectionError("Redis client not initialized")
+                redis = await self._ensure_redis()
 
                 # 먼저 로컬 캐시 확인
                 cache_key = f"user:{user_id}:settings"
@@ -163,7 +136,7 @@ class RedisService:
                         del self._cache_ttl[cache_key]
 
                 # Redis에서 조회
-                settings = await self._redis.get(cache_key)
+                settings = await redis.get(cache_key)
                 if not settings:
                     self.cache_misses.inc()
                     return None
@@ -178,7 +151,7 @@ class RedisService:
                         updated = True
 
                 if updated:
-                    await self._redis.set(cache_key, json.dumps(user_settings))
+                    await redis.set(cache_key, json.dumps(user_settings))
 
                 # 로컬 캐시 업데이트
                 self._local_cache[cache_key] = user_settings
@@ -194,12 +167,11 @@ class RedisService:
     async def set_user_settings(self, user_id: str, settings: dict) -> None:
         with self.operation_duration.time():
             try:
-                if self._redis is None:
-                    raise ConnectionError("Redis client not initialized")
+                redis = await self._ensure_redis()
 
                 cache_key = f"user:{user_id}:settings"
                 # Redis 업데이트
-                await self._redis.set(cache_key, json.dumps(settings))
+                await redis.set(cache_key, json.dumps(settings))
                 # 로컬 캐시 업데이트
                 self._local_cache[cache_key] = settings
                 self._cache_ttl[cache_key] = time.time() + 300
@@ -221,10 +193,9 @@ class RedisService:
         """
         with self.operation_duration.time():
             try:
-                if self._redis is None:
-                    raise ConnectionError("Redis client not initialized")
+                redis = await self._ensure_redis()
 
-                pipeline = self._redis.pipeline()
+                pipeline = redis.pipeline()
                 for user_id in user_ids:
                     pipeline.get(f"user:{user_id}:settings")
 
@@ -262,10 +233,9 @@ class RedisService:
         """
         with self.operation_duration.time():
             try:
-                if self._redis is None:
-                    raise ConnectionError("Redis client not initialized")
+                redis = await self._ensure_redis()
 
-                pipeline = self._redis.pipeline()
+                pipeline = redis.pipeline()
                 for user_id, settings in settings_dict.items():
                     cache_key = f"user:{user_id}:settings"
                     pipeline.set(cache_key, json.dumps(settings))
@@ -292,8 +262,7 @@ class RedisService:
         """
         with self.operation_duration.time():
             try:
-                if self._redis is None:
-                    raise ConnectionError("Redis client not initialized")
+                redis = await self._ensure_redis()
 
                 # 먼저 로컬 캐시 확인
                 results: Dict[str, Any] = {}
@@ -312,7 +281,7 @@ class RedisService:
 
                 # Redis에서 없는 키들 조회
                 if missing_keys:
-                    pipeline = self._redis.pipeline()
+                    pipeline = redis.pipeline()
                     for key in missing_keys:
                         pipeline.get(key)
 
@@ -349,10 +318,9 @@ class RedisService:
         """
         with self.operation_duration.time():
             try:
-                if self._redis is None:
-                    raise ConnectionError("Redis client not initialized")
+                redis = await self._ensure_redis()
 
-                pipeline = self._redis.pipeline()
+                pipeline = redis.pipeline()
                 for key, value in items.items():
                     if isinstance(value, (dict, list)):
                         serialized = json.dumps(value)
@@ -372,15 +340,11 @@ class RedisService:
                 raise
 
     async def cleanup(self) -> None:
-        """리소스 정리"""
-        if self._redis is not None:
-            await self._redis.close()
-            self._redis = None
+        """리소스 정리 - shared pool 사용으로 연결 종료는 shared에서 관리"""
+        self._redis = None
         self._local_cache.clear()
         self._cache_ttl.clear()
-        if self._pool is not None:
-            await self._pool.disconnect()
-            self._pool = None
+        logger.info("RedisService cleanup completed")
 
 
 

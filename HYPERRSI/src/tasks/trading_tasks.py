@@ -225,14 +225,7 @@ def run_async(coroutine, timeout=45):
         _loop = loop
         should_close = False  # Solo pool에서는 이벤트 루프를 닫지 않음
 
-        # 이벤트 루프 생성/변경 시 Redis 클라이언트 초기화
-        try:
-            from HYPERRSI.src.core.database import init_global_redis_clients
-            logger.debug("이벤트 루프에서 Redis 클라이언트 재초기화 중...")
-            loop.run_until_complete(init_global_redis_clients())
-            logger.debug("Redis 클라이언트 재초기화 완료")
-        except Exception as redis_init_error:
-            logger.warning(f"Redis 클라이언트 재초기화 실패 (계속 진행): {str(redis_init_error)}")
+        # Redis 클라이언트는 lazy initialization으로 처리됨
 
     try:
         # wait_for로 타임아웃 설정하여 실행

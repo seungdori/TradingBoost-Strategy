@@ -10,7 +10,7 @@ import logging
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from HYPERRSI.src.trading.error_message import map_exchange_error
 from HYPERRSI.src.trading.models import Position
@@ -19,6 +19,10 @@ from HYPERRSI.telegram_message import send_telegram_message
 from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger
 from shared.utils import get_minimum_qty, safe_float
+
+# Lazy import for circular dependency resolution
+if TYPE_CHECKING:
+    from HYPERRSI.src.trading.monitoring import check_order_status, update_order_status
 
 logger = get_logger(__name__)
 
@@ -125,12 +129,10 @@ class TPSLOrderCreator:
                                     # 모니터링 데이터 삭제 전 최종 상태 확인
                                     monitor_key = f"monitor:user:{user_id}:{symbol}:order:{tp_order_id}"
                                     logger.debug(f"[DCA] TP 주문 삭제 전 최종 확인: {tp_order_id}")
-                                    
+
                                     try:
-                                        from HYPERRSI.src.trading.monitoring import (
-                                            check_order_status,
-                                            update_order_status,
-                                        )
+                                        # Lazy import to avoid circular dependency
+                                        from HYPERRSI.src.trading.monitoring import check_order_status
 
                                         # 삭제 직전 실제 상태 확인
                                         final_status = await check_order_status(
@@ -206,12 +208,10 @@ class TPSLOrderCreator:
                             # 모니터링 데이터 삭제 전 최종 상태 확인
                             monitor_key = f"monitor:user:{user_id}:{symbol}:order:{existing_sl_order_id}"
                             logger.debug(f"[DCA] SL 주문 삭제 전 최종 확인: {existing_sl_order_id}")
-                            
+
                             try:
-                                from HYPERRSI.src.trading.monitoring import (
-                                    check_order_status,
-                                    update_order_status,
-                                )
+                                # Lazy import to avoid circular dependency
+                                from HYPERRSI.src.trading.monitoring import check_order_status
 
                                 # 삭제 직전 실제 상태 확인
                                 final_status = await check_order_status(

@@ -16,7 +16,8 @@ if str(project_root) not in sys.path:
 
 from sqlalchemy import delete, select
 
-from HYPERRSI.src.core.database import engine, get_async_session
+from HYPERRSI.src.core.database import engine
+from shared.database.session import get_transactional_db
 from HYPERRSI.src.core.models.database import (
     ExchangeKeysModel,
     UserModel,
@@ -32,7 +33,7 @@ async def test_user_operations():
     """Test user CRUD operations"""
     test_user_id = "test_user_123"
 
-    async with get_async_session() as session:
+    async with get_transactional_db() as session:
         # Clean up any existing test data
         await session.execute(delete(UserModel).where(UserModel.id == test_user_id))
         await session.commit()
@@ -80,7 +81,7 @@ async def test_exchange_keys_operations():
     """Test exchange keys operations"""
     test_user_id = "test_user_keys"
 
-    async with get_async_session() as session:
+    async with get_transactional_db() as session:
         # Clean up
         await session.execute(delete(UserModel).where(UserModel.id == test_user_id))
         await session.commit()
@@ -125,7 +126,7 @@ async def test_preferences_and_state():
     """Test user preferences and state operations"""
     test_user_id = "test_user_prefs"
 
-    async with get_async_session() as session:
+    async with get_transactional_db() as session:
         # Clean up
         await session.execute(delete(UserModel).where(UserModel.id == test_user_id))
         await session.commit()

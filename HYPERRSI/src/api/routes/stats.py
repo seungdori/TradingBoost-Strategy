@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from HYPERRSI.src.api.routes.account import get_balance
-from HYPERRSI.src.core.database import Cache  # 캐시 모듈 추가
+from shared.cache import Cache  # 캐시 모듈 추가
 from HYPERRSI.src.trading.stats import (
     get_pnl_history,
     get_trade_history,

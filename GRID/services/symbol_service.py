@@ -228,7 +228,7 @@ async def generate_profit_data(exchange_name, direction, market_data):
     Returns:
         Tuple of (profit_data DataFrame, sorted_column name)
     """
-    from GRID.strategies.grid_original import summarize_trading_results
+    from GRID.jobs.task_manager import summarize_trading_results
 
     if exchange_name == 'upbit':
         profit_data = pd.DataFrame(market_data.items(), columns=['name', 'change_rate'])

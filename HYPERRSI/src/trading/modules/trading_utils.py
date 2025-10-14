@@ -1,10 +1,12 @@
 # HYPERRSI/src/trading/modules/trading_utils.py
 """
-from shared.database.redis_helper import get_redis_client
 Trading Utility Functions
 
 트레이딩 관련 유틸리티 함수들
 """
+
+from shared.database.redis_helper import get_redis_client
+
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):

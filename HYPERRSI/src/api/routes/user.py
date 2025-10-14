@@ -5,7 +5,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from HYPERRSI.src.core.database import get_db
+from shared.database.session import get_db
 from HYPERRSI.src.utils.check_invitee import get_uid_from_api_keys
 from HYPERRSI.src.utils.uid_manager import (
     get_okx_uid_by_telegram_id,

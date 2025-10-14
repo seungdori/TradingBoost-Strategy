@@ -24,7 +24,7 @@ from HYPERRSI.src.api.routes.order import (  # type: ignore[attr-defined]
 )
 
 # Redis, OKX client 등 (실제 경로/모듈명은 프로젝트에 맞게 조정)
-from HYPERRSI.src.core.database import TradingCache
+from shared.cache import TradingCache
 from HYPERRSI.src.trading.cancel_trigger_okx import TriggerCancelClient
 from HYPERRSI.src.trading.error_message import map_exchange_error
 from HYPERRSI.src.trading.models import (

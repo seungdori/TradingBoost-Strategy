@@ -1,8 +1,3 @@
-# Auto-configure PYTHONPATH for monorepo structure
-from shared.utils.path_config import configure_pythonpath
-
-configure_pythonpath()
-
 import argparse
 import multiprocessing
 import os

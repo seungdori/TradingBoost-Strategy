@@ -411,12 +411,16 @@ async def add_websocket_cors_headers(request, call_next):
 app.include_router(router=bot_state_route.router)
 app.include_router(router=utils_route.router)
 app.include_router(router=logs_route.router)
-app.include_router(router=user_route.router)    
+app.include_router(router=user_route.router)
 app.include_router(router=auth_route.router)
 app.include_router(router=trading_route.router)
 app.include_router(router=exchange_route.router)
 app.include_router(router=feature_route.router)
 app.include_router(router=telegram_route.router)
+
+# Add Redis pool monitoring endpoint
+from shared.api.health import router as health_router
+app.include_router(health_router, tags=["health", "utils"])
 
 
 @app.get("/test-cors")

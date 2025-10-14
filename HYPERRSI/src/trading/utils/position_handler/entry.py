@@ -177,17 +177,17 @@ async def handle_no_position(
                     position_manager=position_manager,
                     trading_service=trading_service,
                     atr_value=atr_value,
-                    redis_client=redis_client
+                    redis_client=redis
                 )
 
                 if entry_success:
-                    await _handle_entry_success(user_id, redis_client)
+                    await _handle_entry_success(user_id, redis)
                 else:
-                    fail_count = await _handle_entry_failure(user_id, "long", fail_count, redis_client)
+                    fail_count = await _handle_entry_failure(user_id, "long", fail_count, redis)
 
             elif rsi_signals['is_oversold'] and not should_enter:
                 # Trend condition not met - send alert
-                await _send_trend_alert(user_id, symbol, timeframe, "long", redis_client)
+                await _send_trend_alert(user_id, symbol, timeframe, "long", redis)
 
         # ============================================================================
         # Short Entry Logic
@@ -222,17 +222,17 @@ async def handle_no_position(
                     position_manager=position_manager,
                     trading_service=trading_service,
                     atr_value=atr_value,
-                    redis_client=redis_client
+                    redis_client=redis
                 )
 
                 if entry_success:
-                    await _handle_entry_success(user_id, redis_client)
+                    await _handle_entry_success(user_id, redis)
                 else:
-                    fail_count = await _handle_entry_failure(user_id, "short", fail_count, redis_client)
+                    fail_count = await _handle_entry_failure(user_id, "short", fail_count, redis)
 
             elif rsi_signals['is_overbought'] and not should_enter:
                 # Trend condition not met - send alert
-                await _send_trend_alert(user_id, symbol, timeframe, "short", redis_client)
+                await _send_trend_alert(user_id, symbol, timeframe, "short", redis)
 
         # Check if trading should be stopped due to failures
         if fail_count >= 3:
@@ -335,17 +335,17 @@ async def _execute_long_entry(
         dca_count_key = DCA_COUNT_KEY.format(user_id=user_id, symbol=symbol, side="long")
         dual_side_count_key = DUAL_SIDE_COUNT_KEY.format(user_id=user_id, symbol=symbol)
 
-        await redis.set(dca_count_key, "1")
-        await redis.delete(short_dca_key)
-        await redis.set(dual_side_count_key, "0")
+        await redis_client.set(dca_count_key, "1")
+        await redis_client.delete(short_dca_key)
+        await redis_client.set(dual_side_count_key, "0")
 
         long_dca_key = DCA_LEVELS_KEY.format(user_id=user_id, symbol=symbol, side="long")
-        await redis.delete(long_dca_key)
+        await redis_client.delete(long_dca_key)
 
         # Set initial_size and last_entry_size
         position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side="long")
-        await redis.hset(position_key, "initial_size", contracts_amount)
-        await redis.hset(position_key, "last_entry_size", contracts_amount)
+        await redis_client.hset(position_key, "initial_size", contracts_amount)
+        await redis_client.hset(position_key, "last_entry_size", contracts_amount)
 
         # Set position lock until next candle
         await set_position_lock(user_id, symbol, "long", timeframe)
@@ -391,7 +391,7 @@ async def _execute_long_entry(
 
         # Store TP data
         tp_data_key = TP_DATA_KEY.format(user_id=user_id, symbol=symbol, side="long")
-        await redis.set(tp_data_key, json.dumps(position.tp_prices))
+        await redis_client.set(tp_data_key, json.dumps(position.tp_prices))
 
         return True
 
@@ -471,14 +471,14 @@ async def _execute_short_entry(
         dca_count_key = DCA_COUNT_KEY.format(user_id=user_id, symbol=symbol, side="short")
         dual_side_count_key = DUAL_SIDE_COUNT_KEY.format(user_id=user_id, symbol=symbol)
 
-        await redis.set(dca_count_key, "1")
-        await redis.delete(dca_long_key)
-        await redis.set(dual_side_count_key, "0")
+        await redis_client.set(dca_count_key, "1")
+        await redis_client.delete(dca_long_key)
+        await redis_client.set(dual_side_count_key, "0")
 
         # Set initial_size and last_entry_size
         position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side="short")
-        await redis.hset(position_key, "initial_size", contracts_amount)
-        await redis.hset(position_key, "last_entry_size", contracts_amount)
+        await redis_client.hset(position_key, "initial_size", contracts_amount)
+        await redis_client.hset(position_key, "last_entry_size", contracts_amount)
 
         # Set position lock until next candle
         await set_position_lock(user_id, symbol, "short", timeframe)
@@ -511,7 +511,7 @@ async def _execute_short_entry(
 
         # Store TP data
         tp_data_key = TP_DATA_KEY.format(user_id=user_id, symbol=symbol, side="short")
-        await redis.set(tp_data_key, json.dumps(position.tp_prices))
+        await redis_client.set(tp_data_key, json.dumps(position.tp_prices))
 
         # Record trade entry
         await record_trade_entry(
@@ -572,7 +572,7 @@ async def _handle_entry_failure(
     """
     entry_fail_count_key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id)
     new_count = current_fail_count + 1
-    await redis.set(entry_fail_count_key, new_count)
+    await redis_client.set(entry_fail_count_key, new_count)
     return new_count
 
 
@@ -594,7 +594,7 @@ async def _send_trend_alert(
         redis_client: Redis client instance
     """
     alert_key = TREND_SIGNAL_ALERT_KEY.format(user_id=user_id)
-    is_alerted = await redis.get(alert_key)
+    is_alerted = await redis_client.get(alert_key)
 
     if not is_alerted:
         side_kr = "롱" if side == "long" else "숏"
@@ -605,5 +605,5 @@ async def _send_trend_alert(
             f"트렌드 조건이 맞지 않아 진입하지 않습니다."
         )
         await send_telegram_message(message, user_id)
-        await redis.set(alert_key, "true", ex=TREND_ALERT_EXPIRY_SECONDS)
+        await redis_client.set(alert_key, "true", ex=TREND_ALERT_EXPIRY_SECONDS)
         logger.info(f"[{user_id}] {side_kr} 포지션 진입 조건 불충족 알림 전송 완료. {symbol} {timeframe}")

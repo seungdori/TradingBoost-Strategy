@@ -11,7 +11,7 @@ import traceback
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from HYPERRSI.src.core.database import TradingCache
+from shared.cache import TradingCache
 from HYPERRSI.src.trading.error_message import map_exchange_error
 from HYPERRSI.src.trading.models import OrderStatus, Position
 from HYPERRSI.src.trading.stats import record_trade_history_entry, update_trade_history_exit

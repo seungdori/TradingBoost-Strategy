@@ -30,15 +30,15 @@ ORDER_BACKEND = os.getenv("ORDER_BACKEND")
 # Lazy redis_client import (의존성 분리)
 # ============================================================================
 
-def _get_redis_client():
+async def _get_redis_client():
     """
     Redis 클라이언트를 lazy import합니다.
 
     이렇게 하면 이 모듈을 import할 때 prometheus_client 등의
     무거운 의존성을 불러오지 않습니다.
     """
-    from HYPERRSI.src.core.database import redis_client
-    return redis_client
+    from shared.database.redis import get_redis
+    return await get_redis()
 
 
 # ============================================================================
@@ -51,7 +51,7 @@ async def get_telegram_id(identifier: str) -> int:
 
     Note: shared.notifications.telegram.get_telegram_id를 사용하세요.
     """
-    return await _get_telegram_id(identifier, _get_redis_client(), ORDER_BACKEND)
+    return await _get_telegram_id(identifier, await _get_redis_client(), ORDER_BACKEND)
 
 
 async def enqueue_telegram_message(message, okx_uid=str(587662504768345929), debug=False):
@@ -60,7 +60,7 @@ async def enqueue_telegram_message(message, okx_uid=str(587662504768345929), deb
 
     Note: shared.notifications.telegram.enqueue_telegram_message를 사용하세요.
     """
-    return await _enqueue_telegram_message(message, okx_uid, _get_redis_client(), debug)
+    return await _enqueue_telegram_message(message, okx_uid, await _get_redis_client(), debug)
 
 
 async def process_telegram_messages(okx_uid, debug=False):
@@ -70,7 +70,7 @@ async def process_telegram_messages(okx_uid, debug=False):
     Note: shared.notifications.telegram.process_telegram_messages를 사용하세요.
     """
     return await _process_telegram_messages(
-        okx_uid, _get_redis_client(), TELEGRAM_BOT_TOKEN, ORDER_BACKEND, debug
+        okx_uid, await _get_redis_client(), TELEGRAM_BOT_TOKEN, ORDER_BACKEND, debug
     )
 
 
@@ -81,7 +81,7 @@ async def send_telegram_message_direct(message, okx_uid=str(587662504768345929),
     Note: shared.notifications.telegram.send_telegram_message(use_queue=False)를 사용하세요.
     """
     return await _send_telegram_message(
-        message, okx_uid, _get_redis_client(), TELEGRAM_BOT_TOKEN, ORDER_BACKEND, debug, use_queue=False
+        message, okx_uid, await _get_redis_client(), TELEGRAM_BOT_TOKEN, ORDER_BACKEND, debug, use_queue=False
     )
 
 
@@ -92,7 +92,7 @@ async def send_telegram_message(message, okx_uid=str(587662504768345929), debug=
     Note: shared.notifications.telegram.send_telegram_message를 사용하세요.
     """
     return await _send_telegram_message(
-        message, okx_uid, _get_redis_client(), TELEGRAM_BOT_TOKEN, ORDER_BACKEND, debug, use_queue=True
+        message, okx_uid, await _get_redis_client(), TELEGRAM_BOT_TOKEN, ORDER_BACKEND, debug, use_queue=True
     )
 
 

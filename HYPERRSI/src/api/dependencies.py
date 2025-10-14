@@ -288,12 +288,12 @@ def get_redis_keys(user_id: str, symbol:str, side:str) -> dict:
 
 async def get_user_api_keys(user_id: str) -> dict:
     """Redis에서 사용자의 API 키 정보를 가져옴"""
-    from HYPERRSI.src.core.database import get_redis_binary_client
+    from shared.database.redis import get_redis_binary
 
     key = f"user:{user_id}:api:keys"
     try:
         #logger.info(f"Redis에서 키 조회 시작: {key}")
-        redis_client = await get_redis_binary_client()
+        redis_client = await get_redis_binary()
         api_keys = await redis_client.hgetall(key)
         #logger.info(f"Redis 원본 응답: {api_keys}, 타입: {type(api_keys)}")
         
