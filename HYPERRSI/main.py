@@ -78,8 +78,8 @@ async def shutdown(signal_name: str):
     Graceful shutdown handler with proper cleanup.
 
     This function is called when the application receives a shutdown signal
-    (e.g., SIGINT from Ctrl+C). It performs cleanup operations and then
-    stops the event loop, allowing cleanup handlers and __del__ methods to run.
+    (e.g., SIGINT from Ctrl+C). It performs cleanup operations by setting
+    the shutdown flag, allowing the lifespan context manager to handle cleanup.
 
     Args:
         signal_name: Name of the signal that triggered the shutdown
@@ -89,14 +89,11 @@ async def shutdown(signal_name: str):
         return
 
     _is_shutting_down = True
-    logger.info(f"Received exit signal {signal_name}")
+    logger.info(f"Received exit signal {signal_name}. Triggering graceful shutdown...")
 
     try:
-        ## Trading session cleanup
-        #await deactivate_all_trading()
-
         # Cancel all tracked tasks using TaskTracker
-        await task_tracker.cancel_all(timeout=10.0)
+        await task_tracker.cancel_all(timeout=5.0)
 
         # Cancel any remaining legacy tasks
         current_task = asyncio.current_task()
@@ -106,21 +103,13 @@ async def shutdown(signal_name: str):
             logger.info(f"Cancelling {len(pending_tasks)} legacy tasks")
             for task in pending_tasks:
                 task.cancel()
-            # Wait for tasks to complete cancellation
-            await asyncio.gather(*pending_tasks, return_exceptions=True)
-
-        # Close infrastructure connections
-        await close_db()
-        await close_redis()
+            # Wait briefly for task cancellation
+            await asyncio.wait(pending_tasks, timeout=3.0)
 
     except Exception as e:
-        logger.error(f"Error during shutdown: {e}", exc_info=True)
+        logger.error(f"Error during shutdown task cleanup: {e}", exc_info=True)
     finally:
-        logger.info("Shutdown completed")
-        # Stop the event loop gracefully instead of os._exit(0)
-        # This allows finally blocks and __del__ methods to run
-        loop = asyncio.get_event_loop()
-        loop.stop()
+        logger.info("Signal handler cleanup completed. Lifespan will handle final cleanup.")
 
 def handle_signals():
     """시그널 핸들러 설정"""
