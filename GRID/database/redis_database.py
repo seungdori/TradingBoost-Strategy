@@ -14,7 +14,7 @@ from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
 from shared.config import settings
-from shared.database import RedisConnectionManager
+from shared.database.redis import get_redis
 from shared.utils import parse_bool, safe_float
 
 #================================================================================================
@@ -23,14 +23,6 @@ from shared.utils import parse_bool, safe_float
 CACHE_EXPIRY = 60  # 캐시 유효 기간 (초)
 
 REDIS_PASSWORD = settings.REDIS_PASSWORD
-
-# Redis 연결 매니저 초기화
-_redis_manager = RedisConnectionManager(
-    host=settings.REDIS_HOST,
-    port=settings.REDIS_PORT,
-    db=0,
-    password=settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None
-)
 
 class UserKeyCache:
     def __init__(self) -> None:
@@ -59,8 +51,8 @@ user_key_cache = UserKeyCache()
 
 
 async def get_redis_connection() -> Redis:
-    """shared Redis 매니저를 사용하는 래퍼 함수 (하위 호환성)"""
-    return await _redis_manager.get_connection_async(decode_responses=True)
+    """Use shared Redis connection pool (backward compatibility wrapper)"""
+    return await get_redis()
 
 # parse_bool is now imported from shared.utils
 #================================================================================================
@@ -229,12 +221,12 @@ async def get_active_grid(redis: Redis, exchange_name: str, user_id: int, symbol
 #    return active_grid
 
 async def get_order_placed(redis: Redis, exchange_name: str, user_id: int, symbol_name: str, level: int) -> bool:
-    key = f"{exchange_name}:user:{user_id}:symbol:{symbol_name}:order_placed"
+    key = f"orders:{exchange_name}:user:{user_id}:symbol:{symbol_name}:order_placed"
     value = await redis.hget(key, str(level))
     return value == "1"  # Redis returns str when decode_responses=True
 
 async def set_order_placed(redis: Redis, exchange_name: str, user_id: int, symbol_name: str, level: int, status: bool) -> None:
-    key = f"{exchange_name}:user:{user_id}:symbol:{symbol_name}:order_placed"
+    key = f"orders:{exchange_name}:user:{user_id}:symbol:{symbol_name}:order_placed"
     await redis.hset(key, str(level), 1 if status else 0)
 
 # 특정 그리드 레벨의 정보를 업데이트하는 함수
@@ -355,7 +347,7 @@ async def upload_order_placed(
     symbol: str,
     order_placed: dict[str, bool]
 ) -> None:
-    order_placed_key = f'{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed'
+    order_placed_key = f'orders:{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed'
 
     # order_placed의 불리언 값을 정수로 변환
     redis_order_placed = {k: int(v) for k, v in order_placed.items()}
@@ -706,7 +698,7 @@ async def update_user_running_status(exchange_name: str, user_id: int, is_runnin
     redis_close_flag = False
     try:
         if redis is None:
-            redis = await _redis_manager.get_connection_async(decode_responses=True)
+            redis = await get_redis()
             redis_close_flag = True
 
         user_key = f'{exchange_name}:user:{user_id}'
@@ -1034,7 +1026,32 @@ async def get_all_user_keys(exchange_name: str) -> Dict[str, Any]:
 async def get_position_size(exchange_name: str, user_id: int, symbol: str) -> float:
     redis = await get_redis_connection()
 
-    # 포지션 정보 확인
+    # Try new Hash pattern first (Phase 2)
+    index_key = f'positions:index:{user_id}:{exchange_name}'
+    position_keys = await redis.smembers(index_key)
+
+    if position_keys:
+        # New Hash pattern: check for this specific symbol
+        total_pos = 0.0
+
+        for pos_key in position_keys:
+            # pos_key format: "{symbol}:{side}"
+            try:
+                pos_symbol, side = pos_key.split(':')
+                if pos_symbol == symbol:
+                    position_key = f'positions:{user_id}:{exchange_name}:{symbol}:{side}'
+                    position = await redis.hgetall(position_key)
+                    if position:
+                        pos = float(position.get('pos', 0))
+                        # Sum both long and short positions for the symbol
+                        total_pos += pos
+            except (ValueError, KeyError) as e:
+                print(f"Error processing position key {pos_key}: {e}")
+                continue
+
+        return total_pos
+
+    # Fallback to legacy JSON array pattern
     position_key = f'{exchange_name}:positions:{user_id}'
     position_data = await redis.get(position_key)
 

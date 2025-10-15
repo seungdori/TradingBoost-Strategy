@@ -1,36 +1,55 @@
 
+import asyncio
 import json
 import os
 import traceback
 
-import redis.asyncio as aioredis
-
-from shared.config import settings
-
-REDIS_PASSWORD = settings.REDIS_PASSWORD
-import asyncio
-
+from GRID.core.redis import get_redis_connection
 from GRID.strategies import strategy
-
-
-async def get_redis_connection():
-    if REDIS_PASSWORD:
-        return aioredis.from_url('redis://localhost', encoding='utf-8', decode_responses=True, password=REDIS_PASSWORD)
-    else:
-        return aioredis.from_url('redis://localhost', encoding='utf-8', decode_responses=True)
+from shared.config import settings
 
 async def get_all_positions(exchange_name, user_id):
     redis = await get_redis_connection()
+
+    # Try new Hash pattern first (Phase 2)
+    index_key = f'positions:index:{user_id}:{exchange_name}'
+    position_keys = await redis.smembers(index_key)
+
+    if position_keys:
+        # New Hash pattern: individual positions
+        result = {}
+
+        for pos_key in position_keys:
+            # pos_key format: "{symbol}:{side}"
+            try:
+                symbol, side = pos_key.split(':')
+                position_key = f'positions:{user_id}:{exchange_name}:{symbol}:{side}'
+
+                # Get position hash
+                position = await redis.hgetall(position_key)
+                if position:
+                    pos = float(position.get('pos', 0))
+
+                    if pos != 0:
+                        # Aggregate positions by symbol (sum long and short)
+                        result[symbol] = result.get(symbol, 0) + pos
+            except (ValueError, KeyError) as e:
+                print(f"Error processing position key {pos_key}: {e}")
+                continue
+
+        return result
+
+    # Fallback to legacy JSON array pattern
     position_key = f'{exchange_name}:positions:{user_id}'
     position_data = await redis.get(position_key)
-    
+
     if position_data is None:
         return {}  # 포지션 정보가 없으면 빈 딕셔너리 반환
-    
+
     try:
         positions = json.loads(position_data)
         result = {}
-        
+
         if isinstance(positions, list):
             for position in positions:
                 if isinstance(position, dict):
@@ -44,9 +63,9 @@ async def get_all_positions(exchange_name, user_id):
                     pos = float(position.get('pos', 0))
                     if pos != 0:
                         result[symbol] = pos
-        
+
         return result  # 0이 아닌 포지션만 포함된 딕셔너리 반환
-    
+
     except (json.JSONDecodeError, ValueError, AttributeError) as e:
         print(f"Error processing position data: {e}")
         return {}  # 데이터 파싱 오류 시 빈 딕셔너리 반환

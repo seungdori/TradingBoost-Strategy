@@ -4,13 +4,11 @@ import traceback
 from typing import Any, Optional
 
 import ccxt.pro as ccxtpro
-import redis.asyncio as aioredis
 from pydantic import BaseModel, Field
 
+from GRID.core.redis import get_redis_connection
 from GRID.services import user_service_pg as user_database
 from shared.config import OKX_API_KEY, OKX_PASSPHRASE, OKX_SECRET_KEY, settings  # 환경 변수에서 키 가져오기
-
-REDIS_PASSWORD = settings.REDIS_PASSWORD
 
 # Global user keys cache
 user_keys: dict[int, dict[str, Any]] = {}
@@ -54,13 +52,6 @@ class ReadOnlyKeys:
     #okx_keys = 'd8d10ac3-2890-4bb9-95f0-70f857dc38e3'
     #okx_secret = '7080F1F233F77A081F735E8C0E6F1FF3'
     #okx_password='Lej1321428!'
-
-
-async def get_redis_connection() -> aioredis.Redis:
-    if REDIS_PASSWORD:
-        return await aioredis.from_url('redis://localhost', encoding='utf-8', decode_responses=True,password=REDIS_PASSWORD)
-    else:
-        return await aioredis.from_url('redis://localhost', encoding='utf-8', decode_responses=True)
 
 #================================================================================================
 # GET INSTANCE

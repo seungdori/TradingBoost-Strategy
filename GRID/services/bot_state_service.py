@@ -2,10 +2,10 @@ import os
 from operator import is_
 from typing import List, Optional
 
-import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException
 from redis.exceptions import RedisError
 
+from GRID.core.redis import get_redis_connection
 from GRID.database import redis_database
 from GRID.infra import bot_state_store
 from GRID.trading.shared_state import user_keys
@@ -14,14 +14,10 @@ from shared.constants.enterstrategy import EnterStrategy
 from shared.constants.exchange import Exchange
 from shared.dtos.bot_state import BotStateDto, BotStateKeyDto
 
-REDIS_PASSWORD = settings.REDIS_PASSWORD
-
 
 async def get_redis():
-    if REDIS_PASSWORD:
-        return aioredis.from_url(settings.REDIS_URL, encoding='utf-8', decode_responses=True, password = REDIS_PASSWORD)
-    else:
-        return aioredis.from_url(settings.REDIS_URL, encoding='utf-8', decode_responses=True)
+    """Use shared Redis connection pool from GRID.core.redis"""
+    return await get_redis_connection()
 
 
 def build_bot_state_key(dto: BotStateKeyDto) -> str:

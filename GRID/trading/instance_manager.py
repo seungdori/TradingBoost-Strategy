@@ -7,11 +7,9 @@ from threading import Lock
 from typing import Any
 
 import ccxt.pro as ccxtpro
-import redis.asyncio as aioredis
 
+from GRID.core.redis import get_redis_connection
 from shared.config import OKX_API_KEY, OKX_PASSPHRASE, OKX_SECRET_KEY, settings  # 환경 변수에서 키 가져오기
-
-REDIS_PASSWORD = settings.REDIS_PASSWORD
 
 class ReadOnlyKeys:
 
@@ -46,13 +44,11 @@ class ThreadSafeAsyncExchangeManager:
         self.locks: dict[str, asyncio.Lock] = {}
         self.global_lock = Lock()
         self.INSTANCE_TIMEOUT = 3600  # 1 hour
-        self.redis: aioredis.Redis | None = None
+        self.redis: Any | None = None
 
     async def init_redis(self) -> None:
-        if REDIS_PASSWORD:
-            self.redis = await aioredis.from_url('redis://localhost', encoding='utf-8', decode_responses=True,password=REDIS_PASSWORD)
-        else:
-            self.redis = await aioredis.from_url('redis://localhost', encoding='utf-8', decode_responses=True)
+        """Initialize Redis connection using shared connection pool"""
+        self.redis = await get_redis_connection()
 
     async def get_instance(self, exchange_name: str, user_id: str) -> Any | None:
         if exchange_name.lower() != 'okx':

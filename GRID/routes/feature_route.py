@@ -38,25 +38,11 @@ import socket
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import redis.asyncio as aioredis
-
+from GRID.core.redis import get_redis_connection
 from GRID.trading.shared_state import user_keys
 from shared.config import settings
 
-REDIS_PASSWORD = settings.REDIS_PASSWORD
 DEFAULT_PORT = int(os.environ.get('PORT', 8000))
-
-async def get_redis_connection() -> aioredis.Redis:
-    try:
-        if REDIS_PASSWORD:
-            redis = aioredis.from_url(settings.REDIS_URL, encoding='utf-8', decode_responses=True, password=REDIS_PASSWORD)
-        else:
-            redis = aioredis.from_url(settings.REDIS_URL, encoding='utf-8', decode_responses=True)
-        return redis
-    except Exception as e:
-        print(f"Error connecting to Redis: {str(e)}")
-        traceback.print_exc()
-        raise
 
 
 @router.post(

@@ -12,7 +12,6 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 import psutil
-import redis.asyncio as aioredis
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,6 +32,7 @@ from GRID.routes import (
 )
 from GRID.services import bot_state_service, db_service
 from GRID.strategies.grid_process import start_grid_main_in_process, update_user_data
+from GRID.core.redis import get_redis_connection
 from GRID.trading.instance_manager import start_cleanup_task
 
 # Legacy imports (for backward compatibility)
@@ -62,10 +62,6 @@ async def get_request_body(redis: Any, exchange_id : str , user_id : int) -> str
     redis_key = f"{exchange_id}:request_body:{user_id}"
     value: str | None = await redis.get(redis_key)
     return value
-
-
-async def get_redis_connection() -> Any:
-    return aioredis.from_url('redis://localhost', encoding='utf-8', decode_responses=True)
 
 
 async def check_parent_process(parent_pid: int) -> None:

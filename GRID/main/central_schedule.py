@@ -16,11 +16,11 @@ from decimal import Decimal
 from pdb import run
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union, cast
 
-import redis.asyncio as aioredis
 import websockets
 from redis import Redis
 
 from GRID import telegram_message
+from GRID.core.redis import get_redis_connection
 from GRID.database import redis_database
 from GRID.strategies import strategy
 from GRID.trading import instance
@@ -44,7 +44,7 @@ redis_manager = RedisConnectionManager()
 
 # Exchange instance management with activity tracking
 
-redis_connection: Optional[aioredis.Redis] = None
+redis_connection: Optional[Any] = None
 exchange_instances: Dict[str, Dict[str, Any]] = {}
 INSTANCE_TIMEOUT = 3600  # 1 hour
 MAX_RETRIES = 3
@@ -54,17 +54,18 @@ RETRY_DELAY = 3  # 재시도 사이의 대기 시간(초)
 
 
 async def get_redis():
+    """Get Redis connection using shared connection pool"""
     global redis_connection
     if redis_connection is None:
         redis_connection = await get_redis_connection()
-    
+
     try:
         # Ping the Redis server to check if the connection is still alive
         await redis_connection.ping()
-    except (aioredis.ConnectionError, aioredis.TimeoutError):
+    except Exception:
         # If ping fails, create a new connection
         redis_connection = await get_redis_connection()
-    
+
     return redis_connection
 
 async def close_redis() -> None:
@@ -72,16 +73,6 @@ async def close_redis() -> None:
     if redis_connection:
         await redis_connection.close()
         redis_connection = None
-
-
-
-async def get_redis_connection():
-    from shared.config import settings
-    REDIS_PASSWORD = settings.REDIS_PASSWORD
-    if REDIS_PASSWORD:
-        return aioredis.from_url('redis://localhost', encoding='utf-8', decode_responses=True,password=REDIS_PASSWORD)
-    else:
-        return aioredis.from_url('redis://localhost', encoding='utf-8', decode_responses=True)
 
 position_data_logger = logging.getLogger('position_data')
 
@@ -711,7 +702,7 @@ async def check_and_update_positions(exchange_name):
         print(traceback.format_exc())
         await asyncio.sleep(5)
 
-async def get_and_cache_all_positions(uri: str, API_KEY: str, SECRET_KEY: str, PASSPHRASE: str, redis: aioredis.Redis, user_id: str) -> list[Any] | None:
+async def get_and_cache_all_positions(uri: str, API_KEY: str, SECRET_KEY: str, PASSPHRASE: str, redis: Any, user_id: str) -> list[Any] | None:
     cache_key = f'okx:positions:{user_id}'
     async with websockets.connect(uri) as websocket:
         # Perform authentication
@@ -777,7 +768,7 @@ async def get_and_cache_all_positions(uri: str, API_KEY: str, SECRET_KEY: str, P
         
         return None
 
-async def update_user_positions(redis: aioredis.Redis, user_id: str, user_data: dict[str, Any]) -> None:
+async def update_user_positions(redis: Any, user_id: str, user_data: dict[str, Any]) -> None:
     uri = "wss://ws.okx.com:8443/ws/v5/private"
     
     # Get user data from Redis

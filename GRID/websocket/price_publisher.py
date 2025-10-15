@@ -6,11 +6,9 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import ccxt.pro as ccxt
-import redis.asyncio as aioredis
 
 from shared.config import settings
-
-REDIS_PASSWORD = settings.REDIS_PASSWORD
+from GRID.core.redis import get_redis_connection
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -28,16 +26,11 @@ class CentralizedPriceManager:
         self.retry_delay = 5
 
     async def initialize(self):
+        """Initialize Redis connection using shared connection pool"""
         retry_count = 0
         while retry_count < self.max_retries:
             try:
-                pool = aioredis.ConnectionPool.from_url( # type: ignore[var-annotated]
-                    'redis://localhost',
-                    max_connections=600,
-                    encoding='utf-8',
-                    decode_responses=True,
-                )
-                self.redis = aioredis.Redis(connection_pool=pool)
+                self.redis = await get_redis_connection()
                 self.symbols = await self.exchange.load_markets()
                 self.symbols = [symbol for symbol in self.symbols if symbol.endswith('USDT:USDT')]
                 logging.info(f"Initialized with {len(self.symbols)} symbols")

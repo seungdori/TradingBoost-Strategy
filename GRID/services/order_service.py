@@ -312,7 +312,38 @@ async def okay_to_place_order(exchange_name, user_id, symbol, check_price, max_n
         if abs(stored_price - check_price) / stored_price <= 0.001:
             return False  # 이미 해당 가격에 주문이 있음
 
-    # 포지션 정보 확인
+    # 포지션 정보 확인 - Try new Hash pattern first (Phase 2)
+    index_key = f'positions:index:{user_id}:{exchange_name}'
+    position_keys = await redis.smembers(index_key)
+
+    if position_keys:
+        # New Hash pattern: check for this specific symbol
+        total_pos = 0.0
+        total_notional_usd = 0.0
+
+        for pos_key in position_keys:
+            # pos_key format: "{symbol}:{side}"
+            try:
+                pos_symbol, side = pos_key.split(':')
+                if pos_symbol == symbol:
+                    position_key = f'positions:{user_id}:{exchange_name}:{symbol}:{side}'
+                    position = await redis.hgetall(position_key)
+                    if position:
+                        pos = float(position.get('pos', 0))
+                        notional_usd = float(position.get('notionalUsd', 0))
+                        # Sum positions (long is positive, short is negative)
+                        total_pos += pos
+                        total_notional_usd += abs(notional_usd)
+            except (ValueError, KeyError) as e:
+                print(f"Error processing position key {pos_key}: {e}")
+                continue
+
+        if total_pos != 0:
+            able_to_order = check_order_validity(total_notional_usd, total_pos, max_notional_value, order_direction)
+            return able_to_order
+        return True  # No position found for this symbol, order allowed
+
+    # Fallback to legacy JSON array pattern
     position_key = f'{exchange_name}:positions:{user_id}'
     position_data = await redis.get(position_key)
 

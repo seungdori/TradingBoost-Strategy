@@ -5,11 +5,10 @@ import os
 from datetime import datetime, timezone
 
 import ccxt.pro as ccxt
-import redis.asyncio as aioredis
 
 from shared.config import settings
+from GRID.core.redis import get_redis_connection
 
-REDIS_PASSWORD = settings.REDIS_PASSWORD
 REDIS_URL = settings.REDIS_URL
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,20 +25,16 @@ class PriceSubscriber:
         self.last_update_time = {}
 
     async def initialize(self):
+        """Initialize Redis connection using shared connection pool"""
         while self.is_running:
             try:
-                self.redis_pool = aioredis.ConnectionPool.from_url(
-                    'redis://localhost',
-                    max_connections=200,
-                    encoding='utf-8',
-                    decode_responses=True,
-                )
-                redis = aioredis.Redis(connection_pool=self.redis_pool)
+                redis = await get_redis_connection()
+                self.redis_pool = redis
                 self.pubsub = redis.pubsub()
                 await self.pubsub.subscribe('price_update')
                 logging.info("Successfully connected to Redis and subscribed to price updates.")
                 return True
-            except aioredis.RedisError as e:
+            except Exception as e:
                 logging.error(f"Failed to connect to Redis: {e}. Retrying in 5 seconds...")
                 await asyncio.sleep(5)
         return False
@@ -115,24 +110,23 @@ class PriceSubscriber:
                         return float(price)
                 
                 logging.debug(f"Cache miss or expired for {symbol}, querying Redis")
-                
+
                 # Redis 확인
                 try:
-                    async with aioredis.Redis(connection_pool=self.redis_pool) as redis:
-                        price_data = await redis.get(f"price:{symbol}")
-                        if price_data:
-                            price, timestamp = price_data.split(':') # type: ignore[arg-type]
-                            price = float(price)
-                            timestamp = float(timestamp)
-                            redis_age = (current_time - datetime.fromtimestamp(timestamp, timezone.utc)).total_seconds()
-                            logging.debug(f"Redis data for {symbol}: price={price}, age={redis_age}s")
-                            if redis_age <= REDIS_VALIDITY:
-                                self.price_cache[symbol] = (price, timestamp)
-                                self.last_update_time[symbol] = current_time
-                                return price
-                        else:
-                            logging.debug(f"No data in Redis for {symbol}")
-                except aioredis.RedisError as e:
+                    price_data = await self.redis_pool.get(f"price:{symbol}")
+                    if price_data:
+                        price, timestamp = price_data.split(':') # type: ignore[arg-type]
+                        price = float(price)
+                        timestamp = float(timestamp)
+                        redis_age = (current_time - datetime.fromtimestamp(timestamp, timezone.utc)).total_seconds()
+                        logging.debug(f"Redis data for {symbol}: price={price}, age={redis_age}s")
+                        if redis_age <= REDIS_VALIDITY:
+                            self.price_cache[symbol] = (price, timestamp)
+                            self.last_update_time[symbol] = current_time
+                            return price
+                    else:
+                        logging.debug(f"No data in Redis for {symbol}")
+                except Exception as e:
                     logging.error(f"Redis error in get_current_price: {e}")
                 
                 # CCXT에서 가격 가져오기
@@ -144,13 +138,12 @@ class PriceSubscriber:
                     new_price = ticker['last']
                     new_timestamp = datetime.now(timezone.utc).timestamp()
                     logging.debug(f"CCXT price for {symbol}: {new_price}")
-                    
+
                     # Redis 업데이트
                     try:
-                        async with aioredis.Redis(connection_pool=self.redis_pool) as redis:
-                            await redis.set(f"price:{symbol}", f"{new_price}:{new_timestamp}", ex=REDIS_VALIDITY)
+                        await self.redis_pool.set(f"price:{symbol}", f"{new_price}:{new_timestamp}", ex=REDIS_VALIDITY)
                         logging.debug(f"Updated Redis with new price for {symbol}")
-                    except aioredis.RedisError as e:
+                    except Exception as e:
                         logging.error(f"Failed to update Redis with new price: {e}")
                     
                     self.price_cache[symbol] = (new_price, new_timestamp)
@@ -190,7 +183,7 @@ class PriceSubscriber:
         for exchange in self.exchanges.values():
             await exchange.close()
         if self.redis_pool:
-            await self.redis_pool.disconnect()
+            await self.redis_pool.close()
 
 async def price_update_callback(symbol, price, timestamp):
     logging.info(f"Price update: {symbol} - {price} at {datetime.fromtimestamp(timestamp, timezone.utc)}")

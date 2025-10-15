@@ -125,12 +125,19 @@ class TradingCache:
             return cls._instance
 
     async def bulk_get_positions(
-        self, user_ids: List[str], symbol: str
+        self, user_ids: List[str], symbol: str, side: str, exchange: str = "okx"
     ) -> Dict[str, Optional[Dict[Any, Any]]]:
-        """Bulk fetch positions for multiple users"""
+        """Bulk fetch positions for multiple users
+
+        Args:
+            user_ids: List of user IDs
+            symbol: Trading symbol (e.g., 'BTC-USDT-SWAP')
+            side: Position side ('long' or 'short')
+            exchange: Exchange name (default: 'okx')
+        """
         result: Dict[str, Optional[Dict[Any, Any]]] = {}
         for user_id in user_ids:
-            key = f"position:{user_id}:{symbol}"
+            key = f"position:{user_id}:{exchange}:{symbol}:{side}"
             position_data = await self._cache.get(key)
             if position_data and isinstance(position_data, dict):
                 result[user_id] = cast(Dict[Any, Any], position_data)
@@ -138,14 +145,29 @@ class TradingCache:
                 result[user_id] = None
         return result
 
-    async def set_position(self, user_id: str, symbol: str, data: Dict[Any, Any]) -> bool:
-        """Cache position data"""
-        key = f"position:{user_id}:{symbol}"
+    async def set_position(self, user_id: str, symbol: str, side: str, data: Dict[Any, Any], exchange: str = "okx") -> bool:
+        """Cache position data
+
+        Args:
+            user_id: User ID
+            symbol: Trading symbol (e.g., 'BTC-USDT-SWAP')
+            side: Position side ('long' or 'short')
+            data: Position data to cache
+            exchange: Exchange name (default: 'okx')
+        """
+        key = f"position:{user_id}:{exchange}:{symbol}:{side}"
         return await self._cache.set(key, data, expire=300)
 
-    async def get_position(self, user_id: str, symbol: str) -> Optional[Dict[Any, Any]]:
-        """Retrieve cached position data"""
-        key = f"position:{user_id}:{symbol}"
+    async def get_position(self, user_id: str, symbol: str, side: str, exchange: str = "okx") -> Optional[Dict[Any, Any]]:
+        """Retrieve cached position data
+
+        Args:
+            user_id: User ID
+            symbol: Trading symbol (e.g., 'BTC-USDT-SWAP')
+            side: Position side ('long' or 'short')
+            exchange: Exchange name (default: 'okx')
+        """
+        key = f"position:{user_id}:{exchange}:{symbol}:{side}"
         result = await self._cache.get(key)
         if result and isinstance(result, dict):
             return cast(Dict[Any, Any], result)
@@ -169,9 +191,16 @@ class TradingCache:
         await self._cache.cleanup()
 
     @classmethod
-    async def remove_position(cls, user_id: str, symbol: str, side: str) -> bool:
-        """Remove position from cache"""
-        key = f"user:{user_id}:position:{symbol}:{side}"
+    async def remove_position(cls, user_id: str, symbol: str, side: str, exchange: str = "okx") -> bool:
+        """Remove position from cache
+
+        Args:
+            user_id: User ID
+            symbol: Trading symbol (e.g., 'BTC-USDT-SWAP')
+            side: Position side ('long' or 'short')
+            exchange: Exchange name (default: 'okx')
+        """
+        key = f"position:{user_id}:{exchange}:{symbol}:{side}"
         try:
             if not hasattr(cls, '_cache') or cls._cache is None:
                 cls._cache = Cache()

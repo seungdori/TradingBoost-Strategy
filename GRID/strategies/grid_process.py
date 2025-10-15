@@ -15,9 +15,9 @@ from asyncio import CancelledError
 from contextlib import contextmanager
 
 import redis
-import redis.asyncio as aioredis
 from h11 import Data
 
+from GRID.core.redis import get_redis_connection
 from GRID.database import redis_database
 from GRID.database.redis_database import (
     get_job_status,
@@ -46,7 +46,7 @@ redis_async = None
 REDIS_PASSWORD = settings.REDIS_PASSWORD
 
 #================================================================================================
-# Redis 연결 설정 
+# Redis 연결 설정
 #================================================================================================
 
 
@@ -67,7 +67,7 @@ def setup_redis():
         print("Successfully connected to Redis")
         # 애플리케이션 종료 시 cleanup 함수 호출 등록
         atexit.register(cleanup)
-        
+
     except redis.RedisError as e:
         print(f"Failed to connect to Redis: {e}")
         raise
@@ -87,13 +87,6 @@ async def async_cleanup():
     finally:
         if redis_conn:
             redis_conn.close()
-
-
-async def get_redis_connection():
-    if REDIS_PASSWORD:
-        return aioredis.from_url(f'redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}', encoding='utf-8', decode_responses=True, password=REDIS_PASSWORD)
-    else:
-        return aioredis.from_url(f'redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}', encoding='utf-8', decode_responses=True)
 
 
 #================================================================================================
