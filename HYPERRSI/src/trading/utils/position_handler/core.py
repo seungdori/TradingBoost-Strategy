@@ -14,7 +14,7 @@ from shared.logging import get_logger
 logger = get_logger(__name__)
 
 
-def get_redis_client():
+async def get_redis_client():
     """
     Get redis_client dynamically to avoid import-time errors.
 
@@ -22,10 +22,10 @@ def get_redis_client():
     and initialization order problems.
 
     Returns:
-        Redis client instance from core database module
+        Async Redis client instance from shared database module
     """
-    from HYPERRSI.src.core import database as db_module
-    return db_module.redis_client
+    from shared.database.redis import get_redis
+    return await get_redis()
 
 
 async def calculate_next_candle_time(timeframe: str) -> int:

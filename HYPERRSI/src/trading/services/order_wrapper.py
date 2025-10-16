@@ -35,7 +35,15 @@ class OrderWrapper:
     async def create_order(self, symbol: str, order_type: str, side: str, amount: float,
                           price: Optional[float] = None, params: Optional[Dict] = None) -> Dict:
         """주문 생성"""
-        result: Dict = await self.exchange.create_order(symbol, order_type, side, amount, price, params)
+        # CCXT create_order signature: (symbol, type, side, amount, price, params)
+        result: Dict = await self.exchange.create_order(
+            symbol=symbol,
+            type=order_type,
+            side=side,
+            amount=amount,
+            price=price,
+            params=params
+        )
         return result
 
     async def cancel_order(self, order_id: str, symbol: Optional[str] = None, params: Optional[Dict] = None) -> Dict:

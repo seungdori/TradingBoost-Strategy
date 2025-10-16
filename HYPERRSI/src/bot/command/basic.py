@@ -242,13 +242,15 @@ async def help_command(message: types.Message) -> None:
         return
     user_id = message.from_user.id
 
-    okx_uid = await redis.get(f"user:{user_id}:okx_uid")
+    okx_uid_bytes = await redis.get(f"user:{user_id}:okx_uid")
+    okx_uid = okx_uid_bytes.decode('utf-8') if isinstance(okx_uid_bytes, bytes) else okx_uid_bytes if okx_uid_bytes else None
     if not is_allowed_user(okx_uid):
         print("okx_uid", okx_uid)
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
 
-    keys = get_redis_keys(user_id)
+    # OKX UID로 키 생성
+    keys = get_redis_keys(okx_uid if okx_uid else str(user_id))
     api_keys = await redis.hgetall(keys['api_keys'])
     is_registered = bool(api_keys)
 

@@ -14,7 +14,8 @@ from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.error_handler import log_error
 from HYPERRSI.src.core.logger import log_dual_side_debug
-from HYPERRSI.src.services.redis_service import RedisService, redis_client
+from HYPERRSI.src.services.redis_service import RedisService
+from shared.database.redis_helper import get_redis_client
 from HYPERRSI.src.trading.error_message import map_exchange_error
 from HYPERRSI.src.trading.trading_service import TradingService
 from shared.logging import get_logger, log_order
@@ -38,6 +39,7 @@ async def set_default_dual_side_entry_settings(user_id: str) -> bool:
     양방향 진입 설정값들을 기본값으로 설정
     """
     try:
+        redis_client = await get_redis_client()
         settings = await get_user_dual_side_settings(user_id)
         if not settings:
             from shared.constants.default_settings import DEFAULT_DUAL_SIDE_ENTRY_SETTINGS
@@ -53,6 +55,7 @@ async def set_default_dual_side_entry_settings(user_id: str) -> bool:
 
 async def get_last_dca_level(user_id: str, symbol: str, position_side: str) -> float | None:
     try:
+        redis_client = await get_redis_client()
         dca_key = f"user:{user_id}:position:{symbol}:{position_side}:dca_levels"
         dca_levels = await redis_client.lrange(dca_key, 0, -1)
 
@@ -101,6 +104,7 @@ async def get_user_dual_side_settings(user_id: str) -> dict:
     """
     사용자의 양방향 설정을 Redis에서 가져옴
     """
+    redis_client = await get_redis_client()
     settings_key = f"user:{user_id}:dual_side"
     raw_settings = await redis_client.hgetall(settings_key)
     
@@ -260,12 +264,13 @@ async def manage_dual_side_entry(
         dual_side_pyramiding_limit = dual_side_settings.get('dual_side_pyramiding_limit', 1)
 
         # 현재 dual_side 진입 카운트 확인
+        redis_client = await get_redis_client()
         dual_side_count_key = f"user:{user_id}:{symbol}:dual_side_count"
         dual_side_count = await redis_client.get(dual_side_count_key)
         dual_side_count = int(dual_side_count) if dual_side_count else 0
-        
 
-            
+
+
         # DCA 몇 번째 진입에서 실행할지
         try:
             dca_order_count = await redis_client.get(f"user:{user_id}:position:{symbol}:{main_position_side}:dca_count")
@@ -899,6 +904,7 @@ async def update_hedge_sl_tp_after_dca(
     )
         logger.warning(f"[{user_id}] 알고주문 취소 실패: {e}")
 
+    redis_client = await get_redis_client()
     tdMode = await redis_client.get(f"user:{user_id}:position:{symbol}:tdMode")
     if tdMode is None:
         tdMode = "cross"  # 기본값 설정

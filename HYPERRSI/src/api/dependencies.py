@@ -196,7 +196,13 @@ class ExchangeConnectionPool:
                         status_code=401,
                         detail=f"API 키 인증 실패: {str(e)}"
                     )
-                except HTTPException:
+                except HTTPException as http_exc:
+                    # HTTPException을 그대로 전파 (특히 404 API keys not found)
+                    if HAS_METRICS and http_exc.status_code == 404:
+                        pool_metrics['client_error'].labels(
+                            user_id=user_id,
+                            error_type='api_keys_not_found'
+                        ).inc()
                     raise
                 except Exception as e:
                     logger.error(f"Failed to create exchange client for user {user_id}: {e}")
@@ -286,21 +292,29 @@ def get_redis_keys(user_id: str, symbol:str, side:str) -> dict:
         'settings': f"user:{user_id}:settings"
     }
 
-async def get_user_api_keys(user_id: str) -> dict:
-    """Redis에서 사용자의 API 키 정보를 가져옴"""
+async def get_user_api_keys(user_id: str, raise_on_missing: bool = True) -> Optional[dict]:
+    """Redis에서 사용자의 API 키 정보를 가져옴
+
+    Args:
+        user_id: 사용자 ID
+        raise_on_missing: True일 경우 키가 없으면 HTTPException 발생, False일 경우 None 반환
+
+    Returns:
+        API 키 딕셔너리 또는 None (raise_on_missing=False이고 키가 없는 경우)
+    """
     from shared.database.redis import get_redis_binary
 
     key = f"user:{user_id}:api:keys"
     try:
-        #logger.info(f"Redis에서 키 조회 시작: {key}")
         redis_client = await get_redis_binary()
         api_keys = await redis_client.hgetall(key)
-        #logger.info(f"Redis 원본 응답: {api_keys}, 타입: {type(api_keys)}")
-        
+
         if not api_keys:
-            logger.error(f"API 키 조회 실패: {str(user_id)}, 빈 결과 반환됨")
-            raise HTTPException(status_code=404, detail="API keys not found")
-        
+            logger.info(f"API 키 조회 실패: {str(user_id)}, 빈 결과 반환됨")
+            if raise_on_missing:
+                raise HTTPException(status_code=404, detail="API keys not found")
+            return None
+
         # 디코딩 단계 분리하여 오류 추적
         decoded_keys = {}
         for k, v in api_keys.items():
@@ -311,17 +325,22 @@ async def get_user_api_keys(user_id: str) -> dict:
                 logger.debug(f"키 디코딩: {k} -> {key_str}, 값 디코딩: {v} -> {val_str}")
             except Exception as e:
                 logger.error(f"키 디코딩 오류: {k}, {v}, 오류: {str(e)}")
-        
-        #logger.info(f"디코딩된 API 키: {decoded_keys}")
-        
+
         if not all(k in decoded_keys for k in ['api_key', 'api_secret', 'passphrase']):
             logger.error(f"API 키 불완전: {decoded_keys}")
-            raise HTTPException(status_code=400, detail="Incomplete API keys")
-        
+            if raise_on_missing:
+                raise HTTPException(status_code=400, detail="Incomplete API keys")
+            return None
+
         return decoded_keys
+    except HTTPException:
+        # HTTPException은 그대로 재발생
+        raise
     except Exception as e:
         logger.error(f"API 키 조회 중 예외 발생: {str(e)}, 키: {key}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve API keys: {str(e)}")
+        if raise_on_missing:
+            raise HTTPException(status_code=500, detail=f"Failed to retrieve API keys: {str(e)}")
+        return None
 
 
 # 기존 context manager는 그대로 유지, 내부만 변경
@@ -355,6 +374,9 @@ async def get_exchange_client(user_id: str) -> ccxt.okx:
             #logger.info(f"Pool status for user {user_id}: {in_use}/{total} clients in use")
 
         return client
+    except HTTPException:
+        # HTTPException은 그대로 전파 (404, 401 등)
+        raise
     except Exception as e:
         logger.error(f"Failed to get exchange client: {e}")
         raise HTTPException(status_code=500, detail=str(e))

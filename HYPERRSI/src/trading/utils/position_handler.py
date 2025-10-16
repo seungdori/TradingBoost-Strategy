@@ -167,12 +167,14 @@ async def handle_no_position(
         await init_user_position_data(user_id, symbol, "long")
         await init_user_position_data(user_id, symbol, "short")
         timeframe_str = get_timeframe(timeframe)
-        print(f"[{user_id}][{timeframe_str}] 포지션 없는 경우의 디버깅 : {current_rsi}, rsi signals : {rsi_signals},current state : {current_state}")
-        
+        print(f"[{user_id}][{timeframe_str}] 포지션 없는 경우의 디버깅 : {current_rsi}, rsi signals : {rsi_signals},current state : {current_state}", flush=True)
+        logger.info(f"[{user_id}] ===== 진입 로직 시작 =====")
+        print(f"[{user_id}] ===== 진입 로직 시작 =====", flush=True)
 
-        
+
         entry_fail_count_key = f"user:{user_id}:entry_fail_count"
         fail_count = int(await redis.get(entry_fail_count_key) or 0)
+        print(f"[{user_id}] fail_count: {fail_count}")
         main_position_direction_key = f"user:{user_id}:position:{symbol}:main_position_direction"
         if await redis.exists(main_position_direction_key):
             await redis.delete(main_position_direction_key)
@@ -355,7 +357,9 @@ async def handle_no_position(
                     logger.info(f"[{user_id}] 롱 포지션 진입 조건 불충족 알림 전송 완료. {symbol} {timeframe}")
 
         # 숏 진입 로직도 동일하게 수정...
+        print(f"[{user_id}] 숏 진입 체크 시작 - direction: {settings['direction']}")
         if settings['direction'] in ['롱숏', '숏']:
+            print(f"[{user_id}] 숏 direction 조건 통과")
             timeframe_lock_long_key = f"user:{user_id}:position_lock:{symbol}:long:{timeframe_str}"
             timeframe_lock_short_key = f"user:{user_id}:position_lock:{symbol}:short:{timeframe_str}"
             try:
@@ -371,13 +375,15 @@ async def handle_no_position(
             except Exception as e:
                 is_locked = False
                 timeframe_lock_key = timeframe_lock_long_key
+            print(f"[{user_id}] 잠금 체크 완료 - is_locked: {is_locked}")
             if is_locked:
                 remaining_time = await redis.ttl(timeframe_lock_key)
                 logger.info(f"[{user_id}] Position is locked for {symbol} with timeframe {timeframe_str}. Remaining time: {remaining_time}s")
                 return  # 잠금이 있으면 포지션을 열지 않고 리턴
-                        
+
             should_check_trend = settings.get('use_trend_logic', True)
             trend_condition = (current_state != 2) if should_check_trend else True
+            print(f"[{user_id}] 숏 진입 조건 - is_overbought: {rsi_signals['is_overbought']}, trend_condition: {trend_condition}, current_state: {current_state}")
             if rsi_signals['is_overbought'] and trend_condition:
                 try:
                     print("2번")
@@ -501,9 +507,14 @@ async def handle_no_position(
                 await redis.delete(entry_fail_count_key)
 
     except Exception as e:
+        import traceback
         error_msg = map_exchange_error(e)
         error_logger.error(f"[{user_id}]:포지션 진입 오류", exc_info=True)
-        await send_telegram_message(f"⚠️ 포지션 진입 오류:\n{error_msg}", user_id, debug=True)
+        print(f"[{user_id}] ❌❌❌ EXCEPTION CAUGHT at line 508: {e}", flush=True)
+        print(f"[{user_id}] Exception type: {type(e)}", flush=True)
+        print(f"[{user_id}] Traceback:", flush=True)
+        traceback.print_exc()
+        await send_telegram_message(f"⚠️ 포지션 진입 오류:\n{error_msg}\n\nException: {e}", user_id, debug=True)
         
         
 

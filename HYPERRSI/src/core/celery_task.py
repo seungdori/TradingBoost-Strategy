@@ -147,6 +147,11 @@ celery_app.conf.update(
     worker_init=init_worker,
     beat_schedule=beat_schedule,  # beat_schedule 설정 추가
     worker_prefetch_multiplier=1,
+    # Task 실행 로그 비활성화 (received, succeeded 메시지 숨김)
+    worker_log_format='[%(asctime)s: %(levelname)s] %(message)s',
+    worker_task_log_format='[%(asctime)s: %(levelname)s] %(message)s',
+    task_track_started=False,  # Task 시작 이벤트 추적 비활성화
+    task_send_sent_event=False,  # Task 전송 이벤트 비활성화
 )
 
 # 커맨드라인에서 Celery 실행 시 대기 중인 태스크 제거 옵션 추가

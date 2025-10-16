@@ -406,3 +406,17 @@ async def close_redis():
     """Close Redis connections (call at app shutdown)"""
     await RedisConnectionPool.close_pool()
 
+
+async def get_redis_binary() -> AsyncRedis:
+    """
+    Get Redis client with decode_responses=False (returns bytes).
+
+    This is useful for operations that need to work with binary data
+    or when you need explicit control over encoding/decoding.
+
+    Returns:
+        AsyncRedis: Redis client instance that returns bytes
+    """
+    manager = RedisConnectionManager()
+    return await manager.get_connection_async(decode_responses=False)
+

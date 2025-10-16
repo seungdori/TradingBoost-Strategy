@@ -81,11 +81,9 @@ class RedisClientProxy:
                 self._lock = asyncio.Lock()
             async with self._lock:
                 if self._client is None:
-                    from HYPERRSI.src.core.database import (
-                        get_redis_client as get_async_client,
-                    )
+                    from shared.database.redis import get_redis
 
-                    self._client = await get_async_client()
+                    self._client = await get_redis()
         return self._client
 
     def __await__(self):  # type: ignore[override]

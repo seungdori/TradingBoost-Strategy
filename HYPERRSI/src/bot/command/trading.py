@@ -119,12 +119,14 @@ async def stop_command(message: types.Message) -> None:
     if message.from_user is None:
         return
     user_id = message.from_user.id
-    keys = get_redis_keys(str(user_id))
     okx_uid_bytes = await redis.get(f"user:{user_id}:okx_uid")
     okx_uid = okx_uid_bytes.decode('utf-8') if isinstance(okx_uid_bytes, bytes) else okx_uid_bytes if okx_uid_bytes else None
     if not is_allowed_user(okx_uid):
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
+
+    # OKX UID로 키 생성
+    keys = get_redis_keys(okx_uid if okx_uid else str(user_id))
     
     try:
         # 텔레그램 ID를 OKX UID로 변환
@@ -176,13 +178,16 @@ async def confirm_stop(callback: types.CallbackQuery) -> None:
         return
     try:
         user_id = callback.from_user.id
-        keys = get_redis_keys(str(user_id))
         okx_uid_bytes = await redis.get(f"user:{user_id}:okx_uid")
         okx_uid = okx_uid_bytes.decode('utf-8') if isinstance(okx_uid_bytes, bytes) else okx_uid_bytes if okx_uid_bytes else None
         if not is_allowed_user(okx_uid):
             print("접근 권한 없음. trading.py", okx_uid)
             await callback.message.reply("⛔ 접근 권한이 없습니다.")
             return
+
+        # OKX UID로 키 생성
+        keys = get_redis_keys(okx_uid if okx_uid else str(user_id))
+
         # 텔레그램 ID를 OKX UID로 변환
         okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
         
@@ -275,13 +280,16 @@ async def trade_command(message: types.Message) -> None:
     if message.from_user is None:
         return
     user_id = message.from_user.id
-    keys = get_redis_keys(str(user_id))
     okx_uid_bytes = await redis.get(f"user:{user_id}:okx_uid")
     okx_uid = okx_uid_bytes.decode('utf-8') if isinstance(okx_uid_bytes, bytes) else okx_uid_bytes if okx_uid_bytes else None
     if not is_allowed_user(okx_uid):
         print("접근 권한 없음. trading.py", okx_uid)
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
+
+    # OKX UID로 키 생성
+    keys = get_redis_keys(okx_uid if okx_uid else str(user_id))
+
     # API 키 확인
     api_keys = await redis.hgetall(keys['api_keys'])
     if not api_keys:
@@ -324,8 +332,9 @@ async def trade_command(message: types.Message) -> None:
     # stop_signal이 있으면 실행 중이 아님
     #if stop_signal:
     #    is_trading = False
-    
-    preference = await redis.hgetall(f"user:{user_id}:preferences")
+
+    # OKX UID로 preference 조회
+    preference = await redis.hgetall(f"user:{okx_uid if okx_uid else user_id}:preferences")
     selected_symbol = preference.get("symbol")
     selected_timeframe = preference.get("timeframe")
     
@@ -432,18 +441,21 @@ async def handle_symbol_selection(callback: types.CallbackQuery) -> None:
         return
     try:
         user_id = callback.from_user.id
-        
-        
+
+        # OKX UID 조회
+        okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
+
         symbol = callback.data.replace('select_symbol_', '')
-        
+
         # 선택된 심볼 저장
         await redis.set(f"user:{user_id}:selected_symbol", symbol)
-        
-        preference_key = f"user:{user_id}:preferences"
+
+        # OKX UID로 preference 저장
+        preference_key = f"user:{okx_uid if okx_uid else user_id}:preferences"
         await redis.hset(preference_key, mapping={
             "symbol": symbol
         })
-        
+
         selected_timeframe = await redis.get(f"user:{user_id}:selected_timeframe")
         
         
@@ -561,8 +573,14 @@ async def handle_timeframe_selection(callback: types.CallbackQuery) -> None:
     if callback.from_user is None or callback.data is None:
         return
     user_id = callback.from_user.id
+
+    # OKX UID 조회
+    okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
+
     timeframe = callback.data.replace('select_timeframe_', '')
-    preference_key = f"user:{user_id}:preferences"
+
+    # OKX UID로 preference 키 생성
+    preference_key = f"user:{okx_uid if okx_uid else user_id}:preferences"
 
     await redis.set(f"user:{user_id}:selected_timeframe", timeframe)
     await redis.hset(preference_key, mapping={
@@ -607,30 +625,29 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
         
         # 텔레그램 ID를 OKX UID로 변환
         okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
-        
+
         if action == "start":
-            # preference에서 선택된 값을 가져오도록 수정
-            preference_key = f"user:{user_id}:preferences"
+            # OKX UID로 preference 키 생성
+            preference_key = f"user:{okx_uid if okx_uid else user_id}:preferences"
             preferences = await redis.hgetall(preference_key)
             selected_symbol = preferences.get("symbol")
             selected_timeframe = preferences.get("timeframe")
-            
+
             if not (selected_symbol and selected_timeframe):
                 await callback.answer("심볼과 타임프레임을 선택해주세요.")
                 return
-                
-            # 선택된 설정을 preferences에 저장
-            preference_key = f"user:{user_id}:preferences"
+
+            # 선택된 설정을 preferences에 저장 (OKX UID 사용)
             await redis.hset(preference_key, mapping={
                 "symbol": selected_symbol,
                 "timeframe": selected_timeframe
             })
-            
+
             ## 먼저 상태를 running으로 설정
             #await redis_client.set(f"user:{user_id}:trading:status", "running")
             #if okx_uid:
             #    await redis_client.set(f"user:{okx_uid}:trading:status", "running")
-            
+
             request_body = {
                 "user_id": user_id,
                 "symbol": selected_symbol,
@@ -638,17 +655,11 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
                 "start_time": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "type": "start"
             }
-            
+
             await redis.set(f"user:{user_id}:trading:request", json.dumps(request_body))
-            
+
             # OKX UID가 있는 경우 해당 설정도 저장
             if okx_uid:
-                okx_preference_key = f"user:{okx_uid}:preferences"
-                await redis.hset(okx_preference_key, mapping={
-                    "symbol": selected_symbol,
-                    "timeframe": selected_timeframe
-                })
-                
                 okx_request_body = {
                     "user_id": okx_uid,
                     "symbol": selected_symbol,
@@ -656,10 +667,11 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
                     "start_time": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "type": "start"
                 }
-                
+
                 await redis.set(f"user:{okx_uid}:trading:request", json.dumps(okx_request_body))
-            
-            settings_key = f"user:{user_id}:settings"
+
+            # OKX UID로 settings 키 생성
+            settings_key = f"user:{okx_uid if okx_uid else user_id}:settings"
             # 먼저 키의 타입을 확인
             settings_str = await redis.get(settings_key)
             settings = json.loads(settings_str) if settings_str else {}
@@ -716,8 +728,42 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
                 response.raise_for_status()
                 
             except httpx.HTTPStatusError as e:
-                logger.error(f"Error starting trading task: {e}")
-                await callback.answer("트레이딩 시작 중 오류가 발생했습니다.")
+                # 이미 실행 중인 경우 (400 에러)는 성공으로 처리
+                error_detail = ""
+                try:
+                    error_response = e.response.json()
+                    error_detail = error_response.get("detail", "")
+                except:
+                    error_detail = str(e)
+
+                if e.response.status_code == 400 and "이미 트레이딩 태스크가 실행 중입니다" in error_detail:
+                    logger.info(f"Trading already running for user {user_id}, treating as success")
+                    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(
+                            text="🔒 시작 (실행 중)",
+                            callback_data="trade_start",
+                            disabled=True
+                        )],
+                        [types.InlineKeyboardButton(
+                            text="⛔️ 중지",
+                            callback_data="trade_stop",
+                            disabled=False
+                        )]
+                    ])
+
+                    await callback.message.edit_text(
+                        f"📊 트레이딩 상태\n\n"
+                        f"현재 상태: 🟢 실행 중\n"
+                        f"거래 종목: {selected_symbol}\n"
+                        f"타임프레임: {selected_timeframe}",
+                        reply_markup=keyboard
+                    )
+                    await callback.answer("이미 트레이딩이 실행 중입니다!")
+                    return
+
+                # 다른 오류는 기존 처리 유지
+                logger.error(f"Error starting trading task: {e}, detail: {error_detail}")
+                await callback.answer(f"트레이딩 시작 중 오류: {error_detail[:100]}")
                 # 오류 발생 시 상태를 stopped로 변경
                 await redis.set(f"user:{user_id}:trading:status", "stopped")
                 if okx_uid:
@@ -758,29 +804,34 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
             await callback.answer("트레이딩이 시작되었습니다!")
             
         elif action == "stop":
-            # 트레이딩 중지
-            task_id = await redis.get(f"user:{user_id}:task_id")
-            if task_id:
-                celery_app.control.revoke(task_id, terminate=True)
-                await redis.delete(f"user:{user_id}:task_id")
-    
-            # 상태 초기화
-            await redis.set(f"user:{user_id}:trading:status", "stopped")
-            print("STOPPED!!!")
-            await redis.delete(f"user:{user_id}:selected_symbol")
-            await redis.delete(f"user:{user_id}:selected_timeframe")
-            
-            # OKX UID가 있는 경우 해당 상태도 초기화
-            if okx_uid:
-                okx_task_id = await redis.get(f"user:{okx_uid}:task_id")
-                if okx_task_id:
-                    celery_app.control.revoke(okx_task_id, terminate=True)
-                    await redis.delete(f"user:{okx_uid}:task_id")
-                
-                await redis.set(f"user:{okx_uid}:trading:status", "stopped")
-                print("STOPED WITH OKX UID")
-                await redis.delete(f"user:{okx_uid}:selected_symbol")
-                await redis.delete(f"user:{okx_uid}:selected_timeframe")
+            # FastAPI 엔드포인트를 통해 트레이딩 중지
+            client = httpx.AsyncClient()
+            try:
+                # OKX UID로 stop API 호출
+                request_data = {
+                    "okx_uid": okx_uid if okx_uid else str(user_id)
+                }
+
+                response = await client.post(
+                    f"{API_BASE_URL}/trading/stop",
+                    params={"user_id": okx_uid if okx_uid else str(user_id)}
+                )
+                response.raise_for_status()
+                logger.info(f"트레이딩 중지 API 호출 성공 (user_id: {user_id}, okx_uid: {okx_uid})")
+
+            except httpx.HTTPStatusError as e:
+                error_detail = ""
+                try:
+                    error_response = e.response.json()
+                    error_detail = error_response.get("detail", "")
+                except:
+                    error_detail = str(e)
+
+                logger.error(f"Error stopping trading: {e}, detail: {error_detail}")
+                await callback.answer(f"중지 중 오류: {error_detail[:100]}")
+                return
+            finally:
+                await client.aclose()
             
             # 종목 선택 화면으로 돌아가기
             symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]
@@ -821,13 +872,17 @@ async def handle_reset_callback(callback: types.CallbackQuery) -> None:
         return
     try:
         user_id = callback.from_user.id
-        keys = get_redis_keys(str(user_id))
+        okx_uid_bytes = await redis.get(f"user:{user_id}:okx_uid")
+        okx_uid = okx_uid_bytes.decode('utf-8') if isinstance(okx_uid_bytes, bytes) else okx_uid_bytes if okx_uid_bytes else None
+
+        # OKX UID로 키 생성
+        keys = get_redis_keys(okx_uid if okx_uid else str(user_id))
         await redis.set(keys['status'], "stopped")
         print("RESETED!!!")
-        # 선택 초기화
+        # 선택 초기화 - OKX UID로 preference 삭제
         await redis.delete(f"user:{user_id}:selected_symbol")
         await redis.delete(f"user:{user_id}:selected_timeframe")
-        await redis.delete(f"user:{user_id}:preferences")
+        await redis.delete(f"user:{okx_uid if okx_uid else user_id}:preferences")
         #await callback.message.answer("⛔ 트레이딩이 중지되었습니다.")
         # 선택 화면 직접 생성
         symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]
@@ -922,8 +977,8 @@ async def status_command(message: types.Message) -> None:
         # 둘 중 하나라도 running이면 실행 중으로 간주
         status_emoji = "🟢" if (trading_status == "running" or (okx_uid and okx_trading_status == "running")) else "🔴"
 
-        # 2. 현재 활성 심볼/타임프레임 조회
-        active_key = f"user:{user_id}:preferences"
+        # 2. 현재 활성 심볼/타임프레임 조회 (OKX UID로 조회)
+        active_key = f"user:{okx_uid if okx_uid else user_id}:preferences"
         preferences = await redis.hgetall(active_key)
         symbol = preferences.get('symbol', '')
         timeframe = preferences.get('timeframe', '')
@@ -931,8 +986,9 @@ async def status_command(message: types.Message) -> None:
         # 3. 현재 포지션 정보 조회 (롱과 숏 모두)
         position_info_list = []
         if symbol:
-            api_keys = await get_user_api_keys(str(user_id))
-            if all([api_keys.get('api_key'), api_keys.get('api_secret'), api_keys.get('passphrase')]):
+            # API 키 조회 (raise_on_missing=False로 설정하여 키가 없어도 None 반환)
+            api_keys = await get_user_api_keys(str(user_id), raise_on_missing=False)
+            if api_keys and all([api_keys.get('api_key'), api_keys.get('api_secret'), api_keys.get('passphrase')]):
                 # OKX 클라이언트 생성
                 client = ccxt.okx({
                     'apiKey': api_keys.get('api_key'),

@@ -392,11 +392,11 @@ async def get_active_trading_users(): # 내부 로직 변경 필요
 
     redis = await get_redis_client()
     active_users = []
-    cursor = '0'
+    cursor = 0  # Redis SCAN cursor는 숫자 0으로 시작
     pattern = 'user:*:trading:status' # 스캔 패턴 변경
 
     try:
-        while cursor != '0':
+        while True:  # do-while 패턴: 최소 한 번은 실행
             cursor, keys = await redis.scan(cursor=cursor, match=pattern, count=100)
 
             for key in keys:
@@ -510,6 +510,10 @@ async def get_active_trading_users(): # 내부 로직 변경 필요
                 except Exception as e:
                     logger.error(f"키 처리 중 예상치 못한 오류: {key}, 오류: {str(e)}")
                     continue
+
+            # cursor가 0으로 돌아오면 스캔 완료
+            if cursor == 0:
+                break
     except Exception as e:
         logger.error(f"활성 사용자 가져오기 중 오류: {str(e)}")
 

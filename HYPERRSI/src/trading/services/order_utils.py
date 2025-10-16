@@ -424,6 +424,9 @@ async def try_send_order(
         need_close = False
     
     try:
+        # Redis 클라이언트 초기화
+        redis = await get_redis_client()
+
         # 실제 실행
         specs_json: Any = await redis.get("symbol_info:contract_specifications")
         tick_size: float = 0.001
@@ -596,9 +599,10 @@ async def try_send_order(
             try:
                 order_result = await exchange.create_order(  # type: ignore
                     symbol=symbol,
+                    type=order_type,  # CCXT requires 'type' parameter (market, limit, etc.)
                     side=side,
                     amount=safe_float(contracts_amount),
-                    price=safe_float(price_str) if price_str else 0.0,
+                    price=safe_float(price_str) if price_str else None,
                     params=order_params
                 )
             except Exception as e:

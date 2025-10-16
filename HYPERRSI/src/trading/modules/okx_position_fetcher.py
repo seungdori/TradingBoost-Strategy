@@ -156,17 +156,24 @@ class OKXPositionFetcher:
                     fetched_redis_position = True
                 fail_to_fetch_position = True
 
-            # 2) 포지션이 없는 경우 모든 side의 포지션 키 삭제
-
+            # 2) 포지션이 없는 경우, Redis에 실제 키가 있는 경우만 삭제
             if not positions:
+                has_redis_position = False
                 for side in ['long', 'short']:
                     position_key = f"user:{user_id}:position:{symbol}:{side}"
-                    dca_count_key = f"user:{user_id}:position:{symbol}:{side}:dca_count"
-                    await redis.set(dca_count_key, "0")
-                    await redis.set(position_state_key, "0")
-                    await redis.delete(position_key)
-                logger.error(f"[{user_id}] 포지션 없음. Redis 데이터 삭제.")
-                await send_telegram_message(f"[{user_id}] [{debug_entry_number}] 포지션 없음. Redis 데이터 삭제. 여기서 아마 경합 일어날 가능성 있으니, 실제로 어떻게 된건지 체크.", debug=True)
+                    # Redis에 실제로 키가 존재하는지 확인
+                    exists = await redis.exists(position_key)
+                    if exists:
+                        has_redis_position = True
+                        dca_count_key = f"user:{user_id}:position:{symbol}:{side}:dca_count"
+                        await redis.set(dca_count_key, "0")
+                        await redis.set(position_state_key, "0")
+                        await redis.delete(position_key)
+
+                # 실제로 Redis 키가 있어서 삭제한 경우만 로깅
+                if has_redis_position:
+                    logger.error(f"[{user_id}] 포지션 없음. Redis 데이터 삭제.")
+                    await send_telegram_message(f"[{user_id}] [{debug_entry_number}] 포지션 없음. Redis 데이터 삭제. 여기서 아마 경합 일어날 가능성 있으니, 실제로 어떻게 된건지 체크.", debug=True)
 
             # 3) 각 포지션 처리
             if fail_to_fetch_position:

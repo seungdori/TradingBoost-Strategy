@@ -121,9 +121,9 @@ ERROR_MAX_FAILURES_REACHED = "Maximum entry failures reached"
 # Trading Direction Constants
 # ============================================================================
 
-DIRECTION_LONG_SHORT = "q"
-DIRECTION_LONG = "q"
-DIRECTION_SHORT = ""
+DIRECTION_LONG_SHORT = "롱숏"
+DIRECTION_LONG = "롱"
+DIRECTION_SHORT = "숏"
 
 # ============================================================================
 # Trend State Constants

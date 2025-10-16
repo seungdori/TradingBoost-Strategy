@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 # Auto-configure PYTHONPATH for monorepo structure
 from shared.utils.path_config import configure_pythonpath
 
@@ -5,9 +6,7 @@ configure_pythonpath()
 
 import asyncio
 import json
-import logging
 import os
-import traceback
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
@@ -18,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html
 
 import GRID.strategies.grid_process
+from GRID.core.redis import get_redis_connection
 from GRID.dtos.feature import StartFeatureDto
 from GRID.routes import (
     auth_route,
@@ -32,18 +32,17 @@ from GRID.routes import (
 )
 from GRID.services import bot_state_service, db_service
 from GRID.strategies.grid_process import start_grid_main_in_process, update_user_data
-from GRID.core.redis import get_redis_connection
 from GRID.trading.instance_manager import start_cleanup_task
 
 # Legacy imports (for backward compatibility)
 from GRID.trading.redis_connection_manager import RedisConnectionManager
 
 # New infrastructure imports
+from shared.api.health import router as health_router
 from shared.config import settings
 from shared.database.redis import close_redis, init_redis
 from shared.database.session import close_db, init_db
 from shared.docs.openapi import attach_standard_error_examples
-from shared.dtos.bot_state import BotStateDto, BotStateError, BotStateKeyDto
 from shared.errors import register_exception_handlers
 from shared.errors.middleware import RequestIDMiddleware
 from shared.logging import setup_json_logger
@@ -100,16 +99,12 @@ async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: Ba
         # 요청 본문을 Redis에 저장
         await redis.set(f"{exchange_name}:request_body:{dto.user_id}", json.dumps(request_body), ex=1440000)
         print(f"Request body saved to Redis for {exchange_name} user {dto.user_id}")
-        
         enter_strategy = dto.enter_strategy
         enter_symbol_count = dto.enter_symbol_count
         enter_symbol_amount_list = dto.enter_symbol_amount_list
         grid_num = dto.grid_num
         leverage = dto.leverage
         stop_loss = dto.stop_loss
-        api_keys = dto.api_key
-        api_secret = dto.api_secret
-        password = dto.password
         user_id = int(dto.user_id) if dto.user_id is not None else 0
         custom_stop = dto.custom_stop
         telegram_id = dto.telegram_id
@@ -124,27 +119,20 @@ async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: Ba
                 increment = enter_symbol_amount_list[-1] - enter_symbol_amount_list[-2]
             else:
                 increment = 0
-            
             for i in range(diff):
                 last_value += increment
-                enter_symbol_amount_list.append(max(last_value,0))
+                enter_symbol_amount_list.append(max(last_value, 0))
         elif len(enter_symbol_amount_list) > grid_num:
             enter_symbol_amount_list = enter_symbol_amount_list[:grid_num]
-        
-        initial_capital = enter_symbol_amount_list
-        initial_capital_json = json.dumps(initial_capital)
 
         print(f'{user_id} : [START FEATURE]')
         print(dto)
-
-
-        
 
         job_id = await start_grid_main_in_process(
             exchange_name, enter_strategy, enter_symbol_count, enter_symbol_amount_list,
             grid_num, leverage, stop_loss, user_id, custom_stop, telegram_id, force_restart
         )
-        print('🍏🔹😇👆',job_id)
+        print('🍏🔹😇👆', job_id)
 
 
     finally:
@@ -164,16 +152,15 @@ async def restart_running_bots(app: FastAPI) -> None:
             request_body_str = await get_request_body(redis, exchange_id, user_id)
             if not request_body_str:
                 request_body_str = await redis.keys(f"{exchange_id}:request_body:{user_id}:*")
-                    #if request_body_str:
-                    #    print(f"No port info found for user {user_id}, will restart on port 8000")
-                    #    current_port = 8000
+                # if request_body_str:
+                #     print(f"No port info found for user {user_id}, will restart on port 8000")
+                #     current_port = 8000
             if request_body_str:
                 await asyncio.sleep(6)
                 try:
                     request_dict = json.loads(request_body_str)
                     dto = StartFeatureDto(**request_dict)
                     print(f"Restarting bot for user {user_id}")
-                    
                     # 가짜 Request 객체 생성
                     fake_scope = {
                         "type": "http",
@@ -183,16 +170,13 @@ async def restart_running_bots(app: FastAPI) -> None:
                         "headers": []
                     }
                     fake_request = Request(scope=fake_scope)
-                    
                     # 가짜 Request 객체에 json 메서드 추가
                     async def fake_json():
                         return dto.model_dump()
                     fake_request.json = fake_json  # type: ignore[method-assign]
-                    
                     background_tasks = BackgroundTasks()
                     await update_user_data(exchange_id, user_id)
                     await start_bot(dto, fake_request, background_tasks, force_restart=True)
-                    
                     # 필요한 경우 background_tasks를 실행
                     await background_tasks()
                 except Exception as e:
@@ -202,6 +186,7 @@ async def restart_running_bots(app: FastAPI) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan with new infrastructure integration"""
     port = None
+    background_tasks: list[asyncio.Task[Any]] = []
     try:
         # Initialize new infrastructure
         logger.info(
@@ -223,7 +208,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         port = get_app_port(app)
         app.state.port = port
         parent_pid = os.getppid()
-        asyncio.create_task(check_parent_process(parent_pid))
+        parent_watch_task = asyncio.create_task(check_parent_process(parent_pid))
+        background_tasks.append(parent_watch_task)
         await asyncio.sleep(2)
 
         redis = await get_redis_connection()
@@ -240,15 +226,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
 
         cleanup_task = asyncio.create_task(start_cleanup_task())
+        background_tasks.append(cleanup_task)
 
         logger.info("GRID application startup complete", extra={"port": port})
 
-    except Exception as e:
+    except Exception:
         logger.error(
             "Error initializing GRID application",
             exc_info=True,
             extra={"port": port, "parent_pid": os.getppid()}
         )
+        for task in background_tasks:
+            task.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
         raise
 
     try:
@@ -268,10 +259,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
             logger.info("GRID application shutdown complete")
 
-        except Exception as e:
+        except Exception:
             logger.error("Error during shutdown", exc_info=True)
         finally:
             redis_connection.close_connection()  # type: ignore[attr-defined]
+            for task in background_tasks:
+                task.cancel()
+            if background_tasks:
+                await asyncio.gather(*background_tasks, return_exceptions=True)
 
 
 async def save_running_symbols(app: FastAPI) -> None:
@@ -415,7 +410,6 @@ app.include_router(router=feature_route.router)
 app.include_router(router=telegram_route.router)
 
 # Add Redis pool monitoring endpoint
-from shared.api.health import router as health_router
 app.include_router(health_router, tags=["health", "utils"])
 
 

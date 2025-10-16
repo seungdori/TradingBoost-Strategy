@@ -7,7 +7,7 @@ uvicorn[standard]==0.25.0
 python-multipart==0.0.6
 
 # Async & Concurrency
-aiohttp==3.9.1
+aiohttp==3.12.15
 celery==5.3.4
 redis==5.0.1
 APScheduler==3.11.0
@@ -19,7 +19,7 @@ asyncpg==0.29.0  # PostgreSQL async driver
 
 
 # Trading & Exchange
-ccxt==4.2.7
+ccxt==4.5.11
 
 # Data Processing
 pandas==2.1.4

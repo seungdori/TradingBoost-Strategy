@@ -89,9 +89,15 @@ async def register_command(message: types.Message, state: FSMContext):
         print("okx_uid", okx_uid)
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
-    keys = get_redis_keys(user_id)
-    
-    api_keys = await redis.hgetall(keys['api_keys'])
+
+    # OKX UID가 있으면 사용, 없으면 체크하지 않음 (신규 등록)
+    if okx_uid:
+        okx_uid = okx_uid.decode('utf-8') if isinstance(okx_uid, bytes) else okx_uid
+        keys = get_redis_keys(okx_uid)
+        api_keys = await redis.hgetall(keys['api_keys'])
+    else:
+        api_keys = None
+
     if api_keys:
         await message.reply(
             "⚠️ 이미 등록된 사용자입니다.\n"
@@ -228,36 +234,45 @@ async def process_passphrase(message: types.Message, state: FSMContext):
         keys = get_redis_keys(okx_uid)
 
         # Redis에 API 키 정보 저장 (OKX UID 사용)
-        await redis.hmset(keys['api_keys'], {
+        logger.info(f"🔑 Saving API keys to Redis: {keys['api_keys']}")
+        api_data = {
             'api_key': user_data['api_key'],
             'api_secret': user_data['api_secret'],
             'passphrase': user_data['passphrase'],
             'uid': str(uid),
             'last_update_time': str(int(time.time())),
             'last_update_time_kr': str(datetime.now(pytz.timezone('Asia/Seoul')).strftime('%Y-%m-%d %H:%M:%S')),
-        })
+        }
+        await redis.hset(keys['api_keys'], mapping=api_data)
+
+        # 저장 확인
+        saved_keys = await redis.hgetall(keys['api_keys'])
+        if saved_keys:
+            logger.info(f"✅ API keys successfully saved to Redis: {list(saved_keys.keys())}")
+        else:
+            logger.error(f"❌ Failed to save API keys to Redis: {keys['api_keys']}")
         
         is_update = user_data.get('is_update', False)
 
         if not is_update:  # 새 사용자 등록인 경우
             # DEFAULT_TRADING_SETTINGS에서 기본 설정 가져와서 Redis에 저장 (OKX UID 사용)
-            await redis.hmset(
+            await redis.hset(
                 f"user:{okx_uid}:preferences",
-                {k: str(v) for k, v in DEFAULT_TRADING_SETTINGS.items()}
+                mapping={k: str(v) for k, v in DEFAULT_TRADING_SETTINGS.items()}
             )
             await redis.set(
                 f"user:{okx_uid}:settings",
                 json.dumps(DEFAULT_PARAMS_SETTINGS)
             )
-            await redis.hmset(
+            await redis.hset(
                 f"user:{okx_uid}:dual_side",
-                {k: str(v) for k, v in DEFAULT_DUAL_SIDE_ENTRY_SETTINGS.items()}
+                mapping={k: str(v) for k, v in DEFAULT_DUAL_SIDE_ENTRY_SETTINGS.items()}
             )
             # 사용자 상태 초기화
             await redis.set(keys['status'], "stopped")
 
             # 트레이딩 통계 초기화
-            await redis.hmset(keys['stats'], {
+            await redis.hset(keys['stats'], mapping={
                 'total_trades': '0',
                 'entry_trade': '0',
                 'successful_trades': '0',

@@ -136,10 +136,13 @@ async def handle_no_position(
         await init_user_position_data(user_id, symbol, "short")
 
         timeframe_str = get_timeframe(timeframe)
-        print(f"[{user_id}][{timeframe_str}] 포지션 없는 경우의 디버깅 : {current_rsi}, rsi signals : {rsi_signals},current state : {current_state}")
+        print(f"[{user_id}][{timeframe_str}] 포지션 없는 경우의 디버깅 : {current_rsi}, rsi signals : {rsi_signals},current state : {current_state}", flush=True)
+        logger.info(f"[{user_id}] ===== 진입 로직 시작 =====")
+        print(f"[{user_id}] ===== 진입 로직 시작 =====", flush=True)
 
         # Check entry failure limit
         exceeded, fail_count = await check_entry_failure_limit(user_id)
+        print(f"[{user_id}] fail_count check 완료: {fail_count}, exceeded: {exceeded}", flush=True)
 
         # Clear main position direction if exists
         main_position_direction_key = MAIN_POSITION_DIRECTION_KEY.format(
@@ -192,13 +195,16 @@ async def handle_no_position(
         # ============================================================================
         # Short Entry Logic
         # ============================================================================
+        print(f"[{user_id}] 숏 진입 체크 시작 - direction: {settings['direction']}", flush=True)
         if settings['direction'] in [DIRECTION_LONG_SHORT, DIRECTION_SHORT]:
+            print(f"[{user_id}] 숏 direction 조건 통과", flush=True)
             # Check if position is locked
             is_locked, locked_direction, remaining = await check_any_direction_locked(
                 user_id=user_id,
                 symbol=symbol,
                 timeframe=timeframe
             )
+            print(f"[{user_id}] 잠금 체크 완료 - is_locked: {is_locked}", flush=True)
 
             if is_locked:
                 logger.info(
@@ -209,8 +215,10 @@ async def handle_no_position(
 
             # Check trend condition for short entry
             should_enter, reason = await should_enter_with_trend(settings, current_state, "short")
+            print(f"[{user_id}] 숏 진입 조건 - is_overbought: {rsi_signals['is_overbought']}, should_enter: {should_enter}, reason: {reason}, current_state: {current_state}", flush=True)
 
             if rsi_signals['is_overbought'] and should_enter:
+                print(f"[{user_id}] 숏 진입 시도!", flush=True)
                 entry_success = await _execute_short_entry(
                     user_id=user_id,
                     symbol=symbol,
@@ -251,10 +259,15 @@ async def handle_no_position(
             await redis.delete(entry_fail_count_key)
 
     except Exception as e:
+        import traceback
         error_msg = map_exchange_error(e)
         error_logger.error(f"[{user_id}]:포지션 진입 실패", exc_info=True)
+        print(f"[{user_id}] ❌❌❌ EXCEPTION CAUGHT in handle_no_position: {e}", flush=True)
+        print(f"[{user_id}] Exception type: {type(e)}", flush=True)
+        print(f"[{user_id}] Traceback:", flush=True)
+        traceback.print_exc()
         await send_telegram_message(
-            f"⚠️ 포지션 진입 오류:\n{error_msg}",
+            f"⚠️ 포지션 진입 오류:\n{error_msg}\n\nException: {e}",
             user_id,
             debug=True
         )

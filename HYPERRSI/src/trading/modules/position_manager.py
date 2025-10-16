@@ -259,13 +259,16 @@ class PositionManager:
             # position_qty가 0 이하라면 오류 띄움
             if position_qty <= 0:
                 raise ValueError(f"포지션 수량이 0 이하입니다. position_qty : {position_qty}, contracts_amount : {contracts_amount}")
-            #최소 주문 수량 조회 및 반올림
+            #최소 주문 수량 조회
             minimum_qty = await get_minimum_qty(symbol)
-            perpetual_instruments = await get_perpetual_instruments()
-            if perpetual_instruments is None:
-                raise ValueError("Failed to get perpetual instruments")
-            lot_sizes = get_lot_sizes(perpetual_instruments)
-            position_qty = float(await round_to_qty(symbol, position_qty, lot_sizes))
+            print(f" ")
+            print(position_qty)
+            # position_qty는 이미 contract_size_to_qty()를 통해 수량(qty)으로 변환되었으므로
+            # round_to_qty를 호출하면 안 됨 (round_to_qty는 qty -> contracts로 변환하는 함수)
+            # 그냥 소수점만 반올림하면 됨
+            position_qty = round(position_qty, 8)
+            print(f" ")
+            print(position_qty)
             #최소 주문 수량보다 작으면 오류 띄움
             if position_qty < minimum_qty:
                 raise ValueError(f"포지션 수량이 최소 주문 수량보다 작습니다. position_qty : {position_qty}, minimum_qty : {minimum_qty}")
@@ -273,17 +276,21 @@ class PositionManager:
             leverage_body = {
                 "instId": symbol,
                 "lever": str(int(leverage)),
-                "mgnMode": "isolated"
+                "mgnMode": "isolated",
+                "posSide": direction  # OKX requires posSide for isolated margin
             }
             try:
                 await self.trading_service.client.set_leverage(
                     leverage=int(leverage),
                     symbol=symbol,
-                    params={'mgnMode': 'isolated'}
+                    params={
+                        'mgnMode': 'isolated',
+                        'posSide': direction  # 'long' or 'short'
+                    }
                 )
-                logger.info(f"레버리지 설정 성공: user={user_id}, symbol={symbol}, leverage={leverage}")
+                logger.info(f"레버리지 설정 성공: user={user_id}, symbol={symbol}, leverage={leverage}, direction={direction}")
             except Exception as e:
-                logger.error(f"레버리지 설정 실패: user={user_id}, symbol={symbol}, leverage={leverage}, error={str(e)}")
+                logger.error(f"레버리지 설정 실패: user={user_id}, symbol={symbol}, leverage={leverage}, direction={direction}, error={str(e)}")
                 raise ValueError(f"레버리지 설정 실패. error={str(e)}")
 
             #=============== 주문 생성 로직 =================
@@ -302,11 +309,8 @@ class PositionManager:
                 side=order_side,  # "buy" or "sell"
                 size=position_qty,
                 order_type="market",
-                pos_side=direction,  # long or short
-                params=okx_params,
-                max_retry=3,
-                leverage=leverage,
-                is_DCA=is_DCA
+                direction=direction,  # long or short - correct parameter name
+                leverage=leverage
             )
             if order_state.status not in ["open", "closed"]:
                 raise ValueError(f"주문 생성 실패: {order_state.message}")
@@ -451,9 +455,7 @@ class PositionManager:
                 side=order_side,
                 size=close_qty,
                 order_type="market",
-                pos_side=side,
-                params=okx_params,
-                max_retry=max_retry,
+                direction=side  # long or short - correct parameter name
             )
 
             if order_state.status not in ["open", "closed"]:
