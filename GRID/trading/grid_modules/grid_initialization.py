@@ -6,6 +6,7 @@
 - initialize_symbol_data: 심볼 데이터 초기화
 """
 
+from shared.database.redis_patterns import redis_context, RedisTTL
 import json
 import logging
 import traceback
@@ -60,56 +61,56 @@ async def initialize_trading_session(
     """
     try:
         # Redis 연결
-        redis = await get_redis_connection()
-        user_key = f'{exchange_name}:user:{user_id}'
-        symbol_key = f'{user_key}:symbol:{symbol}'
+        async with redis_context() as redis:
+            user_key = f'{exchange_name}:user:{user_id}'
+            symbol_key = f'{user_key}:symbol:{symbol}'
 
-        # 사용자 및 심볼 데이터 로드
-        user_data = await redis.hgetall(user_key)
-        symbol_data = await redis.hgetall(symbol_key)
+            # 사용자 및 심볼 데이터 로드
+            user_data = await redis.hgetall(user_key)
+            symbol_data = await redis.hgetall(symbol_key)
 
-        # 기본 설정값 추출
-        numbers_to_entry = int(user_data.get(b'numbers_to_entry', b'5').decode())
-        running_symbols = set(json.loads(user_data.get('running_symbols', '[]')))
-        completed_symbols = set(json.loads(user_data.get('completed_trading_symbols', '[]')))
+            # 기본 설정값 추출
+            numbers_to_entry = int(user_data.get(b'numbers_to_entry', b'5').decode())
+            running_symbols = set(json.loads(user_data.get('running_symbols', '[]')))
+            completed_symbols = set(json.loads(user_data.get('completed_trading_symbols', '[]')))
 
-        # 심볼 초기화
-        await ensure_symbol_initialized(exchange_name, user_id, symbol, grid_num)
-        ensure_symbol_initialized_old_struc(user_id, symbol, grid_num)
-        await initialize_active_grid(redis, exchange_name, int(user_id), symbol)
+            # 심볼 초기화
+            await ensure_symbol_initialized(exchange_name, user_id, symbol, grid_num)
+            ensure_symbol_initialized_old_struc(user_id, symbol, grid_num)
+            await initialize_active_grid(redis, exchange_name, int(user_id), symbol)
 
-        # running_symbols 업데이트
-        if symbol not in running_symbols:
-            running_symbols.add(symbol)
-            print(f"Debug: Symbol {symbol} added to running_symbols")
+            # running_symbols 업데이트
+            if symbol not in running_symbols:
+                running_symbols.add(symbol)
+                print(f"Debug: Symbol {symbol} added to running_symbols")
 
-        await redis.hset(user_key, 'running_symbols', json.dumps(list(running_symbols)))
+            await redis.hset(user_key, 'running_symbols', json.dumps(list(running_symbols)))
 
-        # 로그 메시지
-        trading_message = f"== Grid Trading Strategy Start == \n 심볼 : {symbol} 거래소 : {exchange_name}"
-        print(trading_message)
-        await add_user_log(user_id, trading_message)
+            # 로그 메시지
+            trading_message = f"== Grid Trading Strategy Start == \n 심볼 : {symbol} 거래소 : {exchange_name}"
+            print(trading_message)
+            await add_user_log(user_id, trading_message)
 
-        # 세션 데이터 반환
-        session_data = {
-            'redis': redis,
-            'user_key': user_key,
-            'symbol_key': symbol_key,
-            'user_data': user_data,
-            'symbol_data': symbol_data,
-            'numbers_to_entry': numbers_to_entry,
-            'running_symbols': running_symbols,
-            'completed_symbols': completed_symbols,
-            'order_buffer': float(numbers_to_entry / 25),
-            'max_notional_value': initial_investment[1] * 20,
-        }
+            # 세션 데이터 반환
+            session_data = {
+                'redis': redis,
+                'user_key': user_key,
+                'symbol_key': symbol_key,
+                'user_data': user_data,
+                'symbol_data': symbol_data,
+                'numbers_to_entry': numbers_to_entry,
+                'running_symbols': running_symbols,
+                'completed_symbols': completed_symbols,
+                'order_buffer': float(numbers_to_entry / 25),
+                'max_notional_value': initial_investment[1] * 20,
+            }
 
-        return session_data
+            return session_data
 
-    except Exception as e:
-        print(f"An error occurred in initialize_trading_session: {e}")
-        print(traceback.format_exc())
-        raise
+        except Exception as e:
+            print(f"An error occurred in initialize_trading_session: {e}")
+            print(traceback.format_exc())
+            raise
 
 
 async def get_exchange_instance(

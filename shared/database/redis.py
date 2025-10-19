@@ -377,15 +377,26 @@ class RedisConnectionPool:
 async def get_redis() -> AsyncRedis:
     """
     Get Redis client from connection pool (FastAPI dependency).
-    
-    Usage:
+
+    The returned client supports async context manager protocol for explicit cleanup:
+
+        # Pattern 1: FastAPI dependency injection (recommended for routes)
         @router.get("/cache")
         async def get_cache(redis: Redis = Depends(get_redis)):
             value = await redis.get("key")
             return {"value": value}
-    
+
+        # Pattern 2: Context manager (recommended for services)
+        async with await get_redis() as redis:
+            await redis.set("key", "value")
+
     Returns:
-        AsyncRedis: Redis client instance
+        AsyncRedis: Redis client instance with context manager support
+
+    Note:
+        The redis.asyncio.Redis client natively supports __aenter__ and __aexit__,
+        allowing it to be used as an async context manager. When used in a context
+        manager, the connection is properly cleaned up after use.
     """
     pool = RedisConnectionPool.get_pool()
     return AsyncRedis(connection_pool=pool)
@@ -419,4 +430,146 @@ async def get_redis_binary() -> AsyncRedis:
     """
     manager = RedisConnectionManager()
     return await manager.get_connection_async(decode_responses=False)
+
+
+def get_pool_metrics() -> dict[str, Any]:
+    """
+    Get current Redis connection pool metrics.
+
+    Returns:
+        dict: Pool configuration and metrics
+
+    Example:
+        {
+            "max_connections": 200,
+            "pool_class": "ConnectionPool",
+            "connection_kwargs": {
+                "db": 0,
+                "decode_responses": True,
+                "socket_keepalive": True,
+                ...
+            }
+        }
+    """
+    pool = RedisConnectionPool.get_pool()
+    return {
+        "max_connections": pool.max_connections,
+        "pool_class": pool.__class__.__name__,
+        "connection_kwargs": pool.connection_kwargs,
+    }
+
+
+class RedisCircuitBreaker:
+    """
+    Simple circuit breaker for Redis operations.
+
+    Prevents cascading failures by failing fast when Redis is unavailable.
+
+    States:
+        - CLOSED: Normal operation, requests pass through
+        - OPEN: Too many failures, requests fail immediately
+        - HALF_OPEN: Testing if Redis has recovered
+
+    Usage:
+        breaker = RedisCircuitBreaker()
+
+        async def my_redis_operation():
+            if breaker.is_open():
+                raise Exception("Circuit breaker open - Redis unavailable")
+
+            try:
+                result = await redis.get("key")
+                breaker.record_success()
+                return result
+            except RedisError:
+                breaker.record_failure()
+                raise
+    """
+
+    def __init__(
+        self,
+        failure_threshold: int = 5,
+        recovery_timeout: float = 60.0,
+        half_open_max_attempts: int = 3,
+    ):
+        """
+        Initialize circuit breaker.
+
+        Args:
+            failure_threshold: Number of failures before opening circuit
+            recovery_timeout: Seconds to wait before trying half-open state
+            half_open_max_attempts: Max attempts in half-open state before reopening
+        """
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.half_open_max_attempts = half_open_max_attempts
+
+        self.failure_count = 0
+        self.last_failure_time = 0.0
+        self.state = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
+        self.half_open_attempts = 0
+
+    def is_open(self) -> bool:
+        """Check if circuit breaker is open (blocking requests)"""
+        if self.state == "OPEN":
+            # Check if recovery timeout has passed
+            if time.time() - self.last_failure_time >= self.recovery_timeout:
+                self.state = "HALF_OPEN"
+                self.half_open_attempts = 0
+                logger.info("Circuit breaker entering HALF_OPEN state")
+                return False
+            return True
+        return False
+
+    def record_success(self):
+        """Record successful operation"""
+        if self.state == "HALF_OPEN":
+            self.half_open_attempts += 1
+            if self.half_open_attempts >= self.half_open_max_attempts:
+                self.state = "CLOSED"
+                self.failure_count = 0
+                logger.info("Circuit breaker CLOSED - Redis recovered")
+        elif self.state == "CLOSED":
+            # Reset failure count on success
+            self.failure_count = 0
+
+    def record_failure(self):
+        """Record failed operation"""
+        self.failure_count += 1
+        self.last_failure_time = time.time()
+
+        if self.state == "HALF_OPEN":
+            self.state = "OPEN"
+            logger.warning("Circuit breaker OPEN - Redis still unavailable")
+        elif self.failure_count >= self.failure_threshold:
+            self.state = "OPEN"
+            logger.error(
+                f"Circuit breaker OPEN - {self.failure_count} consecutive failures"
+            )
+
+    def get_state(self) -> dict[str, Any]:
+        """Get current circuit breaker state"""
+        return {
+            "state": self.state,
+            "failure_count": self.failure_count,
+            "last_failure_time": self.last_failure_time,
+            "is_open": self.is_open(),
+        }
+
+
+# Global circuit breaker instance (optional - can be enabled per strategy)
+_global_circuit_breaker: RedisCircuitBreaker | None = None
+
+
+def get_circuit_breaker() -> RedisCircuitBreaker:
+    """
+    Get global circuit breaker instance.
+
+    Returns:
+        RedisCircuitBreaker: Global circuit breaker
+    """
+    global _global_circuit_breaker
+    if _global_circuit_breaker is None:
+        _global_circuit_breaker = RedisCircuitBreaker()
+    return _global_circuit_breaker
 

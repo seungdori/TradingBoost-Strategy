@@ -261,22 +261,15 @@ async def summarize_trading_results(exchange_name: str, direction: str) -> list:
         거래 결과 요약 리스트
     """
     try:
-        import redis
-
         from GRID.data import get_cache, set_cache
-        from GRID.database.redis_database import RedisConnectionManager
-        from shared.config import settings
+        from shared.database.redis import get_redis
 
-        redis_client = redis.Redis(
-            host=settings.REDIS_HOST,
-            port=settings.REDIS_PORT,
-            db=settings.REDIS_DB,
-            password=settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None
-        )
+        # Use shared async connection pool
+        redis_client = await get_redis()
 
         # Redis에서 해당 거래소와 방향의 모든 심볼 키 가져오기
         pattern = f"{exchange_name}:*:{direction}"
-        all_keys = redis_client.keys(pattern)
+        all_keys = await redis_client.keys(pattern)
 
         results = []
 

@@ -1,3 +1,4 @@
+from shared.database.redis_patterns import redis_context, RedisTTL
 import asyncio
 import atexit
 import json
@@ -54,21 +55,25 @@ REDIS_PASSWORD = settings.REDIS_PASSWORD
 # CELERY WORKERS
 #================================================================================================
 
-def setup_redis():
+async def setup_redis():
+    """
+    Initialize Redis connection using shared async pool.
+    Note: This function is now async and returns the Redis client.
+    """
     global redis_conn
 
     try:
-        if REDIS_PASSWORD:
-            redis_conn = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=settings.REDIS_DB, password=REDIS_PASSWORD)
-        else:
-            redis_conn = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=settings.REDIS_DB)
-        redis_conn.ping()
+        from shared.database.redis import get_redis
 
-        print("Successfully connected to Redis")
+        # Use shared async connection pool
+        redis_conn = await get_redis()
+        await redis_conn.ping()
+
+        print("Successfully connected to Redis using shared pool")
         # 애플리케이션 종료 시 cleanup 함수 호출 등록
         atexit.register(cleanup)
 
-    except redis.RedisError as e:
+    except Exception as e:
         print(f"Failed to connect to Redis: {e}")
         raise
 
@@ -85,8 +90,8 @@ async def async_cleanup():
     except Exception as e:
         print(f"Error during async cleanup: {e}")
     finally:
-        if redis_conn:
-            redis_conn.close()
+        # Note: Pooled connections are managed automatically, no need to close
+        print("Cleanup completed (pooled Redis connection managed automatically)")
 
 
 #================================================================================================
@@ -245,29 +250,26 @@ async def get_running_users(exchange_name, redis=None):
     should_close = False
     try:
         if redis is None:
-            redis = await get_redis_connection()
-            should_close = True
+            async with redis_context() as redis:
+                should_close = True
         
-        user_pattern = f'{exchange_name}:user:*'
-        user_keys = await redis.keys(user_pattern)
-        running_users = []
-        for user_key in user_keys:
-            user_key = user_key.decode('utf-8') if isinstance(user_key, bytes) else user_key
-            user_id = user_key.split(':')[-1]
-            is_running = await redis.hget(user_key, 'is_running')
-            is_running = is_running.decode('utf-8') if isinstance(is_running, bytes) else is_running
-            if is_running == '1':
-                running_users.append(user_id)
-        return running_users
-    except Exception as e:
-        print(f"Error in get_running_users: {e}")
-        print(traceback.format_exc())
-        return []
-    finally:
-        if should_close and redis:
-            await redis.close()
-
-
+            user_pattern = f'{exchange_name}:user:*'
+            user_keys = await redis.keys(user_pattern)
+            running_users = []
+            for user_key in user_keys:
+                user_key = user_key.decode('utf-8') if isinstance(user_key, bytes) else user_key
+                user_id = user_key.split(':')[-1]
+                is_running = await redis.hget(user_key, 'is_running')
+                is_running = is_running.decode('utf-8') if isinstance(is_running, bytes) else is_running
+                if is_running == '1':
+                    running_users.append(user_id)
+            return running_users
+        except Exception as e:
+            print(f"Error in get_running_users: {e}")
+            print(traceback.format_exc())
+            return []
+        finally:
+            if should_close and redis:
 async def cancel_job(job_id):
     try:
         # Celery 작업 취소

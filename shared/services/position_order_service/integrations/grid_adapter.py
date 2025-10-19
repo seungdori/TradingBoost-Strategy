@@ -2,24 +2,41 @@
 
 Integrates GRID strategy logic with the microservice.
 Preserves GRID-specific functionality including grid level management.
+
+Uses dynamic imports to avoid circular dependencies.
 """
 
 import asyncio
+import importlib
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
 import ccxt.async_support as ccxt
 from redis.asyncio import Redis
 
-from GRID.database.redis_database import (
-    get_active_grid,
-    initialize_active_grid,
-    update_active_grid,
-    update_take_profit_orders_info,
-)
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _get_grid_redis_database():
+    """Dynamically import GRID redis_database to avoid circular dependency"""
+    try:
+        module = importlib.import_module("GRID.database.redis_database")
+        return module
+    except ImportError as e:
+        logger.error(f"Failed to import GRID redis_database: {e}")
+        return None
+
+
+def _get_grid_strategy():
+    """Dynamically import GRID strategy to avoid circular dependency"""
+    try:
+        module = importlib.import_module("GRID.strategies.strategy")
+        return module
+    except ImportError as e:
+        logger.error(f"Failed to import GRID strategy: {e}")
+        return None
 
 
 class GRIDAdapter:
@@ -65,7 +82,14 @@ class GRIDAdapter:
             True if successful
         """
         try:
-            await initialize_active_grid(
+            # Dynamically import to avoid circular dependencies
+            redis_db = _get_grid_redis_database()
+
+            if not redis_db:
+                logger.error("Failed to import GRID redis_database")
+                return False
+
+            await redis_db.initialize_active_grid(
                 user_id=user_id,
                 exchange=exchange,
                 symbol=symbol,
@@ -115,7 +139,14 @@ class GRIDAdapter:
             Grid position data or None
         """
         try:
-            grid_data = await get_active_grid(
+            # Dynamically import to avoid circular dependencies
+            redis_db = _get_grid_redis_database()
+
+            if not redis_db:
+                logger.error("Failed to import GRID redis_database")
+                return None
+
+            grid_data = await redis_db.get_active_grid(
                 user_id=user_id,
                 exchange=exchange,
                 symbol=symbol,
@@ -154,13 +185,20 @@ class GRIDAdapter:
             True if successful
         """
         try:
+            # Dynamically import to avoid circular dependencies
+            redis_db = _get_grid_redis_database()
+
+            if not redis_db:
+                logger.error("Failed to import GRID redis_database")
+                return False
+
             # Extract update fields
             price = updates.get('price')
             qty = updates.get('qty')
             order_id = updates.get('order_id')
             direction = updates.get('direction')
 
-            await update_active_grid(
+            await redis_db.update_active_grid(
                 user_id=user_id,
                 exchange=exchange,
                 symbol=symbol,
@@ -227,11 +265,15 @@ class GRIDAdapter:
                 logger.warning(f"Grid position not found: level {level}")
                 return False
 
-            # Import GRID's close_position function
-            from GRID.strategies.strategy import close_position
+            # Dynamically import GRID's close_position function
+            grid_strategy = _get_grid_strategy()
+
+            if not grid_strategy:
+                logger.error("Failed to import GRID strategy")
+                return False
 
             # Execute close order (uses exchange-specific logic)
-            order = await close_position(
+            order = await grid_strategy.close_position(
                 symbol=symbol,
                 exchange=exchange,
                 user_id=user_id,

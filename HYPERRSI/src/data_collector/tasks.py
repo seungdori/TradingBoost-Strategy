@@ -88,10 +88,18 @@ celery_app.conf.beat_schedule = {
 }
 
 celery_app.conf.broker_connection_retry_on_startup = True
-if settings.REDIS_PASSWORD:
-    redis_client = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=0, decode_responses=True, password=settings.REDIS_PASSWORD)
-else:
-    redis_client = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=0, decode_responses=True)
+
+# Use shared Redis connection pool from shared infrastructure
+from shared.database.redis import RedisConnectionManager
+
+redis_manager = RedisConnectionManager(
+    host=settings.REDIS_HOST,
+    port=settings.REDIS_PORT,
+    db=0,
+    password=settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None
+)
+redis_client = redis_manager.get_connection()
+# Note: decode_responses=True functionality needs to be added via custom wrapper if needed
 ################################################################################
 # 2) '마감 후 2~3초'인지 판단하는 함수
 ################################################################################

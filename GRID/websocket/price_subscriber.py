@@ -1,3 +1,4 @@
+from shared.database.redis_patterns import redis_context, RedisTTL
 import asyncio
 import json
 import logging
@@ -28,16 +29,16 @@ class PriceSubscriber:
         """Initialize Redis connection using shared connection pool"""
         while self.is_running:
             try:
-                redis = await get_redis_connection()
-                self.redis_pool = redis
-                self.pubsub = redis.pubsub()
-                await self.pubsub.subscribe('price_update')
-                logging.info("Successfully connected to Redis and subscribed to price updates.")
-                return True
-            except Exception as e:
-                logging.error(f"Failed to connect to Redis: {e}. Retrying in 5 seconds...")
-                await asyncio.sleep(5)
-        return False
+                async with redis_context() as redis:
+                    self.redis_pool = redis
+                    self.pubsub = redis.pubsub()
+                    await self.pubsub.subscribe('price_update')
+                    logging.info("Successfully connected to Redis and subscribed to price updates.")
+                    return True
+                except Exception as e:
+                    logging.error(f"Failed to connect to Redis: {e}. Retrying in 5 seconds...")
+                    await asyncio.sleep(5)
+            return False
 
     async def listen_for_updates(self):
         while self.is_running:

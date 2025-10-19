@@ -53,11 +53,17 @@ def convert_symbol_format(symbol: str, to_okx_ws: bool = True) -> str:
 
 class OKXWebSocket:
     def __init__(self):
-        self.ws_url = "wss://ws.okx.com:8443/ws/v5/business" #<-- public이 아니라, business로 해야됨. 공식문서 기준. 
-        if settings.REDIS_PASSWORD:
-            self.redis_client = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=0, decode_responses=True, password=settings.REDIS_PASSWORD)
-        else:
-            self.redis_client = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=0, decode_responses=True)
+        self.ws_url = "wss://ws.okx.com:8443/ws/v5/business" #<-- public이 아니라, business로 해야됨. 공식문서 기준.
+        # Use shared Redis connection pool from shared infrastructure
+        from shared.database.redis import RedisConnectionManager
+
+        redis_manager = RedisConnectionManager(
+            host=settings.REDIS_HOST,
+            port=settings.REDIS_PORT,
+            db=0,
+            password=settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None
+        )
+        self.redis_client = redis_manager.get_connection()
         self.ws = None
         self.connected = False
         self.timeframes = {

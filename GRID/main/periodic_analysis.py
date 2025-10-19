@@ -66,9 +66,8 @@ from shared.indicators import (
 #================================================================
 redis_manager = RedisConnectionManager()
 
-# Redis 연결 설정
-redis_client = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=settings.REDIS_DB,
-                           password=settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None)
+# Note: Redis client is no longer created globally
+# Use get_redis() from shared.database.redis in async functions
 
 
 #================================================================

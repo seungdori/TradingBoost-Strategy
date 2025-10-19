@@ -3,9 +3,10 @@
 Redis Service - Migrated to New Infrastructure
 
 Manages user settings, API keys, and caching with structured logging
-and exception handling.
+and exception handling. Includes automatic stale cache cleanup.
 """
 
+import asyncio
 import json
 import os
 import time
@@ -37,6 +38,8 @@ class RedisService:
     _redis = None
     _lock = Lock()
     _pool = None
+    _cleanup_task: Optional[asyncio.Task] = None
+    _cleanup_interval = 60  # Clean stale cache every 60 seconds
         # 모니터링 메트릭
     cache_hits = Counter('redis_hits_total', 'Redis hit count')
     cache_misses = Counter('redis_misses_total', 'Redis miss count')
@@ -78,10 +81,54 @@ class RedisService:
             self._redis = None  # 지연 초기화 (async context에서만 접근)
             self._local_cache = {}  # 메모리 캐시 추가
             self._cache_ttl = {}
+
+            # Start cache cleanup task (will be initialized when event loop is available)
+            self._cleanup_task = None
+
             logger.info("RedisService initialized successfully (using shared pool)")
         except Exception as e:
             logger.error(f"Redis initialization failed: {e}")
             raise
+
+    async def start_cleanup_task(self) -> None:
+        """
+        Start background task for periodic cache cleanup.
+
+        This should be called from async context (e.g., FastAPI lifespan).
+        """
+        if self._cleanup_task is None or self._cleanup_task.done():
+            self._cleanup_task = asyncio.create_task(self._cleanup_stale_cache())
+            logger.info(f"Cache cleanup task started (interval: {self._cleanup_interval}s)")
+
+    async def _cleanup_stale_cache(self) -> None:
+        """
+        Background task that periodically removes stale cache entries.
+
+        Runs every _cleanup_interval seconds and removes entries
+        whose TTL has expired.
+        """
+        try:
+            while True:
+                await asyncio.sleep(self._cleanup_interval)
+
+                now = time.time()
+                expired_keys = [
+                    key for key, ttl in self._cache_ttl.items()
+                    if ttl < now
+                ]
+
+                for key in expired_keys:
+                    self._local_cache.pop(key, None)
+                    self._cache_ttl.pop(key, None)
+
+                if expired_keys:
+                    logger.debug(f"Cleaned {len(expired_keys)} stale cache entries")
+
+        except asyncio.CancelledError:
+            logger.info("Cache cleanup task cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Error in cache cleanup task: {e}", exc_info=True)
 
 
     async def _ensure_redis(self) -> Redis:
@@ -340,11 +387,34 @@ class RedisService:
                 raise
 
     async def cleanup(self) -> None:
-        """리소스 정리 - shared pool 사용으로 연결 종료는 shared에서 관리"""
-        self._redis = None
-        self._local_cache.clear()
-        self._cache_ttl.clear()
-        logger.info("RedisService cleanup completed")
+        """
+        Clean up Redis resources, local cache, and background tasks.
+
+        Properly closes Redis connection, cancels cleanup task, and clears cache.
+        """
+        try:
+            # Cancel cleanup task if running
+            if self._cleanup_task and not self._cleanup_task.done():
+                self._cleanup_task.cancel()
+                try:
+                    await self._cleanup_task
+                except asyncio.CancelledError:
+                    pass
+                logger.debug("Cache cleanup task cancelled")
+
+            # Close Redis connection if it exists
+            if self._redis is not None:
+                await self._redis.close()
+                logger.debug("Redis connection closed")
+                self._redis = None
+
+            # Clear local cache
+            self._local_cache.clear()
+            self._cache_ttl.clear()
+
+            logger.info("RedisService cleanup completed")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
 
 
 

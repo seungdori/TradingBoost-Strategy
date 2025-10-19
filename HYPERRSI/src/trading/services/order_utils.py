@@ -472,7 +472,26 @@ async def try_send_order(
         else:
             # 이미 계약 수량으로 전달된 경우. 이게 일반적인 상황.
             #print(f"DEBUG: 이미 계약 수량으로 전달된 경우: {size}")
-            contracts_amount = "{:.8f}".format(float(size))
+            raw_amount = float(size)
+
+            # OKX precision requirements - round to appropriate precision
+            # BTC requires 0.01 minimum precision (2 decimal places)
+            # Use Decimal for precise rounding
+            amount_decimal = Decimal(str(raw_amount))
+
+            # Round down to 2 decimal places for BTC (0.01 precision)
+            # This ensures we don't exceed available balance due to rounding up
+            rounded_amount = float(amount_decimal.quantize(Decimal('0.01'), rounding=ROUND_DOWN))
+
+            # Validate minimum amount (OKX BTC minimum is 0.01)
+            MIN_BTC_AMOUNT = 0.01
+            if rounded_amount < MIN_BTC_AMOUNT:
+                error_msg = f"주문 수량이 최소 요구량보다 작습니다 (요청: {rounded_amount:.2f}, 최소: {MIN_BTC_AMOUNT})"
+                logger.error(f"[{user_id}] {error_msg}")
+                await send_telegram_message(f"⚠️ {error_msg}", user_id, debug=True)
+                raise ValueError(error_msg)
+
+            contracts_amount = "{:.2f}".format(rounded_amount)
 
         # 포지션 모드 조회 (OKX는 기본적으로 hedge 모드 사용)
         position_mode: Dict[str, Any] = {'hedged': True, 'marginMode': 'cross'}

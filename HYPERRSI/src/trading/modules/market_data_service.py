@@ -239,7 +239,8 @@ class MarketDataService:
                 contracts_amount = (size_usdt * leverage) / (contract_size * current_price)
                 contracts_amount = max(min_size, safe_float(contracts_amount))
                 contracts_amount = round(contracts_amount / min_size) * min_size
-                contracts_amount = float("{:.8f}".format(contracts_amount))  # 소수점 8자리로 형식화
+                # Round to 2 decimal places for proper precision (BTC contracts)
+                contracts_amount = round(contracts_amount, 2)
 
             return {
                 "symbol": symbol,

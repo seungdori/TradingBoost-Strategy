@@ -20,7 +20,7 @@ from typing import Any
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 
-from shared.database.redis import RedisConnectionPool
+from shared.database.redis import RedisConnectionPool, get_pool_metrics, get_circuit_breaker
 from shared.database.session import DatabaseConfig
 from shared.logging import get_logger
 
@@ -279,3 +279,84 @@ def liveness_check() -> JSONResponse:
         status_code=status.HTTP_200_OK,
         content={"status": "alive"}
     )
+
+
+@router.get("/redis/pool", summary="Redis pool metrics")
+async def redis_pool_metrics() -> JSONResponse:
+    """
+    Get detailed Redis connection pool metrics.
+
+    Returns:
+        dict: Pool configuration and current metrics
+
+    Example Response:
+        {
+            "max_connections": 200,
+            "pool_class": "ConnectionPool",
+            "connection_kwargs": {
+                "db": 0,
+                "decode_responses": true,
+                "socket_keepalive": true,
+                "socket_connect_timeout": 5,
+                "retry_on_timeout": true,
+                "health_check_interval": 15
+            }
+        }
+    """
+    try:
+        metrics = get_pool_metrics()
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=metrics
+        )
+    except Exception as e:
+        logger.error(f"Error getting pool metrics: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "error": str(e),
+                "error_type": type(e).__name__
+            }
+        )
+
+
+@router.get("/redis/circuit-breaker", summary="Redis circuit breaker status")
+async def redis_circuit_breaker() -> JSONResponse:
+    """
+    Get Redis circuit breaker state.
+
+    The circuit breaker prevents cascading failures by failing fast
+    when Redis is unavailable.
+
+    Returns:
+        dict: Circuit breaker state
+
+    Example Response:
+        {
+            "state": "CLOSED",  # CLOSED, OPEN, or HALF_OPEN
+            "failure_count": 0,
+            "last_failure_time": 0.0,
+            "is_open": false
+        }
+
+    States:
+        - CLOSED: Normal operation, requests pass through
+        - OPEN: Too many failures, requests fail immediately
+        - HALF_OPEN: Testing if Redis has recovered
+    """
+    try:
+        breaker = get_circuit_breaker()
+        state = breaker.get_state()
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=state
+        )
+    except Exception as e:
+        logger.error(f"Error getting circuit breaker state: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "error": str(e),
+                "error_type": type(e).__name__
+            }
+        )

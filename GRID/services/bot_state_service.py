@@ -1,3 +1,4 @@
+from shared.database.redis_patterns import redis_context, RedisTTL
 import os
 from operator import is_
 from typing import List, Optional
@@ -48,10 +49,6 @@ async def get_bot_state(dto: BotStateKeyDto) -> Optional[BotStateDto]:
             is_running=is_running,
             error=None
         )
-    finally:
-        await redis.close()
-
-
 async def get_all_bot_state(app: FastAPI) -> List[BotStateDto]:
     running_user_ids = await redis_database.get_all_running_user_ids()
     bot_states = [BotStateDto(
@@ -79,9 +76,6 @@ async def set_bot_state(new_state: BotStateDto) -> BotStateDto:
     except RedisError as e:
         print(f"Error updating bot state in Redis: {e}")
         raise
-    finally:
-        await redis.close()
-
 ## services/bot_state_service.py 수정
 #async def init_bot_state(app: FastAPI, exchange_names):
 #    for exchange_name in exchange_names:

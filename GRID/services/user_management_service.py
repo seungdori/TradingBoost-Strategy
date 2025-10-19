@@ -248,11 +248,6 @@ async def ensure_user_keys_initialized(exchange_name, user_id, enter_symbol_amou
         return {k.decode() if isinstance(k, bytes) else k:
                 v.decode() if isinstance(v, bytes) else v
                 for k, v in user_data.items()}
-
-    finally:
-        await redis.close()
-
-
 # ==================== Symbol Initialization ====================
 
 def encode_value(value):
@@ -380,10 +375,6 @@ async def ensure_symbol_initialized(exchange_name, user_id, symbol, grid_num):
     except Exception as e:
         print(f"Unexpected error in ensure_symbol_initialized: {e}")
         print(traceback.format_exc())
-    finally:
-        await redis.close()
-
-
 # ==================== User Validation & Checks ====================
 
 def check_right_invitee(okx_api, okx_secret, okx_parra):
@@ -436,10 +427,6 @@ async def check_symbol_entry_info(exchange_name, user_id):
     except Exception as e:
         print(f"Unexpected error in check_symbol_entry_info: {e}")
         print(traceback.format_exc())
-    finally:
-        await redis.close()
-
-
 async def check_api_permissions(exchange_name, user_id):
     """
     Check API permissions for exchange.

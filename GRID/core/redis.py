@@ -6,6 +6,7 @@ GRID 프로젝트의 Redis 연결을 제공합니다.
 모든 연결은 shared 풀을 통해 관리되어 연결 고갈을 방지합니다.
 """
 
+from shared.database.redis_patterns import redis_context, RedisTTL
 from shared.database.redis import get_redis, RedisConnectionPool
 
 # shared 모듈 재사용

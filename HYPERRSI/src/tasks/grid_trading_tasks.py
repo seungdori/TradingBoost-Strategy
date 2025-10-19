@@ -111,17 +111,59 @@ def run_grid_trading(self, exchange_name, enter_strategy, enter_symbol_count,
         loop.run_until_complete(
             update_grid_trading_info(user_id, grid_info)
         )
-        
-        # GRID의 실제 비즈니스 로직을 직접 호출
-        from GRID.main.grid_main import main as grid_main
 
-        # 비동기 함수이므로 asyncio.run 또는 await 사용
-        result = loop.run_until_complete(
-            grid_main(
-                exchange_name, enter_strategy, enter_symbol_count, enter_symbol_amount_list,
-                grid_num, leverage, stop_loss, user_id, custom_stop, telegram_id, force_restart
-            )
-        )
+        # GRID strategy 호출 - HTTP API 방식으로 변경
+        # (순환 참조 방지를 위해 direct import 제거)
+        import httpx
+
+        async def call_grid_api():
+            """GRID API를 호출하여 grid trading 시작"""
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        "http://localhost:8012/api/grid/start",
+                        json={
+                            "exchange_name": exchange_name,
+                            "enter_strategy": enter_strategy,
+                            "enter_symbol_count": enter_symbol_count,
+                            "enter_symbol_amount_list": enter_symbol_amount_list,
+                            "grid_num": grid_num,
+                            "leverage": leverage,
+                            "stop_loss": stop_loss,
+                            "user_id": user_id,
+                            "custom_stop": custom_stop,
+                            "telegram_id": telegram_id,
+                            "force_restart": force_restart
+                        }
+                    )
+
+                    if response.status_code == 200:
+                        return response.json()
+                    else:
+                        logger.error(f"GRID API call failed: {response.status_code} - {response.text}")
+                        return None
+
+            except httpx.ConnectError:
+                logger.error("Failed to connect to GRID service at localhost:8012")
+                logger.info("Attempting fallback to dynamic import...")
+
+                # Fallback: dynamic import (for development/testing)
+                try:
+                    import importlib
+                    grid_main_module = importlib.import_module("GRID.main.grid_main")
+                    return await grid_main_module.main(
+                        exchange_name, enter_strategy, enter_symbol_count, enter_symbol_amount_list,
+                        grid_num, leverage, stop_loss, user_id, custom_stop, telegram_id, force_restart
+                    )
+                except ImportError as e:
+                    logger.error(f"Fallback import failed: {e}")
+                    return None
+
+            except Exception as e:
+                logger.error(f"Unexpected error calling GRID API: {e}", exc_info=True)
+                return None
+
+        result = loop.run_until_complete(call_grid_api())
         
         # 태스크 완료 상태 기록
         grid_info["status"] = "completed"

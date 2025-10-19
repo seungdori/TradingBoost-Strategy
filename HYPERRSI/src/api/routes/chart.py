@@ -17,11 +17,16 @@ router = APIRouter(tags=["chart"])
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "src" / "static"))
 
-# Redis 연결
-if settings.REDIS_PASSWORD:
-    redis_client = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=0, decode_responses=True, password=settings.REDIS_PASSWORD)
-else:
-    redis_client = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=0, decode_responses=True)
+# Redis 연결 - Use shared sync Redis connection pool
+from shared.database.redis import RedisConnectionManager
+
+redis_manager = RedisConnectionManager(
+    host=settings.REDIS_HOST,
+    port=settings.REDIS_PORT,
+    db=0,
+    password=settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None
+)
+redis_client = redis_manager.get_connection()
 
 # 메모리 캐시 구현
 _candle_cache: Dict[str, List[Dict[str, Any]]] = {}

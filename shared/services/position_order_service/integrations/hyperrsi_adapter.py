@@ -2,20 +2,51 @@
 
 Integrates HYPERRSI position/order management logic with the microservice.
 Preserves all existing HYPERRSI functionality while enabling real-time tracking.
+
+Uses dynamic imports to avoid circular dependencies.
 """
 
 import asyncio
+import importlib
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
 import ccxt.async_support as ccxt
 from redis.asyncio import Redis
 
-from HYPERRSI.src.trading.modules.order_manager import OrderManager as HYPERRSIOrderManager
-from HYPERRSI.src.trading.modules.position_manager import PositionManager as HYPERRSIPositionManager
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _get_hyperrsi_trading_service():
+    """Dynamically import HYPERRSI TradingService to avoid circular dependency"""
+    try:
+        module = importlib.import_module("HYPERRSI.src.trading.trading_service")
+        return module.TradingService
+    except ImportError as e:
+        logger.error(f"Failed to import HYPERRSI TradingService: {e}")
+        return None
+
+
+def _get_hyperrsi_order_manager():
+    """Dynamically import HYPERRSI OrderManager to avoid circular dependency"""
+    try:
+        module = importlib.import_module("HYPERRSI.src.trading.modules.order_manager")
+        return module.OrderManager
+    except ImportError as e:
+        logger.error(f"Failed to import HYPERRSI OrderManager: {e}")
+        return None
+
+
+def _get_hyperrsi_position_manager():
+    """Dynamically import HYPERRSI PositionManager to avoid circular dependency"""
+    try:
+        module = importlib.import_module("HYPERRSI.src.trading.modules.position_manager")
+        return module.PositionManager
+    except ImportError as e:
+        logger.error(f"Failed to import HYPERRSI PositionManager: {e}")
+        return None
 
 
 class HYPERRSIAdapter:
@@ -59,14 +90,19 @@ class HYPERRSIAdapter:
             True if successful
         """
         try:
-            # Create temporary HYPERRSI trading service instance
-            # (In production, this would be a singleton or injected dependency)
-            from HYPERRSI.src.trading.trading_service import TradingService
+            # Dynamically import to avoid circular dependencies
+            TradingService = _get_hyperrsi_trading_service()
+            OrderManager = _get_hyperrsi_order_manager()
 
+            if not TradingService or not OrderManager:
+                logger.error("Failed to import HYPERRSI modules")
+                return False
+
+            # Create temporary HYPERRSI trading service instance
             trading_service = TradingService(user_id=user_id)
 
             # Create OrderManager instance
-            order_manager = HYPERRSIOrderManager(trading_service)
+            order_manager = OrderManager(trading_service)
 
             # Call HYPERRSI's _cancel_order method
             await order_manager._cancel_order(
@@ -142,13 +178,19 @@ class HYPERRSIAdapter:
             Position object or None
         """
         try:
-            # Create temporary HYPERRSI trading service instance
-            from HYPERRSI.src.trading.trading_service import TradingService
+            # Dynamically import to avoid circular dependencies
+            TradingService = _get_hyperrsi_trading_service()
+            PositionManager = _get_hyperrsi_position_manager()
 
+            if not TradingService or not PositionManager:
+                logger.error("Failed to import HYPERRSI modules")
+                return None
+
+            # Create temporary HYPERRSI trading service instance
             trading_service = TradingService(user_id=user_id)
 
             # Create PositionManager instance
-            position_manager = HYPERRSIPositionManager(trading_service)
+            position_manager = PositionManager(trading_service)
 
             # Call HYPERRSI's open_position method (preserves all logic)
             position = await position_manager.open_position(
@@ -213,13 +255,19 @@ class HYPERRSIAdapter:
             True if successful
         """
         try:
-            # Create temporary HYPERRSI trading service instance
-            from HYPERRSI.src.trading.trading_service import TradingService
+            # Dynamically import to avoid circular dependencies
+            TradingService = _get_hyperrsi_trading_service()
+            PositionManager = _get_hyperrsi_position_manager()
 
+            if not TradingService or not PositionManager:
+                logger.error("Failed to import HYPERRSI modules")
+                return False
+
+            # Create temporary HYPERRSI trading service instance
             trading_service = TradingService(user_id=user_id)
 
             # Create PositionManager instance
-            position_manager = HYPERRSIPositionManager(trading_service)
+            position_manager = PositionManager(trading_service)
 
             # Call HYPERRSI's close_position method
             result = await position_manager.close_position(

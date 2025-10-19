@@ -26,44 +26,7 @@ from shared.models.exchange import (
     OrderType,
     PositionSide,
 )
-
-# HYPERRSI 전용 모델은 HYPERRSI에서 import
-try:
-    from HYPERRSI.src.api.exchange.models import Position
-except ImportError:
-    # Position이 필요한 경우를 위한 임시 정의
-    from decimal import Decimal
-    from typing import List, Optional
-
-    from pydantic import BaseModel, Field
-
-    class Position(BaseModel):  # type: ignore[no-redef]
-        symbol: str
-        side: PositionSide
-        size: Decimal
-        entry_price: Decimal
-        mark_price: Decimal
-        liquidation_price: Optional[Decimal] = None
-        unrealized_pnl: Decimal
-        leverage: float
-        margin_type: str = "cross"
-        maintenance_margin: Optional[Decimal] = None
-        margin_ratio: Optional[Decimal] = None
-        sl_price: Optional[Decimal] = None
-        sl_order_id: Optional[str] = None
-        sl_contracts_amount: Optional[Decimal] = None
-        tp_prices: List[Decimal] = []
-        tp_state: Optional[str] = None
-        get_tp1: Optional[Decimal] = None
-        get_tp2: Optional[Decimal] = None
-        get_tp3: Optional[Decimal] = None
-        sl_data: Optional[dict] = None
-        tp_data: Optional[dict] = None
-        tp_contracts_amounts: Optional[Decimal] = None
-        last_update_time: Optional[int] = None
-
-        class Config:
-            arbitrary_types_allowed = True
+from shared.models.trading import Position
 from shared.exchange.okx.constants import BASE_URL, ENDPOINTS, ERROR_CODES, V5_API
 from shared.exchange.okx.exceptions import OKXAPIException
 
@@ -285,8 +248,8 @@ class OKXClient(ExchangeBase):
         Returns:
             List[Dict]: K-line 데이터 목록
         """
-        # Timeframe 매핑 (필요시 shared/utils/timeframe.py로 이동 가능)
-        from HYPERRSI.src.trading.models import get_timeframe
+        # Timeframe normalization
+        from shared.utils.timeframe import get_timeframe
         tf_str = get_timeframe(timeframe) or "15m"
 
         endpoint = "/api/v5/market/candles"

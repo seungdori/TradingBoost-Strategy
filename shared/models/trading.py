@@ -129,9 +129,25 @@ class Position(BaseModel):
 
     # Risk management
     leverage: int = Field(default=1, ge=1, le=125, description="Position leverage")
+    margin_type: str = Field(default="cross", description="Margin type (cross/isolated)")
+    maintenance_margin: Optional[Decimal] = Field(None, description="Maintenance margin")
+    margin_ratio: Optional[Decimal] = Field(None, description="Margin ratio")
     liquidation_price: Optional[Decimal] = Field(None, description="Liquidation price")
     stop_loss_price: Optional[Decimal] = Field(None, description="Stop loss trigger price")
     take_profit_price: Optional[Decimal] = Field(None, description="Take profit trigger price")
+
+    # HYPERRSI-specific fields (optional for backward compatibility)
+    sl_order_id: Optional[str] = Field(None, description="Stop loss order ID")
+    sl_contracts_amount: Optional[Decimal] = Field(None, description="SL contracts amount")
+    tp_prices: List[Decimal] = Field(default_factory=list, description="Take profit price levels")
+    tp_state: Optional[str] = Field(None, description="TP state tracking")
+    get_tp1: Optional[Decimal] = Field(None, description="TP1 level")
+    get_tp2: Optional[Decimal] = Field(None, description="TP2 level")
+    get_tp3: Optional[Decimal] = Field(None, description="TP3 level")
+    sl_data: Optional[Dict[str, Any]] = Field(None, description="Stop loss additional data")
+    tp_data: Optional[Dict[str, Any]] = Field(None, description="Take profit additional data")
+    tp_contracts_amounts: Optional[Decimal] = Field(None, description="TP contracts amount")
+    last_update_time: Optional[int] = Field(None, description="Last update timestamp (epoch)")
 
     # P&L
     pnl_info: PnLInfo = Field(default_factory=PnLInfo, description="P&L breakdown")

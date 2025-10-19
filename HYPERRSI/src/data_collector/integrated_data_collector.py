@@ -33,22 +33,16 @@ REVERSE_TF_MAP = {v: k for k, v in TF_MAP.items()}
 
 
 
-# Redis 클라이언트 설정
-if settings.REDIS_PASSWORD:
-    redis_client = redis.Redis(
-        host=settings.REDIS_HOST, 
-        port=settings.REDIS_PORT, 
-        db=0, 
-        decode_responses=True, 
-        password=settings.REDIS_PASSWORD
-    )
-else:
-    redis_client = redis.Redis(
-        host=settings.REDIS_HOST, 
-        port=settings.REDIS_PORT, 
-        db=0, 
-        decode_responses=True
-    )
+# Redis 클라이언트 설정 - Use shared sync Redis connection pool
+from shared.database.redis import RedisConnectionManager
+
+redis_manager = RedisConnectionManager(
+    host=settings.REDIS_HOST,
+    port=settings.REDIS_PORT,
+    db=0,
+    password=settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None
+)
+redis_client = redis_manager.get_connection()
 
 # OKX API 설정
 OKX_API_KEY = OKX_API_KEY

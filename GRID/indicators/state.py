@@ -6,17 +6,11 @@ import logging
 from typing import Any, Dict, Optional
 
 import numpy as np
-import redis
 
 from shared.config import settings
 
-# Redis 연결 설정
-redis_client = redis.Redis(
-    host=settings.REDIS_HOST,
-    port=settings.REDIS_PORT,
-    db=settings.REDIS_DB,
-    password=settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None
-)
+# Note: Redis client is no longer created globally
+# Use get_redis() from shared.database.redis in async functions
 
 
 class IndicatorState:
@@ -129,8 +123,11 @@ async def get_indicator_state(exchange_name: str, symbol: str, direction: str = 
     IndicatorState
         복원된 지표 상태 객체
     """
+    from shared.database.redis import get_redis
+
+    redis_client = await get_redis()
     key = f"{exchange_name}:{symbol}:{direction}:indicator_state"
-    state_json = redis_client.get(key)
+    state_json = await redis_client.get(key)
 
     if state_json:
         try:
@@ -157,10 +154,13 @@ async def save_indicator_state(state: IndicatorState, exchange_name: str, symbol
     direction : str
         거래 방향 ('long', 'short', 'long-short')
     """
+    from shared.database.redis import get_redis
+
+    redis_client = await get_redis()
     key = f"{exchange_name}:{symbol}:{direction}:indicator_state"
     state_dict = state.to_dict()
     state_json = json.dumps(state_dict)
-    redis_client.set(key, state_json)
+    await redis_client.set(key, state_json)
 
     # TTL 설정 (3일)
-    redis_client.expire(key, 60 * 60 * 24 * 3)
+    await redis_client.expire(key, 60 * 60 * 24 * 3)

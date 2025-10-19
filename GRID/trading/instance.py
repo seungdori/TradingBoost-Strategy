@@ -1,3 +1,4 @@
+from shared.database.redis_patterns import redis_context, RedisTTL
 import json
 import os
 import traceback
@@ -86,79 +87,73 @@ async def get_exchange_instance(exchange_name: str, user_id: int | str) -> Any |
     #    await exchange_instance.close()
 
 async def get_upbit_instance(user_id: int | str) -> Any | None:
-    redis = await get_redis_connection()
-    try:
-        #print(f"Getting upbit instance for {user_id}")
-        if user_id == 999999999 or user_id == 'admin':
-            return ccxtpro.upbit({
-                'apiKey': ReadOnlyKeys.upbit_keys,
-                'secret': ReadOnlyKeys.upbit_secret,
-                'enableRateLimit': True
-            })
-        else:
-            user_key = f'upbit:user:{user_id}'
-            user_data = await redis.hgetall(user_key)
-            if user_data:
-                if 'api_key' in user_data and 'api_secret' in user_data:
-                    upbit_instance = ccxtpro.upbit({
-                        'apiKey': user_data['api_key'],
-                        'secret': user_data['api_secret'],
-                        'enableRateLimit': True
-                    })
-                    return upbit_instance
-                else:
-                    print(f"Missing API keys for user {user_id}")
+    async with redis_context() as redis:
+        try:
+            #print(f"Getting upbit instance for {user_id}")
+            if user_id == 999999999 or user_id == 'admin':
+                return ccxtpro.upbit({
+                    'apiKey': ReadOnlyKeys.upbit_keys,
+                    'secret': ReadOnlyKeys.upbit_secret,
+                    'enableRateLimit': True
+                })
             else:
-                print(f"No data found for user {user_id}")
+                user_key = f'upbit:user:{user_id}'
+                user_data = await redis.hgetall(user_key)
+                if user_data:
+                    if 'api_key' in user_data and 'api_secret' in user_data:
+                        upbit_instance = ccxtpro.upbit({
+                            'apiKey': user_data['api_key'],
+                            'secret': user_data['api_secret'],
+                            'enableRateLimit': True
+                        })
+                        return upbit_instance
+                    else:
+                        print(f"Missing API keys for user {user_id}")
+                else:
+                    print(f"No data found for user {user_id}")
+                return None
+        except Exception as e:
+            print(f"Error getting upbit instance for {user_id}: {e}")
+            print(traceback.format_exc())
             return None
-    except Exception as e:
-        print(f"Error getting upbit instance for {user_id}: {e}")
-        print(traceback.format_exc())
-        return None
-    finally:
-        await redis.close()
-        
 async def get_okx_instance(user_id: int | str) -> Any | None:
-    redis = await get_redis_connection()
-    try:
-        #print(f"Getting okx instance for {user_id}")
+    async with redis_context() as redis:
+        try:
+            #print(f"Getting okx instance for {user_id}")
 
-        if user_id == 999999999 or user_id == 'admin':
-            return ccxtpro.okx({
-                'apiKey': ReadOnlyKeys.okx_keys,
-                'secret': ReadOnlyKeys.okx_secret,
-                'password': ReadOnlyKeys.okx_password,
-                'enableRateLimit': True,
-                'options': {
-                    'defaultType': 'future'
-                }
-            })
-        else:
-            user_key = f'okx:user:{user_id}'
-            user_data = await redis.hgetall(user_key)
-            #print(f"User data: {user_data}")
-
-            if user_data and 'api_key' in user_data:
-                okx_instance = ccxtpro.okx({
-                    'apiKey': user_data['api_key'],
-                    'secret': user_data['api_secret'],
-                    'password': user_data['password'],
+            if user_id == 999999999 or user_id == 'admin':
+                return ccxtpro.okx({
+                    'apiKey': ReadOnlyKeys.okx_keys,
+                    'secret': ReadOnlyKeys.okx_secret,
+                    'password': ReadOnlyKeys.okx_password,
                     'enableRateLimit': True,
                     'options': {
                         'defaultType': 'future'
                     }
                 })
-                return okx_instance
             else:
-                print(f"No API keys found for user {user_id}")
-                return None
+                user_key = f'okx:user:{user_id}'
+                user_data = await redis.hgetall(user_key)
+                #print(f"User data: {user_data}")
 
-    except Exception as e:
-        print(f"Error getting okx instance for {user_id}: {e}")
-        return None
-    finally:
-        await redis.close()
+                if user_data and 'api_key' in user_data:
+                    okx_instance = ccxtpro.okx({
+                        'apiKey': user_data['api_key'],
+                        'secret': user_data['api_secret'],
+                        'password': user_data['password'],
+                        'enableRateLimit': True,
+                        'options': {
+                            'defaultType': 'future'
+                        }
+                    })
+                    return okx_instance
+                else:
+                    print(f"No API keys found for user {user_id}")
+                    return None
 
+        except Exception as e:
+            print(f"Error getting okx instance for {user_id}: {e}")
+            return None
 async def get_okx_spot_instance(user_id: int | str) -> Any:
     global user_keys
     user_id = int(user_id)

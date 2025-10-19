@@ -8,16 +8,17 @@ import os
 from celery import Celery
 
 from shared.config import settings
+from shared.config.constants import REDIS_DB_BACKEND, REDIS_DB_BROKER
 
-# Celery 애플리케이션 설정
+# Celery 애플리케이션 설정 - 전용 DB 사용 (DB 1: broker, DB 2: backend)
 app = Celery('grid_trading',
-             broker=f'redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}',
-             backend=f'redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}')
+             broker=f'redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{REDIS_DB_BROKER}',
+             backend=f'redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{REDIS_DB_BACKEND}')
 
 # Redis 패스워드가 설정되어 있는 경우 추가
 if settings.REDIS_PASSWORD:
-    app.conf.broker_url = f'redis://:{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}'
-    app.conf.result_backend = f'redis://:{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}'
+    app.conf.broker_url = f'redis://:{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:{settings.REDIS_PORT}/{REDIS_DB_BROKER}'
+    app.conf.result_backend = f'redis://:{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:{settings.REDIS_PORT}/{REDIS_DB_BACKEND}'
 
 # Celery 설정
 app.conf.update(

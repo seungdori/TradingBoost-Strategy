@@ -1,3 +1,4 @@
+from shared.database.redis_patterns import redis_context, RedisTTL
 import asyncio
 import concurrent.futures
 import glob
@@ -72,33 +73,30 @@ async def get_redis_connection():
 
 
 async def get_new_symbols(user_id, exchange_name, direction, limit):
-    redis = await get_redis_connection()
-    try:
-        user_key = f'{exchange_name}:user:{user_id}'
-        user_data = await redis.hgetall(user_key)
+    async with redis_context() as redis:
+        try:
+            user_key = f'{exchange_name}:user:{user_id}'
+            user_data = await redis.hgetall(user_key)
 
-        is_running = bool(int(user_data.get('is_running', '0')))
-        if not is_running:
-            print('프로세스가 종료되었습니다.')
+            is_running = bool(int(user_data.get('is_running', '0')))
+            if not is_running:
+                print('프로세스가 종료되었습니다.')
+                return None
+
+            new_trading_symbols = await get_top_symbols(user_id, exchange_name=exchange_name, direction=direction, limit=limit)
+
+            running_symbols = set(json.loads(user_data.get('running_symbols', '[]')))
+            completed_trading_symbols = set(json.loads(user_data.get('completed_trading_symbols', '[]')))
+
+            new_entry_symbols = [symbol for symbol in new_trading_symbols 
+                                 if symbol not in running_symbols and symbol not in completed_trading_symbols]
+
+            return new_entry_symbols
+
+        except Exception as e:
+            print(f"An error occurred on get_new_symbols: {e}")
+            print(traceback.format_exc())
             return None
-
-        new_trading_symbols = await get_top_symbols(user_id, exchange_name=exchange_name, direction=direction, limit=limit)
-
-        running_symbols = set(json.loads(user_data.get('running_symbols', '[]')))
-        completed_trading_symbols = set(json.loads(user_data.get('completed_trading_symbols', '[]')))
-
-        new_entry_symbols = [symbol for symbol in new_trading_symbols 
-                             if symbol not in running_symbols and symbol not in completed_trading_symbols]
-
-        return new_entry_symbols
-
-    except Exception as e:
-        print(f"An error occurred on get_new_symbols: {e}")
-        print(traceback.format_exc())
-        return None
-    finally:
-        await redis.close()
-
 def summarize_trading_results(exchange_name, direction):
     
     # 경로 패턴을 사용하여 해당 거래소 폴더 내의 모든 CSV 파일을 찾습니다.
@@ -222,19 +220,19 @@ async def build_sort_ai_trading_data(exchange_name: str, enter_strategy: str) ->
 
 
 async def get_running_symbols(exchange_id: str, user_id: str) -> list:
-    redis = await get_redis_connection()
-    redis_key = f"running_symbols:{exchange_id}:{user_id}"
-    running_symbols_json = await redis.get(redis_key)
+    async with redis_context() as redis:
+        redis_key = f"running_symbols:{exchange_id}:{user_id}"
+        running_symbols_json = await redis.get(redis_key)
     
     
-    if running_symbols_json:
-        await redis.delete(redis_key)
-        result: list = json.loads(running_symbols_json)
-        return result
-    return []
+        if running_symbols_json:
+            await redis.delete(redis_key)
+            result: list = json.loads(running_symbols_json)
+            return result
+        return []
     
     
-#================================================================================================
+    #================================================================================================
 def safe_json_loads(data, default):
     if isinstance(data, str):
         try:
@@ -246,73 +244,68 @@ def safe_json_loads(data, default):
 
 async def task_completed(task: Any, new_symbol: str, exchange_name: str, user_id: str) -> None:
     print(f'매개변수 확인. task: {task}, new_symbol: {new_symbol}, exchange_name: {exchange_name}, user_id: {user_id}')
-    redis = await get_redis_connection()
-    try:
-        user_key = f'{exchange_name}:user:{user_id}'
-        user_data = await redis.hgetall(user_key)
+    async with redis_context() as redis:
+        try:
+            user_key = f'{exchange_name}:user:{user_id}'
+            user_data = await redis.hgetall(user_key)
 
-        grid_num = int(user_data.get("grid_num", 20))
-        leverage = float(user_data.get("leverage", 1))
-        direction = user_data.get("direction", "long")
-        initial_capital_json = user_data.get("initial_capital", "[]")
-        initial_capital_list = json.loads(initial_capital_json) if isinstance(initial_capital_json, str) else initial_capital_json
-        stop_loss = float(user_data.get("stop_loss", 0))
-        running_symbols = set(json.loads(user_data.get('running_symbols', '[]')))
-        completed_symbols = set(json.loads(user_data.get('completed_trading_symbols', '[]')))
-        tasks = safe_json_loads(user_data.get('tasks', '[]'), [])
+            grid_num = int(user_data.get("grid_num", 20))
+            leverage = float(user_data.get("leverage", 1))
+            direction = user_data.get("direction", "long")
+            initial_capital_json = user_data.get("initial_capital", "[]")
+            initial_capital_list = json.loads(initial_capital_json) if isinstance(initial_capital_json, str) else initial_capital_json
+            stop_loss = float(user_data.get("stop_loss", 0))
+            running_symbols = set(json.loads(user_data.get('running_symbols', '[]')))
+            completed_symbols = set(json.loads(user_data.get('completed_trading_symbols', '[]')))
+            tasks = safe_json_loads(user_data.get('tasks', '[]'), [])
 
-        running_symbols.discard(new_symbol)
-        completed_symbols.add(new_symbol)
-        if task in tasks:
-            tasks.remove(task)
-        await redis.hset(user_key, 'running_symbols', json.dumps(list(running_symbols)))
-        await redis.hset(user_key, 'completed_trading_symbols', json.dumps(list(completed_symbols)))
-        await redis.hset(user_key, 'tasks', json.dumps(tasks))
+            running_symbols.discard(new_symbol)
+            completed_symbols.add(new_symbol)
+            if task in tasks:
+                tasks.remove(task)
+            await redis.hset(user_key, 'running_symbols', json.dumps(list(running_symbols)))
+            await redis.hset(user_key, 'completed_trading_symbols', json.dumps(list(completed_symbols)))
+            await redis.hset(user_key, 'tasks', json.dumps(tasks))
 
-        print(f"user_id = {user_id}, exchange_name = {exchange_name}, direction = {direction}")
+            print(f"user_id = {user_id}, exchange_name = {exchange_name}, direction = {direction}")
 
-        new_entry_symbols = await get_new_symbols(user_id=user_id, exchange_name=exchange_name, direction=direction, limit=20)
-        if new_entry_symbols is None:
-            print('종료')
-            return
+            new_entry_symbols = await get_new_symbols(user_id=user_id, exchange_name=exchange_name, direction=direction, limit=20)
+            if new_entry_symbols is None:
+                print('종료')
+                return
 
-        limit = int(user_data.get("numbers_to_entry", 1))
-        filtered_symbols = [symbol for symbol in new_entry_symbols if symbol not in completed_symbols]
+            limit = int(user_data.get("numbers_to_entry", 1))
+            filtered_symbols = [symbol for symbol in new_entry_symbols if symbol not in completed_symbols]
 
-        print(f"new_entry_symbols 타입: {type(new_entry_symbols)}")
-        print(f"new_entry_symbols 내용: {new_entry_symbols}")
-        print(f"filtered_symbols 타입: {type(filtered_symbols)}")
-        print(filtered_symbols)
-        print('새로운 심볼 탐색 ! 확인! ')
-        print(f"limit : {limit}")
+            print(f"new_entry_symbols 타입: {type(new_entry_symbols)}")
+            print(f"new_entry_symbols 내용: {new_entry_symbols}")
+            print(f"filtered_symbols 타입: {type(filtered_symbols)}")
+            print(filtered_symbols)
+            print('새로운 심볼 탐색 ! 확인! ')
+            print(f"limit : {limit}")
 
-        is_running = bool(int(user_data.get('is_running', '0')))
-        if is_running:
-            for symbol in filtered_symbols[:limit]:
-                print(f"filtered_symbols[:limit] : {filtered_symbols[:limit]}")
-                print(f"symbol {symbol}")
-                symbol_queues: dict[str, asyncio.Queue[Any]] = {symbol: asyncio.Queue(maxsize=1)}
-                await asyncio.create_task(grid.create_new_task(new_symbol=symbol, symbol_queues=symbol_queues,
-                                                          initial_investment=initial_capital_list, direction=direction,
-                                                          timeframe='15m', grid_num=grid_num, exchange_name=exchange_name,
-                                                          leverage=leverage, user_id=user_id, stop_loss=stop_loss, numbers_to_entry=limit))
-            message = f"🚀 새로운 심볼{new_entry_symbols}에 대한 매매를 시작합니다."
-            await telegram_message.send_telegram_message(message, exchange_name, user_id)
-            await add_user_log(int(user_id), message)
-        else:
-            print("테스크가 종료 되었습니다.")
-            message = f"🚀 매매가 종료되었습니다.\n모든 트레이딩이 종료되었습니다."
-            await telegram_message.send_telegram_message(message, exchange_name, user_id)
-            await add_user_log(int(user_id), message)
-            return
-    except Exception as e:
-        print(f"An error occurred on task_completed: {e}")
-        print(traceback.format_exc())
-    finally:
-        await redis.close()
-
-    
-
+            is_running = bool(int(user_data.get('is_running', '0')))
+            if is_running:
+                for symbol in filtered_symbols[:limit]:
+                    print(f"filtered_symbols[:limit] : {filtered_symbols[:limit]}")
+                    print(f"symbol {symbol}")
+                    symbol_queues: dict[str, asyncio.Queue[Any]] = {symbol: asyncio.Queue(maxsize=1)}
+                    await asyncio.create_task(grid.create_new_task(new_symbol=symbol, symbol_queues=symbol_queues,
+                                                              initial_investment=initial_capital_list, direction=direction,
+                                                              timeframe='15m', grid_num=grid_num, exchange_name=exchange_name,
+                                                              leverage=leverage, user_id=user_id, stop_loss=stop_loss, numbers_to_entry=limit))
+                message = f"🚀 새로운 심볼{new_entry_symbols}에 대한 매매를 시작합니다."
+                await telegram_message.send_telegram_message(message, exchange_name, user_id)
+                await add_user_log(int(user_id), message)
+            else:
+                print("테스크가 종료 되었습니다.")
+                message = f"🚀 매매가 종료되었습니다.\n모든 트레이딩이 종료되었습니다."
+                await telegram_message.send_telegram_message(message, exchange_name, user_id)
+                await add_user_log(int(user_id), message)
+                return
+        except Exception as e:
+            print(f"An error occurred on task_completed: {e}")
+            print(traceback.format_exc())
 async def get_top_symbols(user_id, exchange_name, direction='long-short', limit=20, force_restart=False):
     try:
         ban_list = await get_ban_list_from_db(user_id, exchange_name)
@@ -412,241 +405,237 @@ async def get_upbit_market_data():
 
 
 async def create_tasks(new_symbols, symbol_queues, initial_investment, direction, timeframe, grid_num, exchange_name, leverage, user_id, stop_loss, exchange_instance, custom_stop=False):
-    redis = await get_redis_connection()
-    created_tasks = []
-    try:
-        user_key = f'{exchange_name}:user:{user_id}'
+    async with redis_context() as redis:
+        created_tasks = []
+        try:
+            user_key = f'{exchange_name}:user:{user_id}'
 
-        # Get user data
-        user_data = await redis.hgetall(user_key)
-        user_data = {k.decode('utf-8') if isinstance(k, bytes) else k: 
-                     v.decode('utf-8') if isinstance(v, bytes) else v 
-                     for k, v in user_data.items()}
+            # Get user data
+            user_data = await redis.hgetall(user_key)
+            user_data = {k.decode('utf-8') if isinstance(k, bytes) else k: 
+                         v.decode('utf-8') if isinstance(v, bytes) else v 
+                         for k, v in user_data.items()}
 
-        running_symbols = set(json.loads(user_data.get('running_symbols', '[]')))
-        completed_symbols = set(json.loads(user_data.get('completed_trading_symbols', '[]')))
-        existing_tasks = json.loads(user_data.get('tasks', '[]'))
+            running_symbols = set(json.loads(user_data.get('running_symbols', '[]')))
+            completed_symbols = set(json.loads(user_data.get('completed_trading_symbols', '[]')))
+            existing_tasks = json.loads(user_data.get('tasks', '[]'))
 
-        for new_symbol in new_symbols:
-            if new_symbol in completed_symbols or new_symbol in running_symbols:
-                print(f"Symbol {new_symbol} is already completed or running. Skipping.")
-                continue
-
-            try:
-                running_symbols.add(new_symbol)
-                
-                grid_levels = await periodic_analysis.calculate_grid_logic(direction, grid_num, new_symbol, exchange_name, user_id, exchange_instance)
-                
-                if grid_levels is None:
-                    print(f"Grid levels for {new_symbol} is None. Skipping.")
-                    running_symbols.remove(new_symbol)
+            for new_symbol in new_symbols:
+                if new_symbol in completed_symbols or new_symbol in running_symbols:
+                    print(f"Symbol {new_symbol} is already completed or running. Skipping.")
                     continue
 
-                if not isinstance(symbol_queues, dict):
-                    symbol_queues = {symbol: asyncio.Queue(maxsize=1) for symbol in new_symbols}
-
-                queue = symbol_queues[new_symbol]
-                await asyncio.sleep(0.1)  # Short delay to prevent overloading
-
-                task = asyncio.create_task(run_task(new_symbol, queue, initial_investment, direction, grid_levels, grid_num, exchange_name, leverage, timeframe, stop_loss, user_id))
-                task_name = f"task_{new_symbol}_{user_id}"
-                task.set_name(task_name)
-                existing_tasks.append(task_name)
-                created_tasks.append(task)
+                try:
+                    running_symbols.add(new_symbol)
                 
-                print(f"Starting trading for {new_symbol}")
-            except Exception as e:
-                print(f"Error creating task for {new_symbol}: {e}")
-                print(traceback.format_exc())
-                if new_symbol in running_symbols:
-                    running_symbols.remove(new_symbol)
-                continue
-
-        # Update Redis with new running symbols and tasks
-        await redis.hset(user_key, 'running_symbols', json.dumps(list(running_symbols)))
-        await redis.hset(user_key, 'tasks', json.dumps(existing_tasks))
-
-        # Create stop loss monitoring task if needed
-        if stop_loss is not None and stop_loss > 0 and exchange_name != 'upbit':
-            monitor_sl_task = asyncio.create_task(monitor_positions(exchange_name, user_id))
-            monitor_sl_task_name = f"monitor_sl_{user_id}"
-            monitor_sl_task.set_name(monitor_sl_task_name)
-            existing_tasks.append(monitor_sl_task_name)
-            created_tasks.append(monitor_sl_task)
-
-        # Create custom stop monitoring task if needed
-        if custom_stop is not None:
-            monitor_custom_stop_task = asyncio.create_task(monitor_custom_stop(exchange_name, user_id, custom_stop))
-            monitor_custom_stop_task_name = f"monitor_custom_stop_{user_id}"
-            monitor_custom_stop_task.set_name(monitor_custom_stop_task_name)
-            existing_tasks.append(monitor_custom_stop_task_name)
-            created_tasks.append(monitor_custom_stop_task)
-
-        await redis.hset(user_key, 'tasks', json.dumps(existing_tasks))
+                    grid_levels = await periodic_analysis.calculate_grid_logic(direction, grid_num, new_symbol, exchange_name, user_id, exchange_instance)
                 
-    except Exception as e:
-        print(f"An error occurred on create_tasks: {e}")
-        print(traceback.format_exc())
-    finally:
-        await redis.close()
-        return created_tasks
+                    if grid_levels is None:
+                        print(f"Grid levels for {new_symbol} is None. Skipping.")
+                        running_symbols.remove(new_symbol)
+                        continue
+
+                    if not isinstance(symbol_queues, dict):
+                        symbol_queues = {symbol: asyncio.Queue(maxsize=1) for symbol in new_symbols}
+
+                    queue = symbol_queues[new_symbol]
+                    await asyncio.sleep(0.1)  # Short delay to prevent overloading
+
+                    task = asyncio.create_task(run_task(new_symbol, queue, initial_investment, direction, grid_levels, grid_num, exchange_name, leverage, timeframe, stop_loss, user_id))
+                    task_name = f"task_{new_symbol}_{user_id}"
+                    task.set_name(task_name)
+                    existing_tasks.append(task_name)
+                    created_tasks.append(task)
+                
+                    print(f"Starting trading for {new_symbol}")
+                except Exception as e:
+                    print(f"Error creating task for {new_symbol}: {e}")
+                    print(traceback.format_exc())
+                    if new_symbol in running_symbols:
+                        running_symbols.remove(new_symbol)
+                    continue
+
+            # Update Redis with new running symbols and tasks
+            await redis.hset(user_key, 'running_symbols', json.dumps(list(running_symbols)))
+            await redis.hset(user_key, 'tasks', json.dumps(existing_tasks))
+
+            # Create stop loss monitoring task if needed
+            if stop_loss is not None and stop_loss > 0 and exchange_name != 'upbit':
+                monitor_sl_task = asyncio.create_task(monitor_positions(exchange_name, user_id))
+                monitor_sl_task_name = f"monitor_sl_{user_id}"
+                monitor_sl_task.set_name(monitor_sl_task_name)
+                existing_tasks.append(monitor_sl_task_name)
+                created_tasks.append(monitor_sl_task)
+
+            # Create custom stop monitoring task if needed
+            if custom_stop is not None:
+                monitor_custom_stop_task = asyncio.create_task(monitor_custom_stop(exchange_name, user_id, custom_stop))
+                monitor_custom_stop_task_name = f"monitor_custom_stop_{user_id}"
+                monitor_custom_stop_task.set_name(monitor_custom_stop_task_name)
+                existing_tasks.append(monitor_custom_stop_task_name)
+                created_tasks.append(monitor_custom_stop_task)
+
+            await redis.hset(user_key, 'tasks', json.dumps(existing_tasks))
+                
+        except Exception as e:
+            print(f"An error occurred on create_tasks: {e}")
+            print(traceback.format_exc())
+            return created_tasks
 
 
 
-#================================================================================================
-# 트레이딩 루프 TRADING LOOP
-#================================================================================================
+    #================================================================================================
+    # 트레이딩 루프 TRADING LOOP
+    #================================================================================================
 async def create_tasks(new_symbols, symbol_queues, initial_investment, direction, timeframe, grid_num, exchange_name, leverage, user_id, stop_loss, exchange_instance , custom_stop=False):  # type: ignore[no-redef]
-    redis = await get_redis_connection()
-    created_tasks = []
-    try:
-        user_key = f'{exchange_name}:user:{user_id}'
+    async with redis_context() as redis:
+        created_tasks = []
+        try:
+            user_key = f'{exchange_name}:user:{user_id}'
 
-        # Get user data
-        user_data = await redis.hgetall(user_key)
-        user_data = {k.decode('utf-8') if isinstance(k, bytes) else k: 
-                     v.decode('utf-8') if isinstance(v, bytes) else v 
-                     for k, v in user_data.items()}
+            # Get user data
+            user_data = await redis.hgetall(user_key)
+            user_data = {k.decode('utf-8') if isinstance(k, bytes) else k: 
+                         v.decode('utf-8') if isinstance(v, bytes) else v 
+                         for k, v in user_data.items()}
 
-        running_symbols = set(json.loads(user_data.get('running_symbols', '[]')))
-        completed_symbols = set(json.loads(user_data.get('completed_trading_symbols', '[]')))
-        existing_tasks = json.loads(user_data.get('tasks', '[]'))
+            running_symbols = set(json.loads(user_data.get('running_symbols', '[]')))
+            completed_symbols = set(json.loads(user_data.get('completed_trading_symbols', '[]')))
+            existing_tasks = json.loads(user_data.get('tasks', '[]'))
 
-        for new_symbol in new_symbols:
-            if new_symbol in completed_symbols or new_symbol in running_symbols:
-                print(f"Symbol {new_symbol} is already completed or running. Skipping.")
-                continue
-
-            try:
-                running_symbols.add(new_symbol)
-                
-                grid_levels = await periodic_analysis.calculate_grid_logic(direction, grid_num, new_symbol, exchange_name, user_id)
-                
-                if grid_levels is None:
-                    print(f"Grid levels for {new_symbol} is None. Skipping.")
-                    running_symbols.remove(new_symbol)
+            for new_symbol in new_symbols:
+                if new_symbol in completed_symbols or new_symbol in running_symbols:
+                    print(f"Symbol {new_symbol} is already completed or running. Skipping.")
                     continue
 
-                if not isinstance(symbol_queues, dict):
-                    symbol_queues = {symbol: asyncio.Queue(maxsize=1) for symbol in new_symbols}
-
-                queue = symbol_queues[new_symbol]
-                await asyncio.sleep(0.1)  # Short delay to prevent overloading
-
-                task = asyncio.create_task(run_task(new_symbol, queue, initial_investment, direction, grid_levels, grid_num, exchange_name, leverage, timeframe, stop_loss, user_id))
-                task_name = f"task_{new_symbol}_{user_id}"
-                task.set_name(task_name)
-                existing_tasks.append(task_name)
-                created_tasks.append(task)
+                try:
+                    running_symbols.add(new_symbol)
                 
-                print(f"Starting trading for {new_symbol}")
-            except Exception as e:
-                print(f"Error creating task for {new_symbol}: {e}")
-                print(traceback.format_exc())
-                if new_symbol in running_symbols:
-                    running_symbols.remove(new_symbol)
-                continue
-
-        # Update Redis with new running symbols and tasks
-        await redis.hset(user_key, 'running_symbols', json.dumps(list(running_symbols)))
-        await redis.hset(user_key, 'tasks', json.dumps(existing_tasks))
-
-        # Create stop loss monitoring task if needed
-        if stop_loss is not None and stop_loss > 0 and exchange_name != 'upbit':
-            monitor_sl_task = asyncio.create_task(monitor_positions(exchange_name, user_id))
-            monitor_sl_task_name = f"monitor_sl_{user_id}"
-            monitor_sl_task.set_name(monitor_sl_task_name)
-            existing_tasks.append(monitor_sl_task_name)
-            created_tasks.append(monitor_sl_task)
-
-        # Create custom stop monitoring task if needed
-        if custom_stop is not None:
-            monitor_custom_stop_task = asyncio.create_task(monitor_custom_stop(exchange_name, user_id, custom_stop))
-            monitor_custom_stop_task_name = f"monitor_custom_stop_{user_id}"
-            monitor_custom_stop_task.set_name(monitor_custom_stop_task_name)
-            existing_tasks.append(monitor_custom_stop_task_name)
-            created_tasks.append(monitor_custom_stop_task)
-
-        await redis.hset(user_key, 'tasks', json.dumps(existing_tasks))
+                    grid_levels = await periodic_analysis.calculate_grid_logic(direction, grid_num, new_symbol, exchange_name, user_id)
                 
-    except Exception as e:
-        print(f"An error occurred on create_tasks: {e}")
-        print(traceback.format_exc())
-    finally:
-        await redis.close()
-        return created_tasks
+                    if grid_levels is None:
+                        print(f"Grid levels for {new_symbol} is None. Skipping.")
+                        running_symbols.remove(new_symbol)
+                        continue
+
+                    if not isinstance(symbol_queues, dict):
+                        symbol_queues = {symbol: asyncio.Queue(maxsize=1) for symbol in new_symbols}
+
+                    queue = symbol_queues[new_symbol]
+                    await asyncio.sleep(0.1)  # Short delay to prevent overloading
+
+                    task = asyncio.create_task(run_task(new_symbol, queue, initial_investment, direction, grid_levels, grid_num, exchange_name, leverage, timeframe, stop_loss, user_id))
+                    task_name = f"task_{new_symbol}_{user_id}"
+                    task.set_name(task_name)
+                    existing_tasks.append(task_name)
+                    created_tasks.append(task)
+                
+                    print(f"Starting trading for {new_symbol}")
+                except Exception as e:
+                    print(f"Error creating task for {new_symbol}: {e}")
+                    print(traceback.format_exc())
+                    if new_symbol in running_symbols:
+                        running_symbols.remove(new_symbol)
+                    continue
+
+            # Update Redis with new running symbols and tasks
+            await redis.hset(user_key, 'running_symbols', json.dumps(list(running_symbols)))
+            await redis.hset(user_key, 'tasks', json.dumps(existing_tasks))
+
+            # Create stop loss monitoring task if needed
+            if stop_loss is not None and stop_loss > 0 and exchange_name != 'upbit':
+                monitor_sl_task = asyncio.create_task(monitor_positions(exchange_name, user_id))
+                monitor_sl_task_name = f"monitor_sl_{user_id}"
+                monitor_sl_task.set_name(monitor_sl_task_name)
+                existing_tasks.append(monitor_sl_task_name)
+                created_tasks.append(monitor_sl_task)
+
+            # Create custom stop monitoring task if needed
+            if custom_stop is not None:
+                monitor_custom_stop_task = asyncio.create_task(monitor_custom_stop(exchange_name, user_id, custom_stop))
+                monitor_custom_stop_task_name = f"monitor_custom_stop_{user_id}"
+                monitor_custom_stop_task.set_name(monitor_custom_stop_task_name)
+                existing_tasks.append(monitor_custom_stop_task_name)
+                created_tasks.append(monitor_custom_stop_task)
+
+            await redis.hset(user_key, 'tasks', json.dumps(existing_tasks))
+                
+        except Exception as e:
+            print(f"An error occurred on create_tasks: {e}")
+            print(traceback.format_exc())
+            return created_tasks
 
 
 async def run_task(symbol, queue, initial_investment, direction, grid_levels, grid_num, exchange_name, leverage, timeframe, stop_loss, user_id):
-    redis = await get_redis_connection()
-    try:
-        user_key = f'{exchange_name}:user:{user_id}'
-        if not await redis.exists(user_key):
-            await redis.hset(user_key, mapping = {
-                'is_running': '0',
-                'tasks': '[]',
-                'running_symbols': '[]',
-                'completed_trading_symbols': '[]'
-            })
+    async with redis_context() as redis:
+        try:
+            user_key = f'{exchange_name}:user:{user_id}'
+            if not await redis.exists(user_key):
+                await redis.hset(user_key, mapping = {
+                    'is_running': '0',
+                    'tasks': '[]',
+                    'running_symbols': '[]',
+                    'completed_trading_symbols': '[]'
+                })
 
-        # Get user data from Redis
-        user_data = await redis.hgetall(user_key)
-        user_data = {k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v for k, v in user_data.items()}
-        running_symbols = set(json.loads(user_data.get('running_symbols', '[]')))
-        tasks = json.loads(user_data.get('tasks', '[]'))
-        is_running = user_data.get('is_running') == '1'
+            # Get user data from Redis
+            user_data = await redis.hgetall(user_key)
+            user_data = {k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v for k, v in user_data.items()}
+            running_symbols = set(json.loads(user_data.get('running_symbols', '[]')))
+            tasks = json.loads(user_data.get('tasks', '[]'))
+            is_running = user_data.get('is_running') == '1'
         
-        if is_running:
-            if exchange_name in ['binance', 'bitget', 'okx'] and int(leverage) > 1:
+            if is_running:
+                if exchange_name in ['binance', 'bitget', 'okx'] and int(leverage) > 1:
+                    try:
+                        await asyncio.sleep(random.uniform(0.8, 1.3))
+                        await retry_async(strategy.change_leverage, exchange_name, symbol, leverage, user_id)
+                    except Exception as e:
+                        print(f"Error changing leverage for {symbol}: {e}")
+                        print(traceback.format_exc())
+                        return symbol
                 try:
-                    await asyncio.sleep(random.uniform(0.8, 1.3))
-                    await retry_async(strategy.change_leverage, exchange_name, symbol, leverage, user_id)
+                    user_key = f'{exchange_name}:user:{user_id}'
+                
+                    await asyncio.sleep(random.uniform(1, 1.7))
+                
+                    ws_task = asyncio.create_task(ws_client(exchange_name, symbol, queue, user_id))
+                    order_task = asyncio.create_task(place_grid_orders(symbol, initial_investment, direction, grid_levels, queue, grid_num, exchange_name, user_id))  # type: ignore[call-arg]
+                    tasks = json.loads(await redis.hget(user_key, 'tasks') or '[]')
+                    tasks.extend([str(ws_task.get_name()), str(order_task.get_name())])
+                    await redis.hset(user_key, 'tasks', json.dumps(tasks))
+                    results = await asyncio.gather(ws_task, order_task, return_exceptions=True)
                 except Exception as e:
-                    print(f"Error changing leverage for {symbol}: {e}")
+                    print(f"Error running tasks for symbol {symbol}: {e}")
                     print(traceback.format_exc())
                     return symbol
-            try:
-                user_key = f'{exchange_name}:user:{user_id}'
+                # Check if user is still running
+                is_running = await redis.hget(user_key, 'is_running')
+                if is_running == b'1':
+                    for result in results:
+                        if isinstance(result, QuitException):
+                            await grid.cancel_tasks(user_id, exchange_name)
+                            print(f"Task for {symbol} completed. Finding new task...")
+                            return symbol
+                        elif isinstance(result, AddAnotherException):
+                            await task_completed(task=order_task, new_symbol=symbol, exchange_name=exchange_name, user_id=user_id)
+                            print(f"Task for {symbol} failed. Finding new task...")
+                            return None
                 
-                await asyncio.sleep(random.uniform(1, 1.7))
-                
-                ws_task = asyncio.create_task(ws_client(exchange_name, symbol, queue, user_id))
-                order_task = asyncio.create_task(place_grid_orders(symbol, initial_investment, direction, grid_levels, queue, grid_num, exchange_name, user_id))  # type: ignore[call-arg]
-                tasks = json.loads(await redis.hget(user_key, 'tasks') or '[]')
-                tasks.extend([str(ws_task.get_name()), str(order_task.get_name())])
-                await redis.hset(user_key, 'tasks', json.dumps(tasks))
-                results = await asyncio.gather(ws_task, order_task, return_exceptions=True)
-            except Exception as e:
-                print(f"Error running tasks for symbol {symbol}: {e}")
-                print(traceback.format_exc())
-                return symbol
-            # Check if user is still running
-            is_running = await redis.hget(user_key, 'is_running')
-            if is_running == b'1':
-                for result in results:
-                    if isinstance(result, QuitException):
-                        await grid.cancel_tasks(user_id, exchange_name)
-                        print(f"Task for {symbol} completed. Finding new task...")
-                        return symbol
-                    elif isinstance(result, AddAnotherException):
-                        await task_completed(task=order_task, new_symbol=symbol, exchange_name=exchange_name, user_id=user_id)
+                    if any(isinstance(result, Exception) for result in results):
                         print(f"Task for {symbol} failed. Finding new task...")
                         return None
-                
-                if any(isinstance(result, Exception) for result in results):
-                    print(f"Task for {symbol} failed. Finding new task...")
-                    return None
+                    else:
+                        print(f"Task for {symbol} completed. Finding new task...")
+                        return symbol
                 else:
-                    print(f"Task for {symbol} completed. Finding new task...")
-                    return symbol
-            else:
-                return None
-        return
+                    return None
+            return
     
-    except Exception as e:
-        print(f"Error running tasks for symbol {symbol}: {e}")
-        print(traceback.format_exc())
-        return None
+        except Exception as e:
+            print(f"Error running tasks for symbol {symbol}: {e}")
+            print(traceback.format_exc())
+            return None
 
 
 

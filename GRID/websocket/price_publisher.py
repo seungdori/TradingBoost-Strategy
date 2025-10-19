@@ -1,3 +1,4 @@
+from shared.database.redis_patterns import redis_context, RedisTTL
 import asyncio
 import json
 import logging
@@ -30,17 +31,17 @@ class CentralizedPriceManager:
         retry_count = 0
         while retry_count < self.max_retries:
             try:
-                self.redis = await get_redis_connection()
-                self.symbols = await self.exchange.load_markets()
-                self.symbols = [symbol for symbol in self.symbols if symbol.endswith('USDT:USDT')]
-                logging.info(f"Initialized with {len(self.symbols)} symbols")
-                return
-            except Exception as e:
-                retry_count += 1
-                logging.error(f"Initialization error (attempt {retry_count}/{self.max_retries}): {e}")
-                if retry_count >= self.max_retries:
-                    raise
-                await asyncio.sleep(self.retry_delay)
+                async with redis_context() as redis:
+                    self.symbols = await self.exchange.load_markets()
+                    self.symbols = [symbol for symbol in self.symbols if symbol.endswith('USDT:USDT')]
+                    logging.info(f"Initialized with {len(self.symbols)} symbols")
+                    return
+                except Exception as e:
+                    retry_count += 1
+                    logging.error(f"Initialization error (attempt {retry_count}/{self.max_retries}): {e}")
+                    if retry_count >= self.max_retries:
+                        raise
+                    await asyncio.sleep(self.retry_delay)
 
     async def start(self):
         await self.initialize()

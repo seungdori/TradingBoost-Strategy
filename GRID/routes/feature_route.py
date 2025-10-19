@@ -41,6 +41,7 @@ from zoneinfo import ZoneInfo
 from GRID.core.redis import get_redis_connection
 from GRID.trading.shared_state import user_keys
 from shared.config import settings
+from shared.database.redis_patterns import redis_context, RedisTTL
 
 DEFAULT_PORT = int(os.environ.get('PORT', 8000))
 
@@ -212,13 +213,14 @@ def get_app_port(app: FastAPI) -> int:
 
 @router.post("/save_request_body")
 async def save_all_running_request_body(request: Request) -> ResponseDto[None]:
-    redis = await get_redis_connection()
-    running_users = await get_running_users('okx', redis)
-    for user_id in running_users:
-        redis_key = f"okx:request_body:{user_id}"
-        request_body_str = await get_request_body(redis, redis_key)
-        try:
-            if request_body_str is None:
+    """Save request body for all running users with context manager."""
+    async with redis_context() as redis:
+        running_users = await get_running_users('okx', redis)
+        for user_id in running_users:
+            redis_key = f"okx:request_body:{user_id}"
+            request_body_str = await get_request_body(redis, redis_key)
+            try:
+                if request_body_str is None:
             #if request_body_str is not None:
                 user_key = f'okx:user:{user_id}'
                 user_data = await redis.hgetall(user_key)
