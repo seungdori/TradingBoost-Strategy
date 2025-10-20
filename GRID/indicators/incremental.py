@@ -279,7 +279,7 @@ def compute_mama_fama_incremental(src: Any, state: IndicatorState, length: int =
                 if Re != 0 and Im != 0:
                     try:
                         period = 2 * np.pi / np.arctan(Im / Re)
-                    except:
+                    except Exception as e:
                         # 에러 발생 시 이전 주기 유지
                         period = prev_period
 
@@ -298,7 +298,7 @@ def compute_mama_fama_incremental(src: Any, state: IndicatorState, length: int =
                 if I1 != 0:
                     try:
                         phase = 180 / np.pi * np.arctan(Q1 / I1)
-                    except:
+                    except Exception as e:
                         # 에러 발생 시 이전 위상 유지
                         phase = prev_phase
 

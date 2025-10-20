@@ -392,7 +392,7 @@ def save_candles_with_indicators(symbol, tf_str, candles_with_ind):
                 obj = json.loads(item)
                 if "timestamp" in obj:
                     candle_map[obj["timestamp"]] = obj
-            except:
+            except Exception as e:
                 pass
         
         # 새 데이터 병합
@@ -546,7 +546,7 @@ def update_current_candle_with_indicators(symbol, timeframe, current_candle):
                 obj = json.loads(item)
                 if "timestamp" in obj:
                     candle_ind_map[obj["timestamp"]] = obj
-            except:
+            except Exception as e:
                 pass
         
         # 새 인디케이터 데이터 병합

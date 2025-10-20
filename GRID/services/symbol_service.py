@@ -11,14 +11,9 @@ from typing import List, Optional
 import aiohttp
 import pandas as pd
 
+from shared.database.redis_patterns import redis_context, RedisTTL
 from shared.dtos.trading import WinrateDto
 from shared.utils import path_helper
-
-
-async def get_redis_connection():
-    """Get Redis connection from GRID.core.redis"""
-    from GRID.core.redis import get_redis_connection as core_get_redis
-    return await core_get_redis()
 
 
 # ==================== Symbol Data Processing ====================
@@ -255,50 +250,49 @@ async def process_exchange_data(exchange_name, direction, ban_list, white_list, 
     Returns:
         Tuple of (filtered symbols DataFrame, sorted_column name)
     """
-    redis_client = await get_redis_connection()
+    async with redis_context() as redis_client:
+        # 캐시 키 생성
+        cache_key = f"{exchange_name}:summarize:{direction}"
 
-    # 캐시 키 생성
-    cache_key = f"{exchange_name}:summarize:{direction}"
+        # 캐시 확인
+        cached_data = await redis_client.get(cache_key)
 
-    # 캐시 확인
-    cached_data = await redis_client.get(cache_key)
-
-    if cached_data:
-        # 캐시된 데이터가 있으면 역직렬화
-        cached_result = json.loads(cached_data)
-        if 'symbols' in cached_result:
-            profit_data = pd.DataFrame(cached_result['symbols'])
-            sorted_column = 'win_rate'  # 'win_rate'로 고정
+        if cached_data:
+            # 캐시된 데이터가 있으면 역직렬화
+            cached_result = json.loads(cached_data)
+            if 'symbols' in cached_result:
+                profit_data = pd.DataFrame(cached_result['symbols'])
+                sorted_column = 'win_rate'  # 'win_rate'로 고정
+            else:
+                # 'symbols'가 없으면 캐시를 무시하고 새로 데이터를 생성
+                profit_data, sorted_column = await generate_profit_data(exchange_name, direction, market_data)
         else:
-            # 'symbols'가 없으면 캐시를 무시하고 새로 데이터를 생성
+            # 캐시된 데이터가 없으면 새로 데이터를 생성
             profit_data, sorted_column = await generate_profit_data(exchange_name, direction, market_data)
-    else:
-        # 캐시된 데이터가 없으면 새로 데이터를 생성
-        profit_data, sorted_column = await generate_profit_data(exchange_name, direction, market_data)
 
-    # 결과를 캐시에 저장 (90초 TTL 설정)
-    cache_data = {
-        'symbols': profit_data.to_dict(orient='records')
-    }
-    await redis_client.set(cache_key, json.dumps(cache_data), ex=90)  # 'ex' 파라미터로 90초 TTL 설정
+        # 결과를 캐시에 저장 (90초 TTL 설정)
+        cache_data = {
+            'symbols': profit_data.to_dict(orient='records')
+        }
+        await redis_client.set(cache_key, json.dumps(cache_data), ex=90)  # 'ex' 파라미터로 90초 TTL 설정
 
-    # 거래소별 필터링 적용
-    if exchange_name in ['binance', 'bitget', 'binance_spot', 'bitget_spot', 'okx_spot']:
-        symbols = profit_data[(profit_data['name'].astype(str).str.endswith('USDT')) &
-                              ~(profit_data['name'].astype(str).str.contains('USDC')) &
-                              ~(profit_data['name'].astype(str).str.contains('USTC'))]
-    elif exchange_name == 'okx':
-        symbols = profit_data[(profit_data['name'].astype(str).str.endswith('USDT-SWAP')) &
-                              ~(profit_data['name'].astype(str).str.contains('USDC')) &
-                              ~(profit_data['name'].astype(str).str.contains('USTC'))]
-    else:
-        symbols = profit_data
+        # 거래소별 필터링 적용
+        if exchange_name in ['binance', 'bitget', 'binance_spot', 'bitget_spot', 'okx_spot']:
+            symbols = profit_data[(profit_data['name'].astype(str).str.endswith('USDT')) &
+                                  ~(profit_data['name'].astype(str).str.contains('USDC')) &
+                                  ~(profit_data['name'].astype(str).str.contains('USTC'))]
+        elif exchange_name == 'okx':
+            symbols = profit_data[(profit_data['name'].astype(str).str.endswith('USDT-SWAP')) &
+                                  ~(profit_data['name'].astype(str).str.contains('USDC')) &
+                                  ~(profit_data['name'].astype(str).str.contains('USTC'))]
+        else:
+            symbols = profit_data
 
-    # ban_list 적용
-    for ban_word in ban_list:
-        symbols = symbols[~symbols['name'].str.contains(ban_word, case=False)]
+        # ban_list 적용
+        for ban_word in ban_list:
+            symbols = symbols[~symbols['name'].str.contains(ban_word, case=False)]
 
-    return symbols, sorted_column
+        return symbols, sorted_column
 
 
 async def get_running_symbols(exchange_id: str, user_id: str) -> list:
@@ -312,15 +306,15 @@ async def get_running_symbols(exchange_id: str, user_id: str) -> list:
     Returns:
         List of running symbols
     """
-    redis = await get_redis_connection()
-    redis_key = f"running_symbols:{exchange_id}:{user_id}"
-    running_symbols_json = await redis.get(redis_key)
+    async with redis_context() as redis:
+        redis_key = f"running_symbols:{exchange_id}:{user_id}"
+        running_symbols_json = await redis.get(redis_key)
 
-    if running_symbols_json:
-        await redis.delete(redis_key)
-        result: list = json.loads(running_symbols_json)
-        return result
-    return []
+        if running_symbols_json:
+            await redis.delete(redis_key)
+            result: list = json.loads(running_symbols_json)
+            return result
+        return []
 
 
 async def get_completed_symbols(user_id, exchange_name):
@@ -334,12 +328,12 @@ async def get_completed_symbols(user_id, exchange_name):
     Returns:
         List of completed symbols
     """
-    redis = await get_redis_connection()
-    user_key = f'{exchange_name}:user:{user_id}'
-    completed_symbols = await redis.hget(user_key, 'completed_trading_symbols')
-    if completed_symbols:
-        return json.loads(completed_symbols)
-    return []
+    async with redis_context() as redis:
+        user_key = f'{exchange_name}:user:{user_id}'
+        completed_symbols = await redis.hget(user_key, 'completed_trading_symbols')
+        if completed_symbols:
+            return json.loads(completed_symbols)
+        return []
 
 
 async def get_top_symbols(user_id, exchange_name, direction='long-short', limit=20, force_restart=False, get_new_only_symbols=False):

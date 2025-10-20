@@ -1727,7 +1727,7 @@ async def get_user_symbol_status(okx_uid: str, symbol: str): # user_id -> okx_ui
         if long_position:
             try:
                 position_info["long"] = json.loads(long_position)
-            except:
+            except Exception as e:
                 position_info["long"] = long_position
         
         # 숏 포지션 정보
@@ -1736,7 +1736,7 @@ async def get_user_symbol_status(okx_uid: str, symbol: str): # user_id -> okx_ui
         if short_position:
             try:
                 position_info["short"] = json.loads(short_position)
-            except:
+            except Exception as e:
                 position_info["short"] = short_position
         
         # DCA 레벨 정보
@@ -1751,13 +1751,13 @@ async def get_user_symbol_status(okx_uid: str, symbol: str): # user_id -> okx_ui
             if long_dca:
                 try:
                     dca_levels["long"] = json.loads(long_dca)
-                except:
+                except Exception as e:
                     dca_levels["long"] = long_dca
             
             if short_dca:
                 try:
                     dca_levels["short"] = json.loads(short_dca)
-                except:
+                except Exception as e:
                     dca_levels["short"] = short_dca
             
             position_info["dca_levels"] = dca_levels

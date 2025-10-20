@@ -733,7 +733,7 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
                 try:
                     error_response = e.response.json()
                     error_detail = error_response.get("detail", "")
-                except:
+                except Exception as e:
                     error_detail = str(e)
 
                 if e.response.status_code == 400 and "이미 트레이딩 태스크가 실행 중입니다" in error_detail:
@@ -824,7 +824,7 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
                 try:
                     error_response = e.response.json()
                     error_detail = error_response.get("detail", "")
-                except:
+                except Exception as e:
                     error_detail = str(e)
 
                 logger.error(f"Error stopping trading: {e}, detail: {error_detail}")

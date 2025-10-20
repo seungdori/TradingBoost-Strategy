@@ -192,7 +192,7 @@ def get_user_order_logger(user_id: str | int) -> logging.Logger:
                                 try:
                                     json.dumps({k: v})
                                     log_data[k] = v
-                                except:
+                                except Exception as e:
                                     log_data[k] = str(v)
                                     
                         return json.dumps(log_data, ensure_ascii=False, default=str)
@@ -571,7 +571,7 @@ def alert_log(
         # 최후의 보호장치 - 로깅 자체가 실패한 경우
         try:
             error_logger.error(f"알림 로깅 과정에서 예상치 못한 오류 발생: {str(e)}", exc_info=True)
-        except:
+        except Exception as e:
             # 모든 로깅 시도가 실패한 경우 콘솔에 출력
             print(f"[CRITICAL] 알림 로깅 완전 실패: {str(e)}")
 
@@ -705,7 +705,7 @@ def log_order(
         # 최후의 보호장치 - 로깅 자체가 실패한 경우
         try:
             error_logger.error(f"주문 로깅 과정에서 예상치 못한 오류 발생: {str(e)}", exc_info=True)
-        except:
+        except Exception as e:
             # 모든 로깅 시도가 실패한 경우 콘솔에 출력
             print(f"[CRITICAL] 주문 로깅 완전 실패: {str(e)}")
 
@@ -986,7 +986,7 @@ def log_bot_start(user_id: str, symbol: str, config: dict[str, Any] | None = Non
                     try:
                         json.dumps({k: v})
                         safe_config[k] = v
-                    except:
+                    except Exception as e:
                         safe_config[k] = str(v)
                 additional_data = {
                     'config': safe_config,
@@ -1052,7 +1052,7 @@ def log_bot_error(user_id: str, symbol: str, error_message: str, exception: Exce
             try:
                 json.dumps({k: v})
                 safe_additional_data[k] = v
-            except:
+            except Exception as e:
                 safe_additional_data[k] = str(v)
         
         alert_log(

@@ -2,13 +2,15 @@
 Data fetching utilities for OHLCV data
 """
 import asyncio
+import json
 import logging
 import traceback
 from typing import Any
 
 import pandas as pd
 
-from GRID.data.cache import get_cache, redis_client, set_cache
+from GRID.data.cache import get_cache, set_cache
+from shared.database.redis_patterns import redis_context
 from shared.utils import retry_decorator
 
 
@@ -16,18 +18,19 @@ async def get_last_timestamp(exchange_name: str, symbol: str, timeframe: str) ->
     """Redis에서 마지막 타임스탬프를 가져옵니다."""
     try:
         key = f"{exchange_name}:{symbol}:{timeframe}"
-        list_length = redis_client.llen(key)
 
-        if list_length == 0:
-            return None
+        async with redis_context() as redis_client:
+            list_length = await redis_client.llen(key)
 
-        last_record_json = redis_client.lindex(key, -1)
-        if last_record_json:
-            import json
-            last_record = json.loads(last_record_json)
-            if 'timestamp' in last_record:
-                timestamp: int = last_record['timestamp']
-                return timestamp
+            if list_length == 0:
+                return None
+
+            last_record_json = await redis_client.lindex(key, -1)
+            if last_record_json:
+                last_record = json.loads(last_record_json)
+                if 'timestamp' in last_record:
+                    timestamp: int = last_record['timestamp']
+                    return timestamp
 
         return None
     except Exception as e:

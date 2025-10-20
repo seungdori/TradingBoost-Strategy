@@ -17,19 +17,7 @@ manager = ConnectionManager()
 import logging
 
 from shared.config import settings
-
-# Use shared Redis pool
-from GRID.core.redis import get_redis_connection as _get_grid_redis
-
-# Global redis_client for backward compatibility
-redis_client: aioredis.Redis | None = None
-
-async def _ensure_redis() -> aioredis.Redis:
-    """Ensure redis_client is initialized from shared pool"""
-    global redis_client
-    if redis_client is None:
-        redis_client = await _get_grid_redis()
-    return redis_client
+from shared.database.redis_patterns import redis_context, RedisTTL
 class ConnectedUsersResponse(BaseModel):
     connected_users: List[int]
     count: int  # List[int]가 아닌 int로 수정
@@ -46,10 +34,6 @@ class LogResponse(BaseModel):
 
 
 TRADING_SERVER_URL = os.getenv('TRADING_SERVER_URL', 'localhost:8000')
-
-async def get_redis_connection() -> aioredis.Redis:
-    """Get Redis connection from shared pool"""
-    return await _ensure_redis()
 
 def convert_date_to_timestamp(date_str: str | None) -> float | None:
     """Convert date string to Unix timestamp"""
@@ -225,33 +209,33 @@ async def get_trading_volumes(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 
-    redis = await get_redis_connection()
-    if start_date is None:
-        start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-    if end_date is None:
-        end_date = datetime.now().strftime('%Y-%m-%d')
+    async with redis_context() as redis:
+        if start_date is None:
+            start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        if end_date is None:
+            end_date = datetime.now().strftime('%Y-%m-%d')
 
-    start_ts = convert_date_to_timestamp(start_date)
-    end_ts = convert_date_to_timestamp(end_date)
+        start_ts = convert_date_to_timestamp(start_date)
+        end_ts = convert_date_to_timestamp(end_date)
 
-    # Ensure timestamps are valid floats
-    if start_ts is None or end_ts is None:
-        raise HTTPException(status_code=400, detail="Invalid date range")
+        # Ensure timestamps are valid floats
+        if start_ts is None or end_ts is None:
+            raise HTTPException(status_code=400, detail="Invalid date range")
 
-    if symbol is None:
-        user_key = f'{exchange_name}:user:{user_id}'
-        user_data = json.loads(await redis.hget(user_key, 'data') or '{}')
-        symbols = set(user_data.get('running_symbols', []))
-        results: dict[str, Any] = {}
-        for sym in symbols:
-            user_symbol_key = f'{exchange_name}:user:{user_id}:volume:{sym}'
+        if symbol is None:
+            user_key = f'{exchange_name}:user:{user_id}'
+            user_data = json.loads(await redis.hget(user_key, 'data') or '{}')
+            symbols = set(user_data.get('running_symbols', []))
+            results: dict[str, Any] = {}
+            for sym in symbols:
+                user_symbol_key = f'{exchange_name}:user:{user_id}:volume:{sym}'
+                volumes = await redis.zrangebyscore(user_symbol_key, start_ts, end_ts, withscores=True)
+                results[sym] = {k: v for k, v in volumes}
+            return {"user_id": user_id, "volumes": results}
+        else:
+            user_symbol_key = f'{exchange_name}:user:{user_id}:volume:{symbol}'
             volumes = await redis.zrangebyscore(user_symbol_key, start_ts, end_ts, withscores=True)
-            results[sym] = {k: v for k, v in volumes}
-        return {"user_id": user_id, "volumes": results}
-    else:
-        user_symbol_key = f'{exchange_name}:user:{user_id}:volume:{symbol}'
-        volumes = await redis.zrangebyscore(user_symbol_key, start_ts, end_ts, withscores=True)
-        return {"user_id": user_id, "symbol": symbol, "volumes": {k: v for k, v in volumes}}
+            return {"user_id": user_id, "symbol": symbol, "volumes": {k: v for k, v in volumes}}
 
 @router.get(
     "/total_trading_volume",
@@ -442,18 +426,18 @@ async def get_total_trading_volume(
     if start_ts is None or end_ts is None:
         raise HTTPException(status_code=400, detail="Invalid date range")
 
-    redis = await get_redis_connection()
-    user_symbol_key = f'{exchange_name}:user:{user_id}:volume:{symbol}'
-    volumes = await redis.zrangebyscore(user_symbol_key, start_ts, end_ts, withscores=True)
-    total_volume = sum(float(volume) for _, volume in volumes)
+    async with redis_context() as redis:
+        user_symbol_key = f'{exchange_name}:user:{user_id}:volume:{symbol}'
+        volumes = await redis.zrangebyscore(user_symbol_key, start_ts, end_ts, withscores=True)
+        total_volume = sum(float(volume) for _, volume in volumes)
 
-    return {
-        "user_id": user_id,
-        "symbol": symbol,
-        "start_date": start_date,
-        "end_date": end_date,
-        "total_volume": total_volume
-    }
+        return {
+            "user_id": user_id,
+            "symbol": symbol,
+            "start_date": start_date,
+            "end_date": end_date,
+            "total_volume": total_volume
+        }
 
 
 @router.get(
@@ -626,24 +610,23 @@ async def get_trading_pnl(
     if start_ts is None or end_ts is None:
         raise HTTPException(status_code=400, detail="Invalid date range")
 
-    redis = await get_redis_connection()
+    async with redis_context() as redis:
+        if symbol is None:
+            user_key = f'{exchange_name}:user:{user_id}'
+            user_data = json.loads(await redis.hget(user_key, 'data') or '{}')
+            symbols = set(user_data.get('running_symbols', []))
+            results: dict[str, Any] = {}
 
-    if symbol is None:
-        user_key = f'{exchange_name}:user:{user_id}'
-        user_data = json.loads(await redis.hget(user_key, 'data') or '{}')
-        symbols = set(user_data.get('running_symbols', []))
-        results: dict[str, Any] = {}
+            for sym in symbols:
+                user_symbol_key = f'{exchange_name}:user:{user_id}:pnl:{sym}'
+                pnl_data = await redis.zrangebyscore(user_symbol_key, start_ts, end_ts, withscores=True)
+                results[sym] = {k: v for k, v in pnl_data}
 
-        for sym in symbols:
-            user_symbol_key = f'{exchange_name}:user:{user_id}:pnl:{sym}'
+            return {"user_id": user_id, "pnl": results}
+        else:
+            user_symbol_key = f'{exchange_name}:user:{user_id}:pnl:{symbol}'
             pnl_data = await redis.zrangebyscore(user_symbol_key, start_ts, end_ts, withscores=True)
-            results[sym] = {k: v for k, v in pnl_data}
-
-        return {"user_id": user_id, "pnl": results}
-    else:
-        user_symbol_key = f'{exchange_name}:user:{user_id}:pnl:{symbol}'
-        pnl_data = await redis.zrangebyscore(user_symbol_key, start_ts, end_ts, withscores=True)
-        return {"user_id": user_id, "symbol": symbol, "pnl": {k: v for k, v in pnl_data}}
+            return {"user_id": user_id, "symbol": symbol, "pnl": {k: v for k, v in pnl_data}}
     
     
 @router.get(
@@ -830,18 +813,18 @@ async def get_total_trading_pnl(
     if start_ts is None or end_ts is None:
         raise HTTPException(status_code=400, detail="Invalid date range")
 
-    redis = await get_redis_connection()
-    user_symbol_key = f'{exchange_name}:user:{user_id}:pnl:{symbol}'
-    pnl_data = await redis.zrangebyscore(user_symbol_key, start_ts, end_ts, withscores=True)
-    total_pnl = sum(float(pnl) for _, pnl in pnl_data)
+    async with redis_context() as redis:
+        user_symbol_key = f'{exchange_name}:user:{user_id}:pnl:{symbol}'
+        pnl_data = await redis.zrangebyscore(user_symbol_key, start_ts, end_ts, withscores=True)
+        total_pnl = sum(float(pnl) for _, pnl in pnl_data)
 
-    return {
-        "user_id": user_id,
-        "symbol": symbol,
-        "start_date": start_date,
-        "end_date": end_date,
-        "total_pnl": total_pnl
-    }
+        return {
+            "user_id": user_id,
+            "symbol": symbol,
+            "start_date": start_date,
+            "end_date": end_date,
+            "total_pnl": total_pnl
+        }
 
 @router.websocket(
     "/ws/{user_id}",
@@ -1119,10 +1102,10 @@ async def delete_user_messages(user_id: Union[str, int]) -> dict[str, str]:
         user_id (int): 메시지를 삭제할 사용자 ID
     """
     try:
-        redis = await _ensure_redis()
-        key = f"user:{user_id}:messages"
-        await redis.delete(key)
-        return {"status": "success", "message": f"All messages deleted for user {user_id}"}
+        async with redis_context() as redis:
+            key = f"user:{user_id}:messages"
+            await redis.delete(key)
+            return {"status": "success", "message": f"All messages deleted for user {user_id}"}
     except Exception as e:
         raise HTTPException(
             status_code=500,

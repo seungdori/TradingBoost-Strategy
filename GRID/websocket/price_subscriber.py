@@ -6,6 +6,7 @@ import os
 from datetime import datetime, timezone
 
 import ccxt.pro as ccxt
+import redis.asyncio as aioredis
 
 from shared.config import settings
 from GRID.core.redis import get_redis_connection
@@ -35,10 +36,10 @@ class PriceSubscriber:
                     await self.pubsub.subscribe('price_update')
                     logging.info("Successfully connected to Redis and subscribed to price updates.")
                     return True
-                except Exception as e:
-                    logging.error(f"Failed to connect to Redis: {e}. Retrying in 5 seconds...")
-                    await asyncio.sleep(5)
-            return False
+            except Exception as e:
+                logging.error(f"Failed to connect to Redis: {e}. Retrying in 5 seconds...")
+                await asyncio.sleep(5)
+        return False
 
     async def listen_for_updates(self):
         while self.is_running:

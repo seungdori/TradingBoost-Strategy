@@ -574,7 +574,7 @@ async def get_min_notional(
         await set_redis_data(redis_client, redis_key, min_notional, expiry=86400)
         return min_notional
     finally:
-        if new_redis_flag and hasattr(redis_client, 'aclose'):
+        if new_redis_flag and redis_client is not None:
             await redis_client.aclose()
 
 

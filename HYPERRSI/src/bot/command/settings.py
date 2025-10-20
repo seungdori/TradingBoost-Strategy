@@ -618,7 +618,7 @@ async def handle_done(callback_query: types.CallbackQuery, state: FSMContext) ->
         logger.error(f"Cancel handler error: {e}")
         try:
             await callback_query.message.answer("설정 취소 중 오류가 발생했습니다. 다시 시도해주세요.")
-        except:
+        except Exception as e:
             logger.error("Failed to send error message")
 
 @router.message(SettingStates.waiting_for_leverage)

@@ -1,4 +1,3 @@
-from shared.database.redis_patterns import redis_context, RedisTTL
 import asyncio
 import atexit
 import json
@@ -18,6 +17,7 @@ from contextlib import contextmanager
 import redis
 from h11 import Data
 
+from shared.database.redis_patterns import redis_context, RedisTTL
 from GRID.core.redis import get_redis_connection
 from GRID.database import redis_database
 from GRID.database.redis_database import (
@@ -42,8 +42,6 @@ from GRID.jobs.celery_app import app
 from GRID.jobs.celery_tasks import cancel_grid_tasks, cleanup_tasks
 from GRID.jobs.celery_tasks import run_grid_trading as celery_run_grid_trading
 
-redis_conn = None
-redis_async = None
 REDIS_PASSWORD = settings.REDIS_PASSWORD
 
 #================================================================================================
@@ -55,26 +53,16 @@ REDIS_PASSWORD = settings.REDIS_PASSWORD
 # CELERY WORKERS
 #================================================================================================
 
-async def setup_redis():
+def setup_redis():
     """
-    Initialize Redis connection using shared async pool.
-    Note: This function is now async and returns the Redis client.
+    Redis 연결 설정 - 이제 shared pool을 사용하므로 별도 설정 불필요
     """
-    global redis_conn
-
     try:
-        from shared.database.redis import get_redis
-
-        # Use shared async connection pool
-        redis_conn = await get_redis()
-        await redis_conn.ping()
-
-        print("Successfully connected to Redis using shared pool")
+        print("Using shared Redis connection pool")
         # 애플리케이션 종료 시 cleanup 함수 호출 등록
         atexit.register(cleanup)
-
     except Exception as e:
-        print(f"Failed to connect to Redis: {e}")
+        print(f"Failed to setup Redis: {e}")
         raise
 
 def cleanup():
@@ -89,9 +77,6 @@ async def async_cleanup():
         cleanup_tasks.delay()
     except Exception as e:
         print(f"Error during async cleanup: {e}")
-    finally:
-        # Note: Pooled connections are managed automatically, no need to close
-        print("Cleanup completed (pooled Redis connection managed automatically)")
 
 
 #================================================================================================
@@ -159,38 +144,33 @@ async def cancel_and_cleanup_job(exchange_name, user_id, job_id):
 
 
 async def store_job_id(user_id, job_id):
-    redis_client = await get_redis_connection()
-    if redis_client is None:
-        raise ValueError("Failed to get Redis connection")
-    await redis_client.set(f"user:{user_id}:job_id", job_id)
-    await redis_client.close()
+    async with redis_context() as redis_client:
+        await redis_client.set(f"user:{user_id}:job_id", job_id)
     
 #================================================================================================
 async def update_user_data(exchange_name, user_id):
-    redis_client = await get_redis_connection()
-    try:
-        user_key = f'{exchange_name}:user:{user_id}'
-        
-        # Update running_symbols, tasks, completed_trading_symbols, symbols, and is_running
-        update_data = {
-            'running_symbols': json.dumps([]),
-            'tasks': json.dumps([]),
-            'completed_trading_symbols': json.dumps([]),
-            'symbols': json.dumps([]),
-            'is_running': 0
-        }
-        
-        # Update user info in Redis
-        await redis_client.hset(user_key, mapping=update_data)
-        
-        # Retrieve and print updated info
-        updated_info = await redis_client.hgetall(user_key)
-        return updated_info
-    except Exception as e:
-        print(f"Error updating user data: {e}")
-        raise
-    finally:
-        await redis_client.close()
+    async with redis_context() as redis_client:
+        try:
+            user_key = f'{exchange_name}:user:{user_id}'
+
+            # Update running_symbols, tasks, completed_trading_symbols, symbols, and is_running
+            update_data = {
+                'running_symbols': json.dumps([]),
+                'tasks': json.dumps([]),
+                'completed_trading_symbols': json.dumps([]),
+                'symbols': json.dumps([]),
+                'is_running': 0
+            }
+
+            # Update user info in Redis
+            await redis_client.hset(user_key, mapping=update_data)
+
+            # Retrieve and print updated info
+            updated_info = await redis_client.hgetall(user_key)
+            return updated_info
+        except Exception as e:
+            print(f"Error updating user data: {e}")
+            raise
         
         
 async def stop_grid_main_process(exchange_name, user_id):
@@ -212,47 +192,44 @@ async def stop_grid_main_process(exchange_name, user_id):
 
 
 async def monitor_job_status(exchange_name, user_id):
-    try:
-        redis_client = await get_redis_connection()
-        while True:
-            try:
-                result = await get_job_status(exchange_name, user_id, redis_client)
-                if result is None:
-                    print(f"No job found for user_id: {user_id}")
+    async with redis_context() as redis_client:
+        try:
+            while True:
+                try:
+                    result = await get_job_status(exchange_name, user_id, redis_client)
+                    if result is None:
+                        print(f"No job found for user_id: {user_id}")
+                        break
+
+                    status, job_id = result
+                    celery_result = AsyncResult(job_id, app=app)
+
+                    if celery_result.ready():
+                        if celery_result.successful():
+                            logging.info(f"Job {job_id} has finished successfully")
+                            await update_job_status(exchange_name, user_id, 'completed', redis_client)
+                        else:
+                            logging.info(f"Job {job_id} has failed")
+                            await update_job_status(exchange_name, user_id, 'failed', redis_client)
+                        break
+
+                    await asyncio.sleep(60)
+                except CancelledError:
+                    print("Job monitoring was cancelled")
                     break
-                
-                status, job_id = result
-                celery_result = AsyncResult(job_id, app=app)
-                
-                if celery_result.ready():
-                    if celery_result.successful():
-                        logging.info(f"Job {job_id} has finished successfully")
-                        await update_job_status(exchange_name, user_id, 'completed', redis_client)
-                    else:
-                        logging.info(f"Job {job_id} has failed")
-                        await update_job_status(exchange_name, user_id, 'failed', redis_client)
+                except Exception as e:
+                    print(f"Error in monitor_job_status: {e}")
+                    await update_job_status(exchange_name, user_id, 'failed', redis_client)
                     break
-                
-                await asyncio.sleep(60)
-            except CancelledError:
-                print("Job monitoring was cancelled")
-                break
-            except Exception as e:
-                print(f"Error in monitor_job_status: {e}")
-                await update_job_status(exchange_name, user_id, 'failed', redis_client)
-                break
-    finally:
-        print(f'{user_id}의 모든 작업이 완료되었습니다.')
-        await redis_client.close()
+        finally:
+            print(f'{user_id}의 모든 작업이 완료되었습니다.')
         
 
 async def get_running_users(exchange_name, redis=None):
-    should_close = False
-    try:
-        if redis is None:
-            async with redis_context() as redis:
-                should_close = True
-        
+    # If redis is provided, use it; otherwise create a context-managed connection
+    if redis is not None:
+        # Use provided redis connection
+        try:
             user_pattern = f'{exchange_name}:user:*'
             user_keys = await redis.keys(user_pattern)
             running_users = []
@@ -268,8 +245,27 @@ async def get_running_users(exchange_name, redis=None):
             print(f"Error in get_running_users: {e}")
             print(traceback.format_exc())
             return []
-        finally:
-            if should_close and redis:
+    else:
+        # Create own context-managed connection
+        async with redis_context() as redis:
+            try:
+                user_pattern = f'{exchange_name}:user:*'
+                user_keys = await redis.keys(user_pattern)
+                running_users = []
+                for user_key in user_keys:
+                    user_key = user_key.decode('utf-8') if isinstance(user_key, bytes) else user_key
+                    user_id = user_key.split(':')[-1]
+                    is_running = await redis.hget(user_key, 'is_running')
+                    is_running = is_running.decode('utf-8') if isinstance(is_running, bytes) else is_running
+                    if is_running == '1':
+                        running_users.append(user_id)
+                return running_users
+            except Exception as e:
+                print(f"Error in get_running_users: {e}")
+                print(traceback.format_exc())
+                return []
+
+
 async def cancel_job(job_id):
     try:
         # Celery 작업 취소

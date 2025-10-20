@@ -137,9 +137,9 @@ async def change_leverage(exchange_name: str, symbol: str, leverage: int | str, 
                     except Exception as e:
                         if 'API' in str(e):
                             print(f"Attempt {attempt}: An error occurred change leverage {symbol} because : {e}. shut down.")
-                            redis = await database.get_redis_connection()
-                            key = f"{exchange_name}:user:{user_id}"
-                            await redis.hset(key, mapping={'is_running': '0'})
+                            async with redis_context() as redis:
+                                key = f"{exchange_name}:user:{user_id}"
+                                await redis.hset(key, mapping={'is_running': '0'})
                             await exchange.close()
                             return None
                         print(f"Attempt {attempt}: An error occurred change leverage {symbol} because : {e}")

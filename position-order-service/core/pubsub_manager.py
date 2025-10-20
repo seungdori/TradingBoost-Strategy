@@ -459,7 +459,7 @@ class PubSubManager:
             ]:
                 try:
                     event_dict[key] = Decimal(value)
-                except:
+                except Exception as e:
                     pass
 
         return event_class(**event_dict)

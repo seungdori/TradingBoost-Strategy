@@ -20,13 +20,13 @@ import websockets
 from redis import Redis
 
 from GRID import telegram_message
-from GRID.core.redis import get_redis_connection
 from GRID.database import redis_database
 from GRID.strategies import strategy
 from GRID.trading import instance
 from GRID.trading.redis_connection_manager import RedisConnectionManager
 from GRID.trading.shared_state import cancel_state, user_keys
 from shared.config import settings
+from shared.database.redis_patterns import redis_context, RedisTTL
 from shared.utils import parse_bool, retry_async
 
 logging.basicConfig(level=logging.INFO)
@@ -44,7 +44,6 @@ redis_manager = RedisConnectionManager()
 
 # Exchange instance management with activity tracking
 
-redis_connection: Optional[Any] = None
 exchange_instances: Dict[str, Dict[str, Any]] = {}
 INSTANCE_TIMEOUT = 3600  # 1 hour
 MAX_RETRIES = 3
@@ -52,38 +51,7 @@ RETRY_DELAY = 3  # 재시도 사이의 대기 시간(초)
 
 # retry_async is now imported from shared.utils
 
-
-async def get_redis():
-    """Get Redis connection using shared connection pool"""
-    global redis_connection
-    if redis_connection is None:
-        redis_connection = await get_redis_connection()
-
-    try:
-        # Ping the Redis server to check if the connection is still alive
-        await redis_connection.ping()
-    except Exception:
-        # If ping fails, create a new connection
-        redis_connection = await get_redis_connection()
-
-    return redis_connection
-
-async def close_redis() -> None:
-    global redis_connection
-    if redis_connection:
-        await redis_connection.close()
-        redis_connection = None
-
 position_data_logger = logging.getLogger('position_data')
-
-@asynccontextmanager
-async def manage_redis_connection():
-    redis = await get_redis()
-    try:
-        yield redis
-    finally:
-        # We don't close the connection here, it will be reused
-        pass
     
 
 
@@ -91,63 +59,63 @@ async def manage_redis_connection():
 
 
 async def get_user_data(exchange_name: str, user_id: int, field: Optional[str] = None) -> Union[Dict[str, Any], Any]:
-    redis = await get_redis_connection()
-    user_key = f"{exchange_name}:user:{user_id}"
-    
-    json_fields = ["tasks", "running_symbols", "completed_trading_symbols", "enter_symbol_amount_list"]
-    boolean_fields = ["is_running"]
-    numeric_fields = ["leverage", "initial_capital"]
-    
-    def parse_boolean(value: str) -> bool:
-        return value.lower() in ('true', '1', 'yes', 'on')
-    
-    if field:
-        value = await redis.hget(user_key, field)
-        if value is None:
-            return None
-        if field in json_fields:
-            return json.loads(value)
-        elif field in boolean_fields:
-            return parse_boolean(value)
-        elif field in numeric_fields:
-            return float(value)
+    async with redis_context() as redis:
+        user_key = f"{exchange_name}:user:{user_id}"
+
+        json_fields = ["tasks", "running_symbols", "completed_trading_symbols", "enter_symbol_amount_list"]
+        boolean_fields = ["is_running"]
+        numeric_fields = ["leverage", "initial_capital"]
+
+        def parse_boolean(value: str) -> bool:
+            return value.lower() in ('true', '1', 'yes', 'on')
+
+        if field:
+            value = await redis.hget(user_key, field)
+            if value is None:
+                return None
+            if field in json_fields:
+                return json.loads(value)
+            elif field in boolean_fields:
+                return parse_boolean(value)
+            elif field in numeric_fields:
+                return float(value)
+            else:
+                return value
         else:
-            return value
-    else:
-        data = await redis.hgetall(user_key)
-        for key in data:
-            if key in json_fields:
-                data[key] = json.loads(data[key])
-            elif key in boolean_fields:
-                data[key] = parse_boolean(data[key])
-            elif key in numeric_fields:
-                data[key] = float(data[key])
-        return data
+            data = await redis.hgetall(user_key)
+            for key in data:
+                if key in json_fields:
+                    data[key] = json.loads(data[key])
+                elif key in boolean_fields:
+                    data[key] = parse_boolean(data[key])
+                elif key in numeric_fields:
+                    data[key] = float(data[key])
+            return data
 
 async def set_user_data(exchange_name: str, user_id: int, data: Dict[str, Any], field: Optional[str] = None) -> None:
-    redis = await get_redis_connection()
-    user_key = f"{exchange_name}:user:{user_id}"
-    
-    json_fields = ["tasks", "running_symbols", "completed_trading_symbols", "enter_symbol_amount_list"]
-    boolean_fields = ["is_running", "stop_task_only"]
-    numeric_fields = ["leverage", "initial_capital"]
-    
-    def serialize_value(key: str, value: Any) -> str:
-        if key in json_fields:
-            return json.dumps(value)
-        elif key in boolean_fields:
-            return '1' if parse_bool(value) else '0'
-        elif key in numeric_fields:
-            return str(float(value))
+    async with redis_context() as redis:
+        user_key = f"{exchange_name}:user:{user_id}"
+
+        json_fields = ["tasks", "running_symbols", "completed_trading_symbols", "enter_symbol_amount_list"]
+        boolean_fields = ["is_running", "stop_task_only"]
+        numeric_fields = ["leverage", "initial_capital"]
+
+        def serialize_value(key: str, value: Any) -> str:
+            if key in json_fields:
+                return json.dumps(value)
+            elif key in boolean_fields:
+                return '1' if parse_bool(value) else '0'
+            elif key in numeric_fields:
+                return str(float(value))
+            else:
+                return str(value)
+
+        if field:
+            value = serialize_value(field, data)
+            await redis.hset(user_key, field, value)
         else:
-            return str(value)
-    
-    if field:
-        value = serialize_value(field, data)
-        await redis.hset(user_key, field, value)
-    else:
-        serialized_data = {key: serialize_value(key, value) for key, value in data.items()}
-        await redis.hmset(user_key, serialized_data)
+            serialized_data = {key: serialize_value(key, value) for key, value in data.items()}
+            await redis.hmset(user_key, serialized_data)
 
 
 async def should_log(redis: Any, log_interval: int = 30) -> bool:
@@ -225,11 +193,8 @@ async def manage_exchange_instance(exchange_name: str, user_id: str) -> AsyncIte
 
 # Cleanup function
 async def cleanup_connections() -> None:
-    global redis_connection, exchange_instances
+    global exchange_instances
     try:
-        if redis_connection:
-            await redis_connection.close()
-            redis_connection = None
         for instance in exchange_instances.values():
             if 'instance' in instance and hasattr(instance['instance'], 'close'):
                 await instance['instance'].close()
@@ -264,7 +229,7 @@ async def centralized_order_cancellation(exchange_name):
     logger = logging.getLogger('order_cancellation')
 
 
-    async with manage_redis_connection() as redis:
+    async with redis_context() as redis:
         try:
             await redis.set('cancel_state', '1')
             cancel_state = True
@@ -418,63 +383,63 @@ async def cancel_orders_batch(exchange_instance, orders_to_cancel, symbol_name):
 #================================================================================================
 
 async def check_status_loop(exchange_name : str) -> None:
-    redis = await get_redis_connection()
     zero_count = {}  # 각 사용자의 연속된 0 카운트를 저장하는 딕셔너리
     first_zero_time = {}  # 각 사용자의 첫 번째 0이 발생한 시간을 저장하는 딕셔너리
     while True:
         try:
-            fetched_user_keys = await redis_database.get_user_keys(exchange_name)
-            running_users = {
-                user_id: user_data 
-                for user_id, user_data in fetched_user_keys.items() 
-                if parse_bool(user_data.get("is_running"))
-                }
-            for user_id, user_data in running_users.items():
-                user_key = f'{exchange_name}:user:{user_id}'
-                user_status = parse_bool(await redis.hget(user_key, 'is_running'))
-                if user_status == True:
-                    is_stopped = await redis.hget(user_key, 'is_stopped')
-                    is_task_stopped = await redis.hget(user_key, 'stop_task_only')
-                    if parse_bool(is_stopped) or parse_bool(is_task_stopped):
-                        await redis.hset(user_key, 'is_running', '0')
-                        await redis.hset(user_key, 'is_stopped', '0')
-                        await redis.hset(user_key, 'stop_task_only', '0')
-                    else:
-                        all_order_length = await fetch_open_orders_length(redis, int(user_id))
-                        #print(f"{user_id}의 모든 주문 길이: {all_order_length}")
-                        if all_order_length == 0: 
-                            
-                            current_time = time.time()
-                            current_minute = datetime.now().minute
-                            if current_minute % 15 == 0:
-                                pass
-                            else:
-                                if user_id not in zero_count:
-                                    zero_count[user_id] = 1
-                                    first_zero_time[user_id] = current_time
-                                    #print(f"{user_id}의 첫 번째 order length 0 발생 시간: {first_zero_time[user_id]}")
-                                    print(f"{user_id}의 첫 번째 order length 0 발생 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                                else:
-                                    if current_time - first_zero_time[user_id] >= 360:  # 2분(120초 for tradingboost, 360 for futures) 경과 확인
-                                        zero_count[user_id] += 1
-                                        print(f"{user_id}의 연속된 0 카운트: {zero_count[user_id]}")
-                                        if zero_count[user_id] >= 6:
-                                            print(f"{user_id}의 연속된 0 카운트가 3 이상입니다. 주문 취소 및 재시작을 시작합니다.")
-                                            # force_restart 로직 시작
-                                            await restart_logic(redis, exchange_name, user_id)
-                                            # 카운트 및 시간 초기화
-                                            del zero_count[user_id]
-                                            del first_zero_time[user_id]
+            async with redis_context() as redis:
+                fetched_user_keys = await redis_database.get_user_keys(exchange_name)
+                running_users = {
+                    user_id: user_data
+                    for user_id, user_data in fetched_user_keys.items()
+                    if parse_bool(user_data.get("is_running"))
+                    }
+                for user_id, user_data in running_users.items():
+                    user_key = f'{exchange_name}:user:{user_id}'
+                    user_status = parse_bool(await redis.hget(user_key, 'is_running'))
+                    if user_status == True:
+                        is_stopped = await redis.hget(user_key, 'is_stopped')
+                        is_task_stopped = await redis.hget(user_key, 'stop_task_only')
+                        if parse_bool(is_stopped) or parse_bool(is_task_stopped):
+                            await redis.hset(user_key, 'is_running', '0')
+                            await redis.hset(user_key, 'is_stopped', '0')
+                            await redis.hset(user_key, 'stop_task_only', '0')
                         else:
-                            # all_order_length가 0이 아닌 경우, 카운트 및 시간 초기화
-                            if user_id in zero_count:
-                                del zero_count[user_id]
-                            if user_id in first_zero_time:
-                                del first_zero_time[user_id]
-                                
+                            all_order_length = await fetch_open_orders_length(redis, int(user_id))
+                            #print(f"{user_id}의 모든 주문 길이: {all_order_length}")
+                            if all_order_length == 0:
+
+                                current_time = time.time()
+                                current_minute = datetime.now().minute
+                                if current_minute % 15 == 0:
+                                    pass
+                                else:
+                                    if user_id not in zero_count:
+                                        zero_count[user_id] = 1
+                                        first_zero_time[user_id] = current_time
+                                        #print(f"{user_id}의 첫 번째 order length 0 발생 시간: {first_zero_time[user_id]}")
+                                        print(f"{user_id}의 첫 번째 order length 0 발생 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                                    else:
+                                        if current_time - first_zero_time[user_id] >= 360:  # 2분(120초 for tradingboost, 360 for futures) 경과 확인
+                                            zero_count[user_id] += 1
+                                            print(f"{user_id}의 연속된 0 카운트: {zero_count[user_id]}")
+                                            if zero_count[user_id] >= 6:
+                                                print(f"{user_id}의 연속된 0 카운트가 3 이상입니다. 주문 취소 및 재시작을 시작합니다.")
+                                                # force_restart 로직 시작
+                                                await restart_logic(redis, exchange_name, user_id)
+                                                # 카운트 및 시간 초기화
+                                                del zero_count[user_id]
+                                                del first_zero_time[user_id]
+                            else:
+                                # all_order_length가 0이 아닌 경우, 카운트 및 시간 초기화
+                                if user_id in zero_count:
+                                    del zero_count[user_id]
+                                if user_id in first_zero_time:
+                                    del first_zero_time[user_id]
+
         except Exception as e:
             print(f"Error in check_status_loop: {e}")
-        
+
         await asyncio.sleep(60)  # 1분 대기
                         
 async def get_request_body(redis: Any, exchange_id : str , user_id : int) -> str | None:
@@ -558,23 +523,23 @@ async def schedule_order_cancellation(exchange_name):
 async def reset_cache():
     current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print(f"Resetting cache at {current_time_str}")
-    redis_client = await get_redis_connection()
-    patterns = [
-        "orders:*:*:*:symbol:*:orders",
-        "orders:*:user:*:symbol:*:order_placed",
-        "orders:*:user:*:symbol:*:order_placed_index",
-        "okx:user:*:symbol:*:order_placed"# 새로 추가된 패턴
-    ]
-    
-    for pattern in patterns:
-        cursor = '0'
-        while True:
-            cursor, keys = await redis_client.scan(cursor=cursor, match=pattern, count=100)
-            if keys:
-                await redis_client.delete(*keys)
-            if cursor == '0':
-                break
-    print("Cache reset completed")
+    async with redis_context() as redis_client:
+        patterns = [
+            "orders:*:*:*:symbol:*:orders",
+            "orders:*:user:*:symbol:*:order_placed",
+            "orders:*:user:*:symbol:*:order_placed_index",
+            "okx:user:*:symbol:*:order_placed"# 새로 추가된 패턴
+        ]
+
+        for pattern in patterns:
+            cursor = '0'
+            while True:
+                cursor, keys = await redis_client.scan(cursor=cursor, match=pattern, count=100)
+                if keys:
+                    await redis_client.delete(*keys)
+                if cursor == '0':
+                    break
+        print("Cache reset completed")
     
 
 async def schedule_cache_reset():
@@ -681,11 +646,11 @@ async def check_and_update_positions(exchange_name):
 
         while True:
             try:
-                async with manage_redis_connection() as redis:
+                async with redis_context() as redis:
                     fetched_user_keys = await redis_database.get_user_keys(exchange_name)
                     running_users = {
-                        user_id: user_data 
-                        for user_id, user_data in fetched_user_keys.items() 
+                        user_id: user_data
+                        for user_id, user_data in fetched_user_keys.items()
                         if parse_bool(user_data.get("is_running"))
                     }
                     #print(f'Total running users: {len(running_users)}')
@@ -930,22 +895,22 @@ async def order_fetching_loop(exchange_name: str, max_concurrent: int = 10) -> N
 
     async def process_user(user_id: str, user_data: Dict[str, Any], okay_to_log: bool) -> None:
         async with semaphore:
-            async with manage_redis_connection() as redis, manage_exchange_instance(exchange_name, user_id) as exchange_instance:
+            async with redis_context() as redis, manage_exchange_instance(exchange_name, user_id) as exchange_instance:
                 await fetch_and_store_orders(exchange_name, user_id, exchange_instance, okay_to_log, redis=redis)
 
     while True:
         try:
-            async with manage_redis_connection() as redis:
+            async with redis_context() as redis:
                 fetched_user_keys = await redis_database.get_user_keys(exchange_name)
                 running_users = {
-                    user_id: user_data 
-                    for user_id, user_data in fetched_user_keys.items() 
+                    user_id: user_data
+                    for user_id, user_data in fetched_user_keys.items()
                     if parse_bool(user_data.get("is_running"))
                 }
                 okay_to_log = await should_log(redis)
                 if okay_to_log:
                     logger.info(f'Total running users: {len(running_users)}')
-                
+
                 tasks = [process_user(user_id, user_data, okay_to_log) for user_id, user_data in running_users.items()]
                 await asyncio.gather(*tasks)
 

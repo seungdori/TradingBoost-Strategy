@@ -3,6 +3,8 @@
 import json
 from typing import List
 
+from shared.database.redis_patterns import redis_context, RedisTTL
+
 
 async def set_running_symbols(redis, user_key, symbols):
     """실행 중인 심볼 목록을 업데이트합니다."""
@@ -24,28 +26,27 @@ async def check_running_symbols(redis, user_key, symbol):
 
 async def get_placed_prices(exchange_name: str, user_id: int, symbol_name: str) -> List[float]:
     """배치된 주문 가격 목록을 조회합니다."""
-    from core.redis import get_redis_connection
-    redis = await get_redis_connection()
-    redis_key = f'placed_prices:{exchange_name}:{user_id}:{symbol_name}'
-    prices = await redis.lrange(redis_key, 0, -1)
-    return [float(price) for price in prices]
+    async with redis_context() as redis:
+        redis_key = f'placed_prices:{exchange_name}:{user_id}:{symbol_name}'
+        prices = await redis.lrange(redis_key, 0, -1)
+        return [float(price) for price in prices]
 
 
 async def add_placed_price(exchange_name: str, user_id: int, symbol_name: str, price: float) -> None:
     """배치된 주문 가격을 추가합니다."""
-    from core.redis import get_redis_connection
-    redis = await get_redis_connection()
-    redis_key = f'placed_prices:{exchange_name}:{user_id}:{symbol_name}'
-    await redis.rpush(redis_key, str(price))
+    async with redis_context() as redis:
+        redis_key = f'placed_prices:{exchange_name}:{user_id}:{symbol_name}'
+        await redis.rpush(redis_key, str(price))
+        # TTL 설정 - 7일 후 자동 삭제 (ORDER_DATA)
+        await redis.expire(redis_key, RedisTTL.ORDER_DATA)
 
 
 async def is_order_placed(exchange_name: str, user_id: int, symbol_name: str, grid_level: int) -> bool:
     """특정 그리드 레벨에 주문이 배치되었는지 확인합니다."""
-    from core.redis import get_redis_connection
-    redis = await get_redis_connection()
-    redis_key = f'order_placed:{exchange_name}:{user_id}:{symbol_name}'
-    order_placed = await redis.hget(redis_key, str(grid_level))
-    return order_placed is not None and order_placed != b'0'
+    async with redis_context() as redis:
+        redis_key = f'order_placed:{exchange_name}:{user_id}:{symbol_name}'
+        order_placed = await redis.hget(redis_key, str(grid_level))
+        return order_placed is not None and order_placed != b'0'
 
 
 async def is_price_placed(exchange_name: str, user_id: int, symbol_name: str, price: float, grid_level: int | None = None, grid_num: int = 20) -> bool:
@@ -56,32 +57,31 @@ async def is_price_placed(exchange_name: str, user_id: int, symbol_name: str, pr
 
 async def set_order_placed(exchange_name, user_id, symbol, grid_level, level_index=None):
     """주문 배치 상태를 설정합니다."""
-    from core.redis import get_redis_connection
-    redis = await get_redis_connection()
-    redis_key = f'order_placed:{exchange_name}:{user_id}:{symbol}'
-    if level_index is not None:
-        await redis.hset(redis_key, str(level_index), '1')
-    else:
-        await redis.hset(redis_key, str(grid_level), '1')
+    async with redis_context() as redis:
+        redis_key = f'order_placed:{exchange_name}:{user_id}:{symbol}'
+        if level_index is not None:
+            await redis.hset(redis_key, str(level_index), '1')
+        else:
+            await redis.hset(redis_key, str(grid_level), '1')
+        # TTL 설정 - 7일 후 자동 삭제 (ORDER_DATA)
+        await redis.expire(redis_key, RedisTTL.ORDER_DATA)
 
 
 async def get_order_placed(exchange_name, user_id, symbol, grid_num):
     """주문 배치 상태를 조회합니다."""
-    from core.redis import get_redis_connection
-    redis = await get_redis_connection()
-    redis_key = f'order_placed:{exchange_name}:{user_id}:{symbol}'
-    order_placed = {}
-    for i in range(grid_num):
-        value = await redis.hget(redis_key, str(i))
-        if value:
-            order_placed[i] = value.decode('utf-8') if isinstance(value, bytes) else value
-    return order_placed
+    async with redis_context() as redis:
+        redis_key = f'order_placed:{exchange_name}:{user_id}:{symbol}'
+        order_placed = {}
+        for i in range(grid_num):
+            value = await redis.hget(redis_key, str(i))
+            if value:
+                order_placed[i] = value.decode('utf-8') if isinstance(value, bytes) else value
+        return order_placed
 
 
 async def reset_order_placed(exchange_name, user_id, symbol, grid_num):
     """주문 배치 상태를 초기화합니다."""
-    from core.redis import get_redis_connection
-    redis = await get_redis_connection()
-    redis_key = f'order_placed:{exchange_name}:{user_id}:{symbol}'
-    await redis.delete(redis_key)
-    print(f"Reset order_placed for {symbol}")
+    async with redis_context() as redis:
+        redis_key = f'order_placed:{exchange_name}:{user_id}:{symbol}'
+        await redis.delete(redis_key)
+        print(f"Reset order_placed for {symbol}")

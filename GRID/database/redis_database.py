@@ -244,6 +244,8 @@ async def get_order_placed(redis: Redis, exchange_name: str, user_id: int, symbo
 async def set_order_placed(redis: Redis, exchange_name: str, user_id: int, symbol_name: str, level: int, status: bool) -> None:
     key = f"orders:{exchange_name}:user:{user_id}:symbol:{symbol_name}:order_placed"
     await redis.hset(key, str(level), 1 if status else 0)
+    # TTL 설정 - 7일 후 자동 삭제 (ORDER_DATA)
+    await redis.expire(key, RedisTTL.ORDER_DATA)
 
 # 특정 그리드 레벨의 정보를 업데이트하는 함수
 async def update_grid_level(
@@ -256,13 +258,15 @@ async def update_grid_level(
 ) -> None:
     base_key = f"{exchange_name}:user:{user_id}:symbol:{symbol_name}"
     grid_key = f"{base_key}:active_grid:{grid_level}"
-    
+
     async with redis.pipeline(transaction=True) as pipe:
         for field, value in updated_info.items():
             if value is not None:
                 await pipe.hset(grid_key, field, json.dumps(value))
             else:
                 await pipe.hset(grid_key, field, "")
+        # TTL 설정 - 7일 후 자동 삭제 (ORDER_DATA)
+        await pipe.expire(grid_key, RedisTTL.ORDER_DATA)
         await pipe.execute()
 
 async def update_active_grid(
@@ -280,59 +284,84 @@ async def update_active_grid(
     base_key = f"{exchange_name}:user:{user_id}:symbol:{symbol_name}"
     grid_key = f"{base_key}:active_grid:{grid_level}"
 
-    # 현재 그리드 정보 가져오기
-    current_grid_info = await redis.hgetall(grid_key)
+    # Lua 스크립트 - PnL과 grid_count의 원자적 증가를 위해 사용
+    # JSON 형식으로 저장되므로 따옴표로 감싸진 숫자 처리
+    lua_script = """
+    local key = KEYS[1]
+    local pnl_increment = tonumber(ARGV[1])
+    local count_increment = tonumber(ARGV[2])
 
-    # 기존 데이터를 파싱하거나 새로운 데이터 초기화
-    if current_grid_info:
-        grid_data: dict[str, Any] = {}
-        for field, value in current_grid_info.items():
-            try:
-                # value가 문자열이든 바이트든 처리할 수 있도록 함
-                if isinstance(value, bytes):
-                    value = value.decode()
-                grid_data[field] = json.loads(value) if value else None
-            except json.JSONDecodeError:
-                print(f"Failed to decode JSON for field {field}: {value}")
-                grid_data[field] = value  # JSON 디코딩에 실패하면 원래 값을 사용
-    else:
-        grid_data = {
-            'entry_price': 0.0,
-            'position_size': 0.0,
-            'grid_count': 0,
-            'pnl': 0.0,
-            'execution_time': None
-        }
+    -- 현재 값 가져오기 (JSON 형식: "100.5")
+    local current_pnl_str = redis.call('HGET', key, 'pnl')
+    local current_count_str = redis.call('HGET', key, 'grid_count')
 
+    local current_pnl = 0.0
+    local current_count = 0
 
-    # 데이터 업데이트
-    if entry_price is not None:
-        grid_data['entry_price'] = entry_price
-    if position_size is not None:
-        grid_data['position_size'] = position_size
-    if pnl is not None:
-        current_pnl = grid_data.get('pnl', 0.0)
-        grid_data['pnl'] = (current_pnl or 0.0) + pnl
-    if grid_count is not None:
-        current_count = grid_data.get('grid_count', 0)
-        grid_data['grid_count'] = (current_count or 0) + grid_count
-    if execution_time:
-        grid_data['execution_time'] = execution_time.isoformat()
+    -- JSON에서 숫자 추출 (따옴표 제거)
+    if current_pnl_str then
+        current_pnl = tonumber(string.match(current_pnl_str, '[%d%.%-]+')) or 0.0
+    end
 
-    # 업데이트된 데이터 저장
-    update_dict: dict[str, str] = {}
-    for field, value in grid_data.items():
-        if value is not None:
-            try:
-                update_dict[field] = json.dumps(value)
-            except (TypeError, ValueError) as e:
-                print(f"Error encoding {field}: {e}")
-                update_dict[field] = str(value)  # 인코딩 실패 시 문자열로 저장
+    if current_count_str then
+        current_count = tonumber(string.match(current_count_str, '[%d%-]+')) or 0
+    end
 
-    # Use hset with mapping instead of deprecated hmset
+    -- 증가 적용
+    local new_pnl = current_pnl + pnl_increment
+    local new_count = current_count + count_increment
+
+    -- JSON 형식으로 저장 (따옴표로 감싸기)
+    redis.call('HSET', key, 'pnl', string.format('%.8f', new_pnl))
+    redis.call('HSET', key, 'grid_count', tostring(new_count))
+
+    -- TTL 설정 - 7일
+    redis.call('EXPIRE', key, 604800)
+
+    return {new_pnl, new_count}
+    """
+
+    # 파이프라인을 사용하여 원자적 업데이트
     async with redis.pipeline(transaction=True) as pipe:
-        await pipe.hset(grid_key, mapping=cast(Mapping[str | bytes, bytes | float | int | str], update_dict))
-        await pipe.execute()
+        # 증분 업데이트가 필요한 경우 Lua 스크립트 사용
+        if pnl is not None or grid_count is not None:
+            pnl_increment = pnl if pnl is not None else 0.0
+            count_increment = grid_count if grid_count is not None else 0
+
+            # Lua 스크립트 실행
+            await pipe.eval(
+                lua_script,
+                1,  # KEYS 개수
+                grid_key,  # KEYS[1]
+                pnl_increment,  # ARGV[1]
+                count_increment  # ARGV[2]
+            )
+
+        # 직접 설정이 필요한 필드들
+        if entry_price is not None:
+            await pipe.hset(grid_key, 'entry_price', json.dumps(entry_price))
+        if position_size is not None:
+            await pipe.hset(grid_key, 'position_size', json.dumps(position_size))
+        if execution_time is not None:
+            await pipe.hset(grid_key, 'execution_time', json.dumps(execution_time.isoformat()))
+
+        # TTL 설정 (Lua 스크립트에서 이미 설정하지만 안전장치)
+        await pipe.expire(grid_key, RedisTTL.ORDER_DATA)
+
+        # 파이프라인 실행
+        results = await pipe.execute()
+
+    # 업데이트된 데이터 다시 가져오기
+    current_grid_info = await redis.hgetall(grid_key)
+    grid_data: dict[str, Any] = {}
+
+    for field, value in current_grid_info.items():
+        try:
+            if isinstance(value, bytes):
+                value = value.decode()
+            grid_data[field] = json.loads(value) if value else None
+        except json.JSONDecodeError:
+            grid_data[field] = value
 
     return grid_data
 

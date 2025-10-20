@@ -221,7 +221,7 @@ class RedisPoolMonitor:
             await redis.ping()
             latency = (time.time() - latency_start) * 1000  # Convert to milliseconds
 
-            await redis.close()
+            await redis.aclose()
 
             # Determine health based on latency
             if latency > 100:  # > 100ms is slow

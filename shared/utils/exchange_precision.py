@@ -139,7 +139,7 @@ async def get_price_precision(
         await set_redis_data(redis, redis_key, precision, expiry=86400)
         return precision
     finally:
-        if new_redis_flag and hasattr(redis, 'aclose'):
+        if new_redis_flag and redis is not None:
             await redis.aclose()
 
 

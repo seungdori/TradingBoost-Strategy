@@ -107,10 +107,10 @@ async def initialize_trading_session(
 
             return session_data
 
-        except Exception as e:
-            print(f"An error occurred in initialize_trading_session: {e}")
-            print(traceback.format_exc())
-            raise
+    except Exception as e:
+        print(f"An error occurred in initialize_trading_session: {e}")
+        print(traceback.format_exc())
+        raise
 
 
 async def get_exchange_instance(

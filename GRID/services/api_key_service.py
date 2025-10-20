@@ -6,24 +6,10 @@ import redis.asyncio as redis
 
 from shared.config import settings
 from shared.dtos.exchange import ApiKeyDto, ExchangeApiKeyDto
+from shared.database.redis_patterns import redis_context
 
 logger = logging.getLogger(__name__)
 
-# Redis 클라이언트 생성 헬퍼 함수
-async def _get_redis_client():
-    """Redis 클라이언트를 생성하고 반환합니다."""
-    if settings.REDIS_PASSWORD:
-        return redis.from_url(
-            f"redis://:{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}",
-            encoding='utf-8',
-            decode_responses=True
-        )
-    else:
-        return redis.from_url(
-            f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}",
-            encoding='utf-8',
-            decode_responses=True
-        )
 
 class ApiKeyStore:
     def __init__(self, redis_client: redis.Redis, user_id: str) -> None:
@@ -49,7 +35,7 @@ class ApiKeyStore:
         except Exception as e:
             logger.error(f"Binance API 키 조회 실패: {str(e)}")
             raise
-        
+
     async def get_upbit_keys(self) -> ApiKeyDto:
         """Upbit API 키 조회"""
         try:
@@ -109,7 +95,7 @@ class ApiKeyStore:
         except Exception as e:
             logger.error(f"OKX API 키 조회 실패: {str(e)}")
             raise
-        
+
     async def set_binance_keys(self, api_key: str, secret_key: str) -> None:
         """Binance API 키 설정"""
         try:
@@ -160,6 +146,7 @@ class ApiKeyStore:
             logger.error(f"OKX API 키 설정 실패: {str(e)}")
             raise
 
+
 # ExchangeStore 클래스 정의
 class ExchangeStore:
     def __init__(self, redis_client: redis.Redis) -> None:
@@ -168,142 +155,102 @@ class ExchangeStore:
     def get_key_store(self) -> ApiKeyStore:
         return self._key_store
 
-# 전역 인스턴스 생성 (redis_client는 외부에서 주입받아야 함)
-# exchange_store = ExchangeStore(redis_client)  # 사용 시 redis_client를 전달받아야 함
 
-async def get_exchange_api_keys(exchange_name: str, redis_client: Optional[redis.Redis] = None) -> ApiKeyDto:
+async def get_exchange_api_keys(exchange_name: str) -> ApiKeyDto:
     """
     거래소 이름에 따라 API 키 정보를 조회합니다.
 
     Args:
         exchange_name (str): 거래소 이름 (binance, upbit, bitget, okx 등)
-        redis_client: Redis 클라이언트 인스턴스 (선택사항, None이면 자동 생성)
 
     Returns:
-        ApiKeys: API 키 정보 객체
+        ApiKeyDto: API 키 정보 객체
 
     Raises:
         Exception: 알 수 없는 거래소 이름일 경우
     """
-    # Redis 클라이언트가 없으면 자동 생성
-    if redis_client is None:
-        redis_client = await _get_redis_client()
-        should_close = True
-    else:
-        should_close = False
-
-    try:
-        exchange_store = ExchangeStore(redis_client)
+    async with redis_context() as redis:
+        exchange_store = ExchangeStore(redis)
         key_store: ApiKeyStore = exchange_store.get_key_store()
 
         if exchange_name == "binance":
-            result = await key_store.get_binance_keys()
+            return await key_store.get_binance_keys()
         elif exchange_name == "binance_spot":
-            result = await key_store.get_binance_keys()
+            return await key_store.get_binance_keys()
         elif exchange_name == "upbit":
-            result = await key_store.get_upbit_keys()
+            return await key_store.get_upbit_keys()
         elif exchange_name == "bitget":
-            result = await key_store.get_bitget_keys()
+            return await key_store.get_bitget_keys()
         elif exchange_name == "okx":
-            result = await key_store.get_okx_keys()
+            return await key_store.get_okx_keys()
         elif exchange_name == "bitget_spot":
-            result = await key_store.get_bitget_keys()
+            return await key_store.get_bitget_keys()
         elif exchange_name == "okx_spot":
-            result = await key_store.get_okx_keys()
+            return await key_store.get_okx_keys()
         else:
             raise Exception('Unknown exchange')
 
-        return result
-    finally:
-        # 자동 생성한 클라이언트는 닫기
-        if should_close and redis_client:
-            await redis_client.close()
 
-async def update_exchange_api_keys(dto: ExchangeApiKeyDto, redis_client: Optional[redis.Redis] = None) -> ApiKeyDto:
+async def update_exchange_api_keys(dto: ExchangeApiKeyDto) -> ApiKeyDto:
     """
     거래소 API 키 정보를 업데이트합니다.
 
     Args:
         dto (ExchangeApiKeyDto): API 키 정보 DTO
-        redis_client: Redis 클라이언트 인스턴스 (선택사항, None이면 자동 생성)
 
     Returns:
-        ApiKeys: 업데이트된 API 키 정보
+        ApiKeyDto: 업데이트된 API 키 정보
 
     Raises:
         Exception: 알 수 없는 거래소 이름일 경우
     """
-    # Redis 클라이언트가 없으면 자동 생성
-    if redis_client is None:
-        redis_client = await _get_redis_client()
-        should_close = True
-    else:
-        should_close = False
-
-    try:
+    async with redis_context() as redis:
         exchange_name = dto.exchange_name
         api_key = dto.api_key
         secret = dto.secret_key
         password = dto.password
-        exchange_store = ExchangeStore(redis_client)
+        exchange_store = ExchangeStore(redis)
         key_store: ApiKeyStore = exchange_store.get_key_store()
 
         if exchange_name == 'binance':
             await key_store.set_binance_keys(api_key=api_key, secret_key=secret)
-            result = await key_store.get_binance_keys()
+            return await key_store.get_binance_keys()
         elif exchange_name == 'upbit':
             await key_store.set_upbit_keys(api_key=api_key, secret_key=secret)
-            result = await key_store.get_upbit_keys()
+            return await key_store.get_upbit_keys()
         elif exchange_name == 'bitget':
             await key_store.set_bitget_keys(api_key=api_key, secret_key=secret, password=password)
-            result = await key_store.get_bitget_keys()
+            return await key_store.get_bitget_keys()
         elif exchange_name == 'okx':
             await key_store.set_okx_keys(api_key=api_key, secret_key=secret, password=password)
-            result = await key_store.get_okx_keys()
+            return await key_store.get_okx_keys()
         elif exchange_name == 'binance_spot':
             await key_store.set_binance_keys(api_key=api_key, secret_key=secret)
-            result = await key_store.get_binance_keys()
+            return await key_store.get_binance_keys()
         elif exchange_name == 'bitget_spot':
             await key_store.set_bitget_keys(api_key=api_key, secret_key=secret, password=password)
-            result = await key_store.get_bitget_keys()
+            return await key_store.get_bitget_keys()
         elif exchange_name == 'okx_spot':
             await key_store.set_okx_keys(api_key=api_key, secret_key=secret, password=password)
-            result = await key_store.get_okx_keys()
+            return await key_store.get_okx_keys()
         else:
             raise Exception('Unknown exchange')
 
-        return result
-    finally:
-        # 자동 생성한 클라이언트는 닫기
-        if should_close and redis_client:
-            await redis_client.close()
 
-# 사용자별 API 키 관리 함수
-async def get_user_api_keys(user_id: str, redis_client: Optional[redis.Redis] = None) -> dict[str, str]:
+async def get_user_api_keys(user_id: str) -> dict[str, str]:
     """
     사용자 ID를 기반으로 Redis에서 API 키를 가져오는 함수
 
     Args:
         user_id (str): 사용자 ID
-        redis_client: Redis 클라이언트 인스턴스 (선택사항, None이면 자동 생성)
 
     Returns:
         Dict[str, str]: API 키 정보
     """
-    # Redis 클라이언트가 없으면 자동 생성
-    if redis_client is None:
-        redis_client = await _get_redis_client()
-        should_close = True
-    else:
-        should_close = False
-
-    try:
-        api_keys = await redis_client.hgetall(f"user:{user_id}:api:keys")
-        return api_keys
-    except Exception as e:
-        logger.error(f"사용자 API 키 조회 실패: {str(e)}")
-        raise
-    finally:
-        # 자동 생성한 클라이언트는 닫기
-        if should_close and redis_client:
-            await redis_client.close()
+    async with redis_context() as redis:
+        try:
+            api_keys = await redis.hgetall(f"user:{user_id}:api:keys")
+            return api_keys
+        except Exception as e:
+            logger.error(f"사용자 API 키 조회 실패: {str(e)}")
+            raise

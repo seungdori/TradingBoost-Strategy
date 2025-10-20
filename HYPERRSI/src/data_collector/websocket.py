@@ -141,7 +141,7 @@ class OKXWebSocket:
             try:
                 await self.ws.send("ping")
                 await asyncio.sleep(20)  # 20초 간격
-            except:
+            except Exception as e:
                 self.connected = False
                 break
                 

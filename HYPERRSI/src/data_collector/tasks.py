@@ -435,7 +435,7 @@ def save_candles_with_indicators_to_redis(symbol: str, timeframe: int, candles_w
             obj = json.loads(item)
             if "timestamp" in obj:
                 candle_map[obj["timestamp"]] = obj
-        except:
+        except Exception as e:
             pass
 
     # 새 데이터 덮어쓰기

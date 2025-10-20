@@ -325,7 +325,7 @@ def setup_json_logger(
     return logger
 
 
-def should_log(log_key: str, interval_seconds: int = 300, _last_log_times: dict = {}) -> bool:
+def should_log(log_key: str, interval_seconds: int = 300, _last_log_times: dict | None = None) -> bool:
     """
     지정된 키에 대해 로깅을 해야 하는지 확인합니다.
     (로그 스팸 방지용)
@@ -343,6 +343,8 @@ def should_log(log_key: str, interval_seconds: int = 300, _last_log_times: dict 
         ...     logger.error("API error occurred")
     """
     import time
+    if _last_log_times is None:
+        _last_log_times = {}
     current_time = time.time()
     last_logged = _last_log_times.get(log_key, 0)
 

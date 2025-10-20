@@ -74,7 +74,7 @@ def map_exchange_error(error: Exception) -> str:
             
         # 맵핑된 메시지 반환
         return error_mappings.get(error_code, f"❌ 알 수 없는 오류가 발생했습니다. (코드: {error_code})")
-    except:
+    except Exception as e:
         traceback.print_exc()
         # 에러 코드 추출 실패시 기본 메시지
         return f"❌ 거래 실행 중 오류가 발생했습니다: {str(error)}"

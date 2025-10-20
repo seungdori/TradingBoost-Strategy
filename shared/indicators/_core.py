@@ -73,5 +73,5 @@ def dynamic_round(value):
         else:
             # 그 이상이면 정수
             return round(value)
-    except:
+    except Exception as e:
         return value

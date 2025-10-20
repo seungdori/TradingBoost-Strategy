@@ -405,7 +405,7 @@ async def fetch_ohlcvs(exchange_instance, symbol, timeframe, since, limit):
     elif isinstance(since, str):
         try:
             since = int(pd.Timestamp(since).timestamp() * 1000)
-        except:
+        except Exception as e:
             # 변환할 수 없는 문자열이면 90일 전으로 설정
             since = int(time.time() * 1000) - (86400 * 1000 * 90)
     # since가 None이면 90일 전으로 설정
@@ -772,8 +772,8 @@ async def fetch_symbols(exchange_name):
             symbols = await get_all_binance_usdt_spot_symbols()
         elif exchange_name == 'okx_spot':
             symbols = await get_all_okx_usdt_spot_symbols()
-    except:
-        print(f"Error fetching symbols for {exchange_name}")
+    except Exception as e:
+        print(f"Error fetching symbols for {exchange_name}: {e}")
         symbols = []
     return symbols
 

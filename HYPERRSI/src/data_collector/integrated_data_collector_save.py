@@ -511,7 +511,7 @@ class OKXMultiTimeframeWebSocket:
                     obj = json.loads(item)
                     if "timestamp" in obj:
                         candle_map[obj["timestamp"]] = obj
-                except:
+                except Exception as e:
                     pass
             
             # 마지막 캔들에 대해서만 인디케이터 재계산
@@ -572,7 +572,7 @@ class OKXMultiTimeframeWebSocket:
                     obj = json.loads(item)
                     if "timestamp" in obj:
                         candle_map[obj["timestamp"]] = obj
-                except:
+                except Exception as e:
                     pass
             
             # 새 데이터 덮어쓰기
@@ -605,7 +605,7 @@ class OKXMultiTimeframeWebSocket:
                     await self.ws.send("ping")
                 logger.debug("Ping sent to server")
                 await asyncio.sleep(20)  # 20초 간격
-            except:
+            except Exception as e:
                 logger.error("Heartbeat failed, connection lost", exc_info=True)
                 self.connected = False
                 await self.handle_disconnect()
@@ -1180,7 +1180,7 @@ def save_candles_with_indicators_to_redis(symbol: str, timeframe: int, candles_w
             obj = json.loads(item)
             if "timestamp" in obj:
                 candle_map[obj["timestamp"]] = obj
-        except:
+        except Exception as e:
             pass
 
     # 새 데이터 덮어쓰기

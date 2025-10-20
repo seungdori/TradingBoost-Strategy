@@ -123,20 +123,20 @@ async def get_indicator_state(exchange_name: str, symbol: str, direction: str = 
     IndicatorState
         복원된 지표 상태 객체
     """
-    from shared.database.redis import get_redis
+    from shared.database.redis_patterns import redis_context
 
-    redis_client = await get_redis()
-    key = f"{exchange_name}:{symbol}:{direction}:indicator_state"
-    state_json = await redis_client.get(key)
+    async with redis_context() as redis:
+        key = f"{exchange_name}:{symbol}:{direction}:indicator_state"
+        state_json = await redis.get(key)
 
-    if state_json:
-        try:
-            state_dict = json.loads(state_json)
-            return IndicatorState.from_dict(state_dict)
-        except Exception as e:
-            logging.error(f"지표 상태 복원 중 오류: {e}")
+        if state_json:
+            try:
+                state_dict = json.loads(state_json)
+                return IndicatorState.from_dict(state_dict)
+            except Exception as e:
+                logging.error(f"지표 상태 복원 중 오류: {e}")
 
-    return IndicatorState()
+        return IndicatorState()
 
 
 async def save_indicator_state(state: IndicatorState, exchange_name: str, symbol: str, direction: str = 'long') -> None:
@@ -154,13 +154,13 @@ async def save_indicator_state(state: IndicatorState, exchange_name: str, symbol
     direction : str
         거래 방향 ('long', 'short', 'long-short')
     """
-    from shared.database.redis import get_redis
+    from shared.database.redis_patterns import redis_context
 
-    redis_client = await get_redis()
-    key = f"{exchange_name}:{symbol}:{direction}:indicator_state"
-    state_dict = state.to_dict()
-    state_json = json.dumps(state_dict)
-    await redis_client.set(key, state_json)
+    async with redis_context() as redis:
+        key = f"{exchange_name}:{symbol}:{direction}:indicator_state"
+        state_dict = state.to_dict()
+        state_json = json.dumps(state_dict)
+        await redis.set(key, state_json)
 
-    # TTL 설정 (3일)
-    await redis_client.expire(key, 60 * 60 * 24 * 3)
+        # TTL 설정 (3일)
+        await redis.expire(key, 60 * 60 * 24 * 3)

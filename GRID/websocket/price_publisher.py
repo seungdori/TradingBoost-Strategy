@@ -36,12 +36,12 @@ class CentralizedPriceManager:
                     self.symbols = [symbol for symbol in self.symbols if symbol.endswith('USDT:USDT')]
                     logging.info(f"Initialized with {len(self.symbols)} symbols")
                     return
-                except Exception as e:
-                    retry_count += 1
-                    logging.error(f"Initialization error (attempt {retry_count}/{self.max_retries}): {e}")
-                    if retry_count >= self.max_retries:
-                        raise
-                    await asyncio.sleep(self.retry_delay)
+            except Exception as e:
+                retry_count += 1
+                logging.error(f"Initialization error (attempt {retry_count}/{self.max_retries}): {e}")
+                if retry_count >= self.max_retries:
+                    raise
+                await asyncio.sleep(self.retry_delay)
 
     async def start(self):
         await self.initialize()

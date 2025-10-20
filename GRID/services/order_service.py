@@ -11,14 +11,10 @@ import logging
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
+from shared.database.redis_patterns import redis_context, RedisTTL
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-
-async def get_redis_connection():
-    """Get Redis connection from GRID.core.redis"""
-    from GRID.core.redis import get_redis_connection as core_get_redis
-    return await core_get_redis()
 
 
 def parse_bool(value):
@@ -46,17 +42,17 @@ async def get_placed_prices(exchange_name: str, user_id: int, symbol_name: str) 
     Returns:
         List of placed prices
     """
-    redis_client = await get_redis_connection()
-    key = f"orders:{exchange_name}:user:{user_id}:symbol:{symbol_name}:orders"
-    cached_data = await redis_client.get(key)
-    if cached_data:
-        try:
-            data = json.loads(cached_data)
-            return [float(price) for price in data if price is not None]  # None 값 필터링 및 float 변환
-        except (json.JSONDecodeError, ValueError) as e:
-            logging.error(f"Error decoding cached data: {e}")
-            return []
-    return []
+    async with redis_context() as redis_client:
+        key = f"orders:{exchange_name}:user:{user_id}:symbol:{symbol_name}:orders"
+        cached_data = await redis_client.get(key)
+        if cached_data:
+            try:
+                data = json.loads(cached_data)
+                return [float(price) for price in data if price is not None]  # None 값 필터링 및 float 변환
+            except (json.JSONDecodeError, ValueError) as e:
+                logging.error(f"Error decoding cached data: {e}")
+                return []
+        return []
 
 
 async def add_placed_price(exchange_name: str, user_id: int, symbol_name: str, price: float) -> None:
@@ -69,12 +65,12 @@ async def add_placed_price(exchange_name: str, user_id: int, symbol_name: str, p
         symbol_name: Symbol name
         price: Order price
     """
-    redis_client = await get_redis_connection()
-    key = f"orders:{exchange_name}:user:{user_id}:symbol:{symbol_name}:orders"
-    prices = await get_placed_prices(exchange_name, user_id, symbol_name)
-    if price not in prices:
-        prices.append(price)
-        await redis_client.setex(key, 45, json.dumps(prices))  # 45초 동안 캐시 유지
+    async with redis_context() as redis_client:
+        key = f"orders:{exchange_name}:user:{user_id}:symbol:{symbol_name}:orders"
+        prices = await get_placed_prices(exchange_name, user_id, symbol_name)
+        if price not in prices:
+            prices.append(price)
+            await redis_client.setex(key, 45, json.dumps(prices))  # 45초 동안 캐시 유지
 
 
 async def is_order_placed(exchange_name: str, user_id: int, symbol_name: str, grid_level: int) -> bool:
@@ -90,14 +86,14 @@ async def is_order_placed(exchange_name: str, user_id: int, symbol_name: str, gr
     Returns:
         True if order is placed, False otherwise
     """
-    redis_client = await get_redis_connection()
-    key = f'orders:{exchange_name}:user:{user_id}:symbol:{symbol_name}:order_placed_index'
+    async with redis_context() as redis_client:
+        key = f'orders:{exchange_name}:user:{user_id}:symbol:{symbol_name}:order_placed_index'
 
-    cached_data = parse_bool(await redis_client.hget(key, str(grid_level)))
-    if cached_data == True:
-        await asyncio.sleep(0.1)
-        return True
-    return False
+        cached_data = parse_bool(await redis_client.hget(key, str(grid_level)))
+        if cached_data == True:
+            await asyncio.sleep(0.1)
+            return True
+        return False
 
 
 async def is_price_placed(exchange_name: str, user_id: int, symbol_name: str, price: float, grid_level: int | None = None, grid_num: int = 20) -> bool:
@@ -146,16 +142,16 @@ async def set_order_placed(exchange_name, user_id, symbol, grid_level, level_ind
         grid_level: Grid level
         level_index: Optional level index
     """
-    redis = await get_redis_connection()
-    order_placed_key = f'orders:{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed'
-    if level_index is not None:
-        order_placed_index = f'orders:{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed_index'
-        await redis.hset(order_placed_index, str(level_index), str("true").lower())
-        stored_level_index = parse_bool(await redis.hget(order_placed_index, str(level_index)))
-        await redis.expire(order_placed_index, 120)
-    await redis.hset(order_placed_key, str(grid_level), str("true").lower())
-    stored_value = parse_bool(await redis.hget(order_placed_key, str(grid_level)))
-    await redis.expire(order_placed_key, 120)  # 만료 시간 갱신
+    async with redis_context() as redis:
+        order_placed_key = f'orders:{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed'
+        if level_index is not None:
+            order_placed_index = f'orders:{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed_index'
+            await redis.hset(order_placed_index, str(level_index), str("true").lower())
+            stored_level_index = parse_bool(await redis.hget(order_placed_index, str(level_index)))
+            await redis.expire(order_placed_index, 120)
+        await redis.hset(order_placed_key, str(grid_level), str("true").lower())
+        stored_value = parse_bool(await redis.hget(order_placed_key, str(grid_level)))
+        await redis.expire(order_placed_key, 120)  # 만료 시간 갱신
 
 
 async def get_order_placed(exchange_name, user_id, symbol, grid_num):
@@ -171,19 +167,19 @@ async def get_order_placed(exchange_name, user_id, symbol, grid_num):
     Returns:
         Dict mapping grid level to placement status
     """
-    redis = await get_redis_connection()
-    order_placed_key = f'orders:{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed_index'
+    async with redis_context() as redis:
+        order_placed_key = f'orders:{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed_index'
 
-    # Redis에서 해시 전체를 가져옵니다
-    order_placed_data = await redis.hgetall(order_placed_key)
+        # Redis에서 해시 전체를 가져옵니다
+        order_placed_data = await redis.hgetall(order_placed_key)
 
-    # 결과를 적절한 형식으로 변환합니다
-    order_placed = {}
-    for n in range(0, grid_num + 1):
-        value = order_placed_data.get(str(n), '') or order_placed_data.get(str(float(n)), '')
-        order_placed[n] = value.lower() == 'true'
+        # 결과를 적절한 형식으로 변환합니다
+        order_placed = {}
+        for n in range(0, grid_num + 1):
+            value = order_placed_data.get(str(n), '') or order_placed_data.get(str(float(n)), '')
+            order_placed[n] = value.lower() == 'true'
 
-    return order_placed
+        return order_placed
 
 
 async def reset_order_placed(exchange_name, user_id, symbol, grid_num):
@@ -196,14 +192,14 @@ async def reset_order_placed(exchange_name, user_id, symbol, grid_num):
         symbol: Symbol
         grid_num: Grid number
     """
-    redis = await get_redis_connection()
-    order_placed_key = f'orders:{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed'
-    order_placed_index = f'orders:{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed_index'
+    async with redis_context() as redis:
+        order_placed_key = f'orders:{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed'
+        order_placed_index = f'orders:{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed_index'
 
-    # Reset all grid levels
-    for n in range(0, grid_num + 1):
-        await redis.hset(order_placed_key, str(n), str("false").lower())
-        await redis.hset(order_placed_index, str(n), str("false").lower())
+        # Reset all grid levels
+        for n in range(0, grid_num + 1):
+            await redis.hset(order_placed_key, str(n), str("false").lower())
+            await redis.hset(order_placed_index, str(n), str("false").lower())
 
 
 # ==================== Order Checking ====================
@@ -302,74 +298,73 @@ async def okay_to_place_order(exchange_name, user_id, symbol, check_price, max_n
     Returns:
         True if okay to place order, False otherwise
     """
-    redis = await get_redis_connection()
+    async with redis_context() as redis:
+        # 기존 주문 확인 로직
+        order_placed_key = f'orders:{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed'
+        all_prices = await redis.hgetall(order_placed_key)
+        for stored_price, value in all_prices.items():
+            stored_price = float(stored_price)
+            if abs(stored_price - check_price) / stored_price <= 0.001:
+                return False  # 이미 해당 가격에 주문이 있음
 
-    # 기존 주문 확인 로직
-    order_placed_key = f'orders:{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed'
-    all_prices = await redis.hgetall(order_placed_key)
-    for stored_price, value in all_prices.items():
-        stored_price = float(stored_price)
-        if abs(stored_price - check_price) / stored_price <= 0.001:
-            return False  # 이미 해당 가격에 주문이 있음
+        # 포지션 정보 확인 - Try new Hash pattern first (Phase 2)
+        index_key = f'positions:index:{user_id}:{exchange_name}'
+        position_keys = await redis.smembers(index_key)
 
-    # 포지션 정보 확인 - Try new Hash pattern first (Phase 2)
-    index_key = f'positions:index:{user_id}:{exchange_name}'
-    position_keys = await redis.smembers(index_key)
+        if position_keys:
+            # New Hash pattern: check for this specific symbol
+            total_pos = 0.0
+            total_notional_usd = 0.0
 
-    if position_keys:
-        # New Hash pattern: check for this specific symbol
-        total_pos = 0.0
-        total_notional_usd = 0.0
+            for pos_key in position_keys:
+                # pos_key format: "{symbol}:{side}"
+                try:
+                    pos_symbol, side = pos_key.split(':')
+                    if pos_symbol == symbol:
+                        position_key = f'positions:{user_id}:{exchange_name}:{symbol}:{side}'
+                        position = await redis.hgetall(position_key)
+                        if position:
+                            pos = float(position.get('pos', 0))
+                            notional_usd = float(position.get('notionalUsd', 0))
+                            # Sum positions (long is positive, short is negative)
+                            total_pos += pos
+                            total_notional_usd += abs(notional_usd)
+                except (ValueError, KeyError) as e:
+                    print(f"Error processing position key {pos_key}: {e}")
+                    continue
 
-        for pos_key in position_keys:
-            # pos_key format: "{symbol}:{side}"
-            try:
-                pos_symbol, side = pos_key.split(':')
-                if pos_symbol == symbol:
-                    position_key = f'positions:{user_id}:{exchange_name}:{symbol}:{side}'
-                    position = await redis.hgetall(position_key)
-                    if position:
-                        pos = float(position.get('pos', 0))
+            if total_pos != 0:
+                able_to_order = check_order_validity(total_notional_usd, total_pos, max_notional_value, order_direction)
+                return able_to_order
+            return True  # No position found for this symbol, order allowed
+
+        # Fallback to legacy JSON array pattern
+        position_key = f'{exchange_name}:positions:{user_id}'
+        position_data = await redis.get(position_key)
+
+        if position_data is None:
+            return True  # 포지션 정보가 없으므로, 주문 가능
+
+        try:
+            positions = json.loads(position_data)
+            if isinstance(positions, list):
+                for position in positions:
+                    if isinstance(position, dict) and position.get('instId') == symbol:
                         notional_usd = float(position.get('notionalUsd', 0))
-                        # Sum positions (long is positive, short is negative)
-                        total_pos += pos
-                        total_notional_usd += abs(notional_usd)
-            except (ValueError, KeyError) as e:
-                print(f"Error processing position key {pos_key}: {e}")
-                continue
-
-        if total_pos != 0:
-            able_to_order = check_order_validity(total_notional_usd, total_pos, max_notional_value, order_direction)
-            return able_to_order
-        return True  # No position found for this symbol, order allowed
-
-    # Fallback to legacy JSON array pattern
-    position_key = f'{exchange_name}:positions:{user_id}'
-    position_data = await redis.get(position_key)
-
-    if position_data is None:
-        return True  # 포지션 정보가 없으므로, 주문 가능
-
-    try:
-        positions = json.loads(position_data)
-        if isinstance(positions, list):
-            for position in positions:
-                if isinstance(position, dict) and position.get('instId') == symbol:
+                        pos = float(position.get('pos', 0))
+                        able_to_order = check_order_validity(notional_usd, pos, max_notional_value, order_direction)
+                        return able_to_order
+            elif isinstance(positions, dict):
+                position = positions.get(symbol)
+                if position:
                     notional_usd = float(position.get('notionalUsd', 0))
                     pos = float(position.get('pos', 0))
                     able_to_order = check_order_validity(notional_usd, pos, max_notional_value, order_direction)
                     return able_to_order
-        elif isinstance(positions, dict):
-            position = positions.get(symbol)
-            if position:
-                notional_usd = float(position.get('notionalUsd', 0))
-                pos = float(position.get('pos', 0))
-                able_to_order = check_order_validity(notional_usd, pos, max_notional_value, order_direction)
-                return able_to_order
-        return True  # 주문 가능 (해당 심볼에 대한 포지션이 없음)
-    except (json.JSONDecodeError, ValueError, AttributeError) as e:
-        print(f"Error processing position data: {e}")
-        return True  # 데이터 파싱 오류 시 주문 허용
+            return True  # 주문 가능 (해당 심볼에 대한 포지션이 없음)
+        except (json.JSONDecodeError, ValueError, AttributeError) as e:
+            print(f"Error processing position data: {e}")
+            return True  # 데이터 파싱 오류 시 주문 허용
 
 
 # ==================== Order Creation ====================

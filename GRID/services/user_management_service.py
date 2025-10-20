@@ -14,15 +14,10 @@ from typing import Any, Dict, Optional, Union
 from GRID import telegram_message
 from GRID.routes.logs_route import add_log_endpoint as add_user_log
 from GRID.trading.shared_state import user_keys
+from shared.database.redis_patterns import redis_context, RedisTTL
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-
-async def get_redis_connection():
-    """Get Redis connection from GRID.core.redis"""
-    from GRID.core.redis import get_redis_connection as core_get_redis
-    return await core_get_redis()
 
 
 # ==================== User Data Management ====================
@@ -39,38 +34,38 @@ async def get_user_data(exchange_name: str, user_id: int, field: Optional[str] =
     Returns:
         User data dict or specific field value
     """
-    redis = await get_redis_connection()
-    user_key = f"{exchange_name}:user:{user_id}"
+    async with redis_context() as redis:
+        user_key = f"{exchange_name}:user:{user_id}"
 
-    json_fields = ["tasks", "running_symbols", "completed_trading_symbols", "enter_symbol_amount_list"]
-    boolean_fields = ["is_running", "stop_task_only"]
-    numeric_fields = ["leverage", "initial_capital"]
+        json_fields = ["tasks", "running_symbols", "completed_trading_symbols", "enter_symbol_amount_list"]
+        boolean_fields = ["is_running", "stop_task_only"]
+        numeric_fields = ["leverage", "initial_capital"]
 
-    def parse_boolean(value: str) -> bool:
-        return value.lower() in ('true', '1', 'yes', 'on')
+        def parse_boolean(value: str) -> bool:
+            return value.lower() in ('true', '1', 'yes', 'on')
 
-    if field:
-        value = await redis.hget(user_key, field)
-        if value is None:
-            return None
-        if field in json_fields:
-            return json.loads(value)
-        elif field in boolean_fields:
-            return parse_boolean(value)
-        elif field in numeric_fields:
-            return float(value)
+        if field:
+            value = await redis.hget(user_key, field)
+            if value is None:
+                return None
+            if field in json_fields:
+                return json.loads(value)
+            elif field in boolean_fields:
+                return parse_boolean(value)
+            elif field in numeric_fields:
+                return float(value)
+            else:
+                return value
         else:
-            return value
-    else:
-        data = await redis.hgetall(user_key)
-        for key in data:
-            if key in json_fields:
-                data[key] = json.loads(data[key])
-            elif key in boolean_fields:
-                data[key] = parse_boolean(data[key])
-            elif key in numeric_fields:
-                data[key] = float(data[key])
-        return data
+            data = await redis.hgetall(user_key)
+            for key in data:
+                if key in json_fields:
+                    data[key] = json.loads(data[key])
+                elif key in boolean_fields:
+                    data[key] = parse_boolean(data[key])
+                elif key in numeric_fields:
+                    data[key] = float(data[key])
+            return data
 
 
 async def initialize_user_data(redis, user_key):
@@ -117,17 +112,17 @@ async def update_user_data(exchange_name: str, user_id: int, **kwargs: Any) -> N
         user_id: User ID
         **kwargs: Fields to update
     """
-    redis = await get_redis_connection()
-    user_key = f"{exchange_name}:user:{user_id}"
+    async with redis_context() as redis:
+        user_key = f"{exchange_name}:user:{user_id}"
 
-    for key, value in kwargs.items():
-        if isinstance(value, (list, set, dict)):
-            value = json.dumps(list(value) if isinstance(value, set) else value)
-        elif isinstance(value, bool):
-            value = str(value).lower()
-        else:
-            value = str(value)
-        await redis.hset(user_key, key, value)
+        for key, value in kwargs.items():
+            if isinstance(value, (list, set, dict)):
+                value = json.dumps(list(value) if isinstance(value, set) else value)
+            elif isinstance(value, bool):
+                value = str(value).lower()
+            else:
+                value = str(value)
+            await redis.hset(user_key, key, value)
 
 
 # ==================== User Keys Initialization ====================
@@ -195,59 +190,62 @@ async def ensure_user_keys_initialized(exchange_name, user_id, enter_symbol_amou
     Returns:
         User data dict
     """
-    redis = await get_redis_connection()
-    try:
-        user_key = f'{exchange_name}:user:{user_id}'
+    async with redis_context() as redis:
+        try:
+            user_key = f'{exchange_name}:user:{user_id}'
 
-        # Check if user exists
-        user_exists = await redis.exists(user_key)
+            # Check if user exists
+            user_exists = await redis.exists(user_key)
 
-        if not user_exists:
-            # Create new user data
-            user_data = {
-                "api_key": "",
-                "api_secret": "",
-                "password": "",
-                "is_running": "0",
-                "stop_loss": str(stop_loss),
-                "tasks": json.dumps([]),
-                "running_symbols": json.dumps([]),
-                "completed_trading_symbols": json.dumps([]),
-                "initial_capital": json.dumps(enter_symbol_amount_list),
-                "grid_num": str(grid_num),
-                "leverage": str(leverage),
-                "symbols": json.dumps({})
-            }
-            await redis.hset(user_key, mapping=user_data)
-        else:
-            # Update existing user data
-            updates = {}
+            if not user_exists:
+                # Create new user data
+                user_data = {
+                    "api_key": "",
+                    "api_secret": "",
+                    "password": "",
+                    "is_running": "0",
+                    "stop_loss": str(stop_loss),
+                    "tasks": json.dumps([]),
+                    "running_symbols": json.dumps([]),
+                    "completed_trading_symbols": json.dumps([]),
+                    "initial_capital": json.dumps(enter_symbol_amount_list),
+                    "grid_num": str(grid_num),
+                    "leverage": str(leverage),
+                    "symbols": json.dumps({})
+                }
+                await redis.hset(user_key, mapping=user_data)
+            else:
+                # Update existing user data
+                updates = {}
 
-            # Check and update fields if they don't exist
-            fields_to_check = [
-                ("is_running", "0"),
-                ("tasks", json.dumps([])),
-                ("running_symbols", json.dumps([])),
-                ("completed_trading_symbols", json.dumps([])),
-                ("initial_capital", json.dumps(enter_symbol_amount_list)),
-                ("grid_num", str(grid_num)),
-                ("leverage", str(leverage)),
-                ("stop_loss", str(stop_loss)),
-                ("symbols", json.dumps({}))
-            ]
+                # Check and update fields if they don't exist
+                fields_to_check = [
+                    ("is_running", "0"),
+                    ("tasks", json.dumps([])),
+                    ("running_symbols", json.dumps([])),
+                    ("completed_trading_symbols", json.dumps([])),
+                    ("initial_capital", json.dumps(enter_symbol_amount_list)),
+                    ("grid_num", str(grid_num)),
+                    ("leverage", str(leverage)),
+                    ("stop_loss", str(stop_loss)),
+                    ("symbols", json.dumps({}))
+                ]
 
-            for field, default_value in fields_to_check:
-                if not await redis.hexists(user_key, field):
-                    updates[field] = default_value
+                for field, default_value in fields_to_check:
+                    if not await redis.hexists(user_key, field):
+                        updates[field] = default_value
 
-            if updates:
-                await redis.hset(user_key, mapping=updates)
+                if updates:
+                    await redis.hset(user_key, mapping=updates)
 
-        # Retrieve and return the user data
-        user_data = await redis.hgetall(user_key)
-        return {k.decode() if isinstance(k, bytes) else k:
-                v.decode() if isinstance(v, bytes) else v
-                for k, v in user_data.items()}
+            # Retrieve and return the user data
+            user_data = await redis.hgetall(user_key)
+            return {k.decode() if isinstance(k, bytes) else k:
+                    v.decode() if isinstance(v, bytes) else v
+                    for k, v in user_data.items()}
+        except Exception as e:
+            print(f"Error in ensure_user_keys_initialized: {e}")
+            raise
 # ==================== Symbol Initialization ====================
 
 def encode_value(value):
@@ -301,80 +299,80 @@ async def ensure_symbol_initialized(exchange_name, user_id, symbol, grid_num):
         symbol: Trading symbol
         grid_num: Grid number
     """
-    redis = await get_redis_connection()
-    try:
-        user_key = f'{exchange_name}:user:{user_id}'
-        # Check if user exists
-        if not await redis.exists(user_key):
-            raise KeyError(f"User ID {user_id} not found in Redis")
+    async with redis_context() as redis:
+        try:
+            user_key = f'{exchange_name}:user:{user_id}'
+            # Check if user exists
+            if not await redis.exists(user_key):
+                raise KeyError(f"User ID {user_id} not found in Redis")
 
-        # Try to get symbol data directly (new structure)
-        symbol_key = f'symbol:{symbol}'
-        symbol_data = await redis.hget(user_key, symbol_key)
+            # Try to get symbol data directly (new structure)
+            symbol_key = f'symbol:{symbol}'
+            symbol_data = await redis.hget(user_key, symbol_key)
 
-        if symbol_data is None:
-            # If not found, try to get all symbols data (old structure)
-            all_symbols_data = await redis.hget(user_key, 'symbols')
-            if all_symbols_data:
-                # Old structure
-                user_symbols = json.loads(all_symbols_data)
-                if not isinstance(user_symbols, dict):
+            if symbol_data is None:
+                # If not found, try to get all symbols data (old structure)
+                all_symbols_data = await redis.hget(user_key, 'symbols')
+                if all_symbols_data:
+                    # Old structure
+                    user_symbols = json.loads(all_symbols_data)
+                    if not isinstance(user_symbols, dict):
+                        user_symbols = {}
+                else:
+                    # Neither new nor old structure found, initialize new dictionary
                     user_symbols = {}
+
+                if symbol not in user_symbols:
+                    user_symbols[symbol] = {
+                        "take_profit_orders_info": {
+                            str(n): {
+                                "order_id": None,
+                                "quantity": 0.0,
+                                "target_price": 0.0,
+                                "active": False,
+                                "side": None
+                            } for n in range(0, grid_num + 1)
+                        },
+                        "last_entry_time": None,
+                        "last_entry_size": 0.0,
+                        "previous_new_position_size": 0.0
+                    }
+
+                    # Initialize order_placed
+                    order_placed_key = f'{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed'
+                    if not await redis.exists(order_placed_key):
+                        order_placed = {str(n): "false" for n in range(0, grid_num + 1)}
+                        await redis.hmset(order_placed_key, order_placed)
+                        await redis.expire(order_placed_key, 890)  # 890초 후 만료
+                        print(f"Symbol {symbol} and order_placed initialized for user {user_id}")
+                    order_ids_key = f'{exchange_name}:user:{user_id}:symbol:{symbol}:order_ids'
+                    if not await redis.exists(order_ids_key):
+                        order_ids = {str(n): encode_value(None) for n in range(0, grid_num + 1)}
+                        await redis.hmset(order_ids_key, order_ids)
+                        print(f"Symbol {symbol} and order_ids initialized for user {user_id}")
+                else:
+                    print(f"Symbol {symbol} already exists for user {user_id}")
             else:
-                # Neither new nor old structure found, initialize new dictionary
-                user_symbols = {}
-
-            if symbol not in user_symbols:
-                user_symbols[symbol] = {
-                    "take_profit_orders_info": {
-                        str(n): {
-                            "order_id": None,
-                            "quantity": 0.0,
-                            "target_price": 0.0,
-                            "active": False,
-                            "side": None
-                        } for n in range(0, grid_num + 1)
-                    },
-                    "last_entry_time": None,
-                    "last_entry_size": 0.0,
-                    "previous_new_position_size": 0.0
-                }
-
-                # Initialize order_placed
+                print(f"Symbol {symbol} already initialized for user {user_id} in new structure")
+                # Check if order_placed exists, if not, initialize it
                 order_placed_key = f'{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed'
                 if not await redis.exists(order_placed_key):
                     order_placed = {str(n): "false" for n in range(0, grid_num + 1)}
                     await redis.hmset(order_placed_key, order_placed)
                     await redis.expire(order_placed_key, 890)  # 890초 후 만료
-                    print(f"Symbol {symbol} and order_placed initialized for user {user_id}")
-                order_ids_key = f'{exchange_name}:user:{user_id}:symbol:{symbol}:order_ids'
-                if not await redis.exists(order_ids_key):
-                    order_ids = {str(n): encode_value(None) for n in range(0, grid_num + 1)}
-                    await redis.hmset(order_ids_key, order_ids)
-                    print(f"Symbol {symbol} and order_ids initialized for user {user_id}")
-            else:
-                print(f"Symbol {symbol} already exists for user {user_id}")
-        else:
-            print(f"Symbol {symbol} already initialized for user {user_id} in new structure")
-            # Check if order_placed exists, if not, initialize it
-            order_placed_key = f'{exchange_name}:user:{user_id}:symbol:{symbol}:order_placed'
-            if not await redis.exists(order_placed_key):
-                order_placed = {str(n): "false" for n in range(0, grid_num + 1)}
-                await redis.hmset(order_placed_key, order_placed)
-                await redis.expire(order_placed_key, 890)  # 890초 후 만료
-                print(f"order_placed initialized for user {user_id} and symbol {symbol}")
+                    print(f"order_placed initialized for user {user_id} and symbol {symbol}")
 
-    except Exception as e:
-        print(f"An error occurred while initializing symbol {symbol} for user {user_id}: {e}")
-        raise e
-    except KeyError as e:
-        print(f"KeyError in ensure_symbol_initialized: {e}")
-    except json.JSONDecodeError as e:
-        print(f"JSON Decode Error in ensure_symbol_initialized: {e}")
-        print(f"Raw data: {all_symbols_data if 'all_symbols_data' in locals() else symbol_data}")
-    except Exception as e:
-        print(f"Unexpected error in ensure_symbol_initialized: {e}")
-        print(traceback.format_exc())
+        except Exception as e:
+            print(f"An error occurred while initializing symbol {symbol} for user {user_id}: {e}")
+            raise e
+        except KeyError as e:
+            print(f"KeyError in ensure_symbol_initialized: {e}")
+        except json.JSONDecodeError as e:
+            print(f"JSON Decode Error in ensure_symbol_initialized: {e}")
+            print(f"Raw data: {all_symbols_data if 'all_symbols_data' in locals() else symbol_data}")
+        except Exception as e:
+            print(f"Unexpected error in ensure_symbol_initialized: {e}")
+            print(traceback.format_exc())
 # ==================== User Validation & Checks ====================
 
 def check_right_invitee(okx_api, okx_secret, okx_parra):
@@ -411,22 +409,22 @@ async def check_symbol_entry_info(exchange_name, user_id):
         exchange_name: Exchange name
         user_id: User ID
     """
-    redis = await get_redis_connection()
-    try:
-        user_key = f'{exchange_name}:user:{user_id}'
+    async with redis_context() as redis:
+        try:
+            user_key = f'{exchange_name}:user:{user_id}'
 
-        # Get user symbols data
-        user_symbols_data = await redis.hget(user_key, 'symbols')
-        user_symbols = json.loads(user_symbols_data) if user_symbols_data else {}
+            # Get user symbols data
+            user_symbols_data = await redis.hget(user_key, 'symbols')
+            user_symbols = json.loads(user_symbols_data) if user_symbols_data else {}
 
-        for symbol, symbol_info in user_symbols.items():
-            last_entry_time = symbol_info.get("last_entry_time")
-            last_entry_size = symbol_info.get("last_entry_size")
-            print(f"Symbol: {symbol}, Last Entry Time: {last_entry_time}, Last Entry Size: {last_entry_size}")
+            for symbol, symbol_info in user_symbols.items():
+                last_entry_time = symbol_info.get("last_entry_time")
+                last_entry_size = symbol_info.get("last_entry_size")
+                print(f"Symbol: {symbol}, Last Entry Time: {last_entry_time}, Last Entry Size: {last_entry_size}")
 
-    except Exception as e:
-        print(f"Unexpected error in check_symbol_entry_info: {e}")
-        print(traceback.format_exc())
+        except Exception as e:
+            print(f"Unexpected error in check_symbol_entry_info: {e}")
+            print(traceback.format_exc())
 async def check_api_permissions(exchange_name, user_id):
     """
     Check API permissions for exchange.

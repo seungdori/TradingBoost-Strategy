@@ -4,38 +4,21 @@ import os
 import traceback
 
 import aiohttp
-import redis.asyncio as redis
 
 from shared.config import settings
+from shared.database.redis_patterns import redis_context, RedisTTL
 
-
-# Redis 클라이언트 생성
-async def get_redis_client():
-    if settings.REDIS_PASSWORD:
-        return redis.from_url(
-            f"redis://:{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}",
-            encoding='utf-8',
-            decode_responses=True
-        )
-    else:
-        return redis.from_url(
-            f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}",
-            encoding='utf-8',
-            decode_responses=True
-        )
 
 # Redis에 데이터 저장 함수
 async def set_redis_data(key, data, expiry=144000):  # 기본 만료 시간 1시간
-    redis_client = await get_redis_client()
-    await redis_client.set(key, json.dumps(data), ex=expiry)
-    await redis_client.aclose()
+    async with redis_context() as redis_client:
+        await redis_client.set(key, json.dumps(data), ex=expiry)
 
 # Redis에서 데이터 가져오는 함수
 async def get_redis_data(key):
-    redis_client = await get_redis_client()
-    data = await redis_client.get(key)
-    await redis_client.aclose()
-    return json.loads(data) if data else None
+    async with redis_context() as redis_client:
+        data = await redis_client.get(key)
+        return json.loads(data) if data else None
 
 # Perpetual 종목 정보를 가져오는 함수
 async def get_perpetual_instruments():

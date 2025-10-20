@@ -2,11 +2,12 @@ import asyncio
 import datetime
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import telegram
 from fastapi import APIRouter, HTTPException, Path, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
+from starlette.websockets import WebSocketState
 
 from HYPERRSI.src.services.timescale_service import TimescaleUserService
 from shared.database.redis_helper import get_redis_client
@@ -89,6 +90,65 @@ LOG_CHANNEL_KEY = "telegram:log_channel:{user_id}"
 
 # 동시성 제어를 위한 세마포어
 semaphore = asyncio.Semaphore(3)
+
+# WebSocket 연결 추적 레지스트리
+active_websocket_connections: Dict[str, Set[WebSocket]] = {}
+
+def register_websocket(user_id: str, websocket: WebSocket) -> None:
+    """WebSocket 연결을 레지스트리에 등록합니다."""
+    if user_id not in active_websocket_connections:
+        active_websocket_connections[user_id] = set()
+    active_websocket_connections[user_id].add(websocket)
+    logger.info(f"WebSocket registered for user {user_id}. Total connections: {len(active_websocket_connections[user_id])}")
+
+def unregister_websocket(user_id: str, websocket: WebSocket) -> None:
+    """WebSocket 연결을 레지스트리에서 제거합니다."""
+    if user_id in active_websocket_connections:
+        active_websocket_connections[user_id].discard(websocket)
+        if not active_websocket_connections[user_id]:
+            del active_websocket_connections[user_id]
+            logger.info(f"All WebSocket connections closed for user {user_id}")
+        else:
+            logger.info(f"WebSocket unregistered for user {user_id}. Remaining connections: {len(active_websocket_connections[user_id])}")
+
+async def is_websocket_connected(websocket: WebSocket) -> bool:
+    """WebSocket 연결 상태를 확인합니다."""
+    try:
+        return websocket.client_state == WebSocketState.CONNECTED and websocket.application_state == WebSocketState.CONNECTED
+    except Exception:
+        return False
+
+async def safe_send_json(websocket: WebSocket, data: dict, user_id: str) -> bool:
+    """WebSocket으로 안전하게 JSON 데이터를 전송합니다.
+
+    Returns:
+        bool: 전송 성공 여부
+    """
+    try:
+        if not await is_websocket_connected(websocket):
+            logger.debug(f"WebSocket not connected for user {user_id}, skipping send")
+            return False
+
+        await websocket.send_json(data)
+        return True
+    except WebSocketDisconnect:
+        logger.debug(f"WebSocket disconnected during send for user {user_id}")
+        return False
+    except RuntimeError as e:
+        # RuntimeError는 보통 이미 닫힌 연결에 쓰기 시도 시 발생
+        logger.debug(f"WebSocket runtime error for user {user_id}: {e}")
+        return False
+    except Exception as e:
+        logger.debug(f"Failed to send JSON to WebSocket for user {user_id}: {type(e).__name__}")
+        return False
+
+async def safe_close_websocket(websocket: WebSocket, code: int = 1000, reason: str = "") -> None:
+    """WebSocket 연결을 안전하게 종료합니다."""
+    try:
+        if await is_websocket_connected(websocket):
+            await websocket.close(code=code, reason=reason)
+    except Exception as e:
+        logger.debug(f"Error closing websocket (may already be closed): {e}")
 
 @router.post(
     "/messages/{user_id}",
@@ -647,95 +707,105 @@ async def websocket_log_endpoint(websocket: WebSocket, user_id: str) -> None:
     await websocket.accept()
     telegram_id = await get_telegram_id_from_okx_uid(user_id, TimescaleUserService)
     if not telegram_id:
-        await websocket.close(code=1008, reason="사용자의 텔레그램 ID를 찾을 수 없습니다.")
+        await safe_close_websocket(websocket, code=1008, reason="사용자의 텔레그램 ID를 찾을 수 없습니다.")
         return
+
     log_channel = LOG_CHANNEL_KEY.format(user_id=telegram_id)
     pubsub = get_redis_client().pubsub()
-    
+
+    # WebSocket 연결 등록
+    register_websocket(user_id, websocket)
 
     try:
         await pubsub.subscribe(log_channel)
         logger.info(f"WebSocket client connected for user {user_id} logs.")
 
-        # 연결 시 최근 로그 몇 개 전송 (선택 사항)
-        # recent_logs_resp = await get_telegram_logs(user_id=user_id, limit=10, offset=0)
-        # await websocket.send_json({"event_type": "history", "data": recent_logs_resp.dict()})
-
         while True:
-            # Redis Pub/Sub 메시지 수신 대기 (타임아웃 설정)
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=60) # 60초 타임아웃
+            # Check for cancellation/shutdown before blocking operation
+            try:
+                await asyncio.sleep(0)  # Yield control to allow cancellation
+            except asyncio.CancelledError:
+                logger.info(f"WebSocket task cancelled for user {user_id}")
+                raise
+
+            # 연결 상태 먼저 확인
+            if not await is_websocket_connected(websocket):
+                logger.info(f"WebSocket connection lost for user {user_id}")
+                break
+
+            # Redis Pub/Sub 메시지 수신 대기 (타임아웃을 5초로 단축하여 빠른 종료 가능)
+            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5.0)
             if message and message.get("event_type") == "message":
                 log_data = message["data"]
                 try:
                     log_entry = json.loads(log_data)
-                    
+
                     # 필수 필드 검증
                     required_fields = ["timestamp", "user_id", "status", "category", "strategy_type", "content"]
                     missing_fields = [field for field in required_fields if field not in log_entry]
-                    
+
                     # 데이터 타입 조정 - user_id는 문자열로 유지 (LogEntry 모델에 맞춤)
                     if "user_id" in log_entry and not isinstance(log_entry["user_id"], str):
                         log_entry["user_id"] = str(log_entry["user_id"])
-                    
+
                     # type 필드가 있고 event_type 필드가 없는 경우 매핑
                     if "type" in log_entry and "event_type" not in log_entry:
                         log_entry["event_type"] = log_entry.pop("type")
                     elif "type" not in log_entry and "event_type" not in log_entry:
                         missing_fields.append("event_type/type")
-                    
+
                     if missing_fields:
                         logger.warning(f"WebSocket log entry missing required fields: {', '.join(missing_fields)}. Skipping this entry.")
                         continue
-                    
+
                     # '에러', 'error', 'DEBUG' 단어가 포함된 로그는 제외
                     content = log_entry.get("content", "")
-                    if (isinstance(content, str) and 
+                    if (isinstance(content, str) and
                         not any(keyword.lower() in content.lower() for keyword in ["에러", "error", "debug"])):
                         # WebSocket 클라이언트에게 로그 전송
-                        await websocket.send_json({"event_type": "log", "data": log_entry})
-                    else:
-                        logger.debug(f"WebSocket에서 '에러/error/DEBUG' 키워드 포함된 로그 필터링됨")
-                        
+                        if not await safe_send_json(websocket, {"event_type": "log", "data": log_entry}, user_id):
+                            break  # 전송 실패 시 연결 종료
+
                 except json.JSONDecodeError:
                     logger.warning(f"Failed to decode message from pubsub channel {log_channel}: {log_data}")
-                except WebSocketDisconnect: # send_json 도중 연결 끊김 처리
-                     logger.info(f"WebSocket client disconnected during send for user {user_id} logs.")
-                     break # 루프 종료
+                except WebSocketDisconnect:
+                     logger.info(f"WebSocket client disconnected during message processing for user {user_id}")
+                     break
                 except Exception as e:
-                     logger.error(f"Error sending log via WebSocket for user {user_id}: {e}")
-                     # 연결 유지하며 에러 로깅
+                     logger.error(f"Error processing log via WebSocket for user {user_id}: {e}")
             else:
-                # 타임아웃 발생 시 PING 메시지 전송하여 연결 활성 확인 (선택 사항)
-                 try:
-                     await websocket.send_json({"event_type": "ping"})
-                 except WebSocketDisconnect:
-                     break # 클라이언트 연결 끊김
-                 except Exception:
-                     # send_json 중 다른 에러 발생 가능성 처리
-                     logger.warning(f"Failed to send ping to WebSocket client for user {user_id}")
-                     # 여기서도 연결 끊김 발생 가능성 있음
-                     try:
-                         # 연결 상태 재확인 시도 (예: 간단한 메시지 전송)
-                         await websocket.send_text("") # 비어있는 텍스트 전송으로 상태 확인
-                     except WebSocketDisconnect:
-                         logger.info(f"WebSocket client disconnected after failed ping for user {user_id} logs.")
-                         break
-                     except Exception as ping_check_e:
-                          logger.warning(f"Error checking WebSocket connection after failed ping for user {user_id}: {ping_check_e}")
+                # 타임아웃 발생 시 연결 상태 확인
+                if not await is_websocket_connected(websocket):
+                    logger.debug(f"WebSocket disconnected during timeout check for user {user_id}")
+                    break
+
+                # PING 메시지 전송하여 연결 활성 확인
+                try:
+                    await websocket.send_json({"event_type": "ping"})
+                except (WebSocketDisconnect, RuntimeError, Exception) as e:
+                    logger.debug(f"Connection lost during ping for user {user_id}: {type(e).__name__}")
+                    break
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket client disconnected for user {user_id} logs.")
+    except asyncio.CancelledError:
+        logger.info(f"WebSocket task cancelled for user {user_id}")
+        raise
     except Exception as e:
         logger.error(f"WebSocket error for user {user_id}: {e}")
-        try:
-            await websocket.close(code=1011) # Internal Server Error
-        except RuntimeError:
-            pass # 이미 닫혔을 경우 무시
+        await safe_close_websocket(websocket, code=1011)
     finally:
+        # WebSocket 연결 해제
+        unregister_websocket(user_id, websocket)
+
         # Pub/Sub 구독 해지
-        if pubsub:
-            await pubsub.unsubscribe(log_channel)
-            await pubsub.close()
+        try:
+            if pubsub:
+                await pubsub.unsubscribe(log_channel)
+                await pubsub.close()
+        except Exception as e:
+            logger.debug(f"Error cleaning up pubsub for user {user_id}: {e}")
+
         logger.info(f"Cleaned up WebSocket resources for user {user_id}.")
 
 @router.get(
@@ -1007,83 +1077,103 @@ async def get_telegram_logs_by_okx_uid(
 async def websocket_log_endpoint_by_okx_uid(websocket: WebSocket, okx_uid: str):
     """WebSocket을 통해 실시간 텔레그램 로그를 스트리밍합니다 (OKX UID 기준)."""
     await websocket.accept()
-    
+
     log_channel = f"telegram:log_channel:by_okx_uid:{okx_uid}"
     pubsub = get_redis_client().pubsub()
-    
+
+    # WebSocket 연결 등록
+    register_websocket(okx_uid, websocket)
+
     try:
         await pubsub.subscribe(log_channel)
         logger.info(f"WebSocket client connected for okx_uid {okx_uid} logs.")
 
         while True:
-            # Redis Pub/Sub 메시지 수신 대기 (타임아웃 설정)
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=60)
+            # Check for cancellation/shutdown before blocking operation
+            try:
+                await asyncio.sleep(0)  # Yield control to allow cancellation
+            except asyncio.CancelledError:
+                logger.info(f"WebSocket task cancelled for okx_uid {okx_uid}")
+                raise
+
+            # 연결 상태 먼저 확인
+            if not await is_websocket_connected(websocket):
+                logger.info(f"WebSocket connection lost for okx_uid {okx_uid}")
+                break
+
+            # Redis Pub/Sub 메시지 수신 대기 (타임아웃을 5초로 단축하여 빠른 종료 가능)
+            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5.0)
             if message and message.get("event_type") == "message":
                 log_data = message["data"]
                 try:
                     log_entry = json.loads(log_data)
-                    
+
                     # 필수 필드 검증
                     required_fields = ["timestamp", "user_id", "status", "category", "strategy_type", "content"]
                     missing_fields = [field for field in required_fields if field not in log_entry]
-                    
+
                     # 데이터 타입 조정
                     if "user_id" in log_entry and not isinstance(log_entry["user_id"], str):
                         log_entry["user_id"] = str(log_entry["user_id"])
-                    
+
                     # type 필드 매핑
                     if "type" in log_entry and "event_type" not in log_entry:
                         log_entry["event_type"] = log_entry.pop("type")
                     elif "type" not in log_entry and "event_type" not in log_entry:
                         missing_fields.append("event_type/type")
-                    
+
                     if missing_fields:
                         logger.warning(f"WebSocket log entry missing required fields: {', '.join(missing_fields)}. Skipping this entry.")
                         continue
-                    
+
                     # 에러 메시지 필터링
                     content = log_entry.get("content", "")
-                    if (isinstance(content, str) and 
+                    if (isinstance(content, str) and
                         not any(keyword.lower() in content.lower() for keyword in ["에러", "error", "debug"])):
                         # WebSocket 클라이언트에게 로그 전송
-                        await websocket.send_json({"event_type": "log", "data": log_entry})
-                        
+                        if not await safe_send_json(websocket, {"event_type": "log", "data": log_entry}, okx_uid):
+                            break  # 전송 실패 시 연결 종료
+
                 except json.JSONDecodeError:
                     logger.warning(f"Failed to decode message from pubsub channel {log_channel}: {log_data}")
                 except WebSocketDisconnect:
-                     logger.info(f"WebSocket client disconnected during send for okx_uid {okx_uid} logs.")
+                     logger.info(f"WebSocket client disconnected during message processing for okx_uid {okx_uid}")
                      break
                 except Exception as e:
-                     logger.error(f"Error sending log via WebSocket for okx_uid {okx_uid}: {e}")
+                     logger.error(f"Error processing log via WebSocket for okx_uid {okx_uid}: {e}")
             else:
-                # 타임아웃 발생 시 PING 메시지 전송
+                # 타임아웃 발생 시 연결 상태 확인
+                if not await is_websocket_connected(websocket):
+                    logger.debug(f"WebSocket disconnected during timeout check for okx_uid {okx_uid}")
+                    break
+
+                # PING 메시지 전송하여 연결 활성 확인
                 try:
                     await websocket.send_json({"event_type": "ping"})
-                except WebSocketDisconnect:
+                except (WebSocketDisconnect, RuntimeError, Exception) as e:
+                    logger.debug(f"Connection lost during ping for okx_uid {okx_uid}: {type(e).__name__}")
                     break
-                except Exception:
-                    logger.warning(f"Failed to send ping to WebSocket client for okx_uid {okx_uid}")
-                    try:
-                        await websocket.send_text("")
-                    except WebSocketDisconnect:
-                        logger.info(f"WebSocket client disconnected after failed ping for okx_uid {okx_uid} logs.")
-                        break
-                    except Exception as ping_check_e:
-                        logger.warning(f"Error checking WebSocket connection after failed ping for okx_uid {okx_uid}: {ping_check_e}")
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket client disconnected for okx_uid {okx_uid} logs.")
+    except asyncio.CancelledError:
+        logger.info(f"WebSocket task cancelled for okx_uid {okx_uid}")
+        raise
     except Exception as e:
         logger.error(f"WebSocket error for okx_uid {okx_uid}: {e}")
-        try:
-            await websocket.close(code=1011)
-        except RuntimeError:
-            pass
+        await safe_close_websocket(websocket, code=1011)
     finally:
+        # WebSocket 연결 해제
+        unregister_websocket(okx_uid, websocket)
+
         # Pub/Sub 구독 해지
-        if pubsub:
-            await pubsub.unsubscribe(log_channel)
-            await pubsub.close()
+        try:
+            if pubsub:
+                await pubsub.unsubscribe(log_channel)
+                await pubsub.close()
+        except Exception as e:
+            logger.debug(f"Error cleaning up pubsub for okx_uid {okx_uid}: {e}")
+
         logger.info(f"Cleaned up WebSocket resources for okx_uid {okx_uid}.")
 
 @router.get(

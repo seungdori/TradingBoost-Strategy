@@ -135,9 +135,10 @@ async def start_bot(dto: StartFeatureDto, request: Request, background_tasks: Ba
             )
             print('🍏🔹😇👆', job_id)
 
+    except Exception as e:
+        print(f"Error in start_feature: {e}")
+        raise
 
-        finally:
-            # Redis 연결 닫기
 async def restart_running_bots(app: FastAPI) -> None:
     async with redis_context() as redis:
         current_port = get_app_port(app)
@@ -169,16 +170,16 @@ async def restart_running_bots(app: FastAPI) -> None:
                         }
                         fake_request = Request(scope=fake_scope)
                         # 가짜 Request 객체에 json 메서드 추가
-                    async def fake_json():
-                        return dto.model_dump()
-                    fake_request.json = fake_json  # type: ignore[method-assign]
-                    background_tasks = BackgroundTasks()
-                    await update_user_data(exchange_id, user_id)
-                    await start_bot(dto, fake_request, background_tasks, force_restart=True)
-                    # 필요한 경우 background_tasks를 실행
-                    await background_tasks()
-                except Exception as e:
-                    print(f"Error restarting bot for user {user_id}: {str(e)}")
+                        async def fake_json():
+                            return dto.model_dump()
+                        fake_request.json = fake_json  # type: ignore[method-assign]
+                        background_tasks = BackgroundTasks()
+                        await update_user_data(exchange_id, user_id)
+                        await start_bot(dto, fake_request, background_tasks, force_restart=True)
+                        # 필요한 경우 background_tasks를 실행
+                        await background_tasks()
+                    except Exception as e:
+                        print(f"Error restarting bot for user {user_id}: {str(e)}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -228,43 +229,43 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
             logger.info("GRID application startup complete", extra={"port": port})
 
+    except Exception:
+        logger.error(
+            "Error initializing GRID application",
+            exc_info=True,
+            extra={"port": port, "parent_pid": os.getppid()}
+        )
+        for task in background_tasks:
+            task.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+        raise
+
+    try:
+        yield
+    finally:
+        try:
+            logger.info("Shutting down GRID application", extra={"port": port})
+
+            async with redis_context() as redis:
+                await redis.set('recovery_state', 'True', ex=360)
+
+                await save_running_symbols(app)
+
+                # Cleanup new infrastructure
+                await close_db()
+                await close_redis()
+
+                logger.info("GRID application shutdown complete")
+
         except Exception:
-            logger.error(
-                "Error initializing GRID application",
-                exc_info=True,
-                extra={"port": port, "parent_pid": os.getppid()}
-            )
+            logger.error("Error during shutdown", exc_info=True)
+        finally:
+            redis_connection.close_connection()  # type: ignore[attr-defined]
             for task in background_tasks:
                 task.cancel()
             if background_tasks:
                 await asyncio.gather(*background_tasks, return_exceptions=True)
-            raise
-
-        try:
-            yield
-        finally:
-            try:
-                logger.info("Shutting down GRID application", extra={"port": port})
-
-                async with redis_context() as redis:
-                    await redis.set('recovery_state', 'True', ex=360)
-
-                    await save_running_symbols(app)
-
-                    # Cleanup new infrastructure
-                    await close_db()
-                    await close_redis()
-
-                    logger.info("GRID application shutdown complete")
-
-                except Exception:
-                    logger.error("Error during shutdown", exc_info=True)
-                finally:
-                    redis_connection.close_connection()  # type: ignore[attr-defined]
-                    for task in background_tasks:
-                        task.cancel()
-                    if background_tasks:
-                        await asyncio.gather(*background_tasks, return_exceptions=True)
 
 
 async def save_running_symbols(app: FastAPI) -> None:
@@ -282,113 +283,113 @@ async def save_running_symbols(app: FastAPI) -> None:
         print("Saved running symbols for all users")
 
 
-    app = FastAPI(
-        title="GRID Trading Strategy API",
-        description="""
-    # GRID Trading Strategy API
+app = FastAPI(
+    title="GRID Trading Strategy API",
+    description="""
+# GRID Trading Strategy API
 
-    그리드 트레이딩 전략을 위한 자동화된 거래 API입니다.
+그리드 트레이딩 전략을 위한 자동화된 거래 API입니다.
 
-    ## 주요 기능
+## 주요 기능
 
-    - **자동 그리드 거래**: 가격 레벨에 따라 자동으로 주문을 배치하고 관리합니다
-    - **다중 거래소 지원**: OKX, Binance, Upbit, Bitget, Bybit 등을 지원합니다
-    - **실시간 모니터링**: WebSocket을 통한 실시간 로그 및 상태 업데이트
-    - **포지션 관리**: 자동 리밸런싱 및 손익 관리
-    - **리스크 관리**: 손절매, 레버리지 설정, 심볼 화이트/블랙리스트
+- **자동 그리드 거래**: 가격 레벨에 따라 자동으로 주문을 배치하고 관리합니다
+- **다중 거래소 지원**: OKX, Binance, Upbit, Bitget, Bybit 등을 지원합니다
+- **실시간 모니터링**: WebSocket을 통한 실시간 로그 및 상태 업데이트
+- **포지션 관리**: 자동 리밸런싱 및 손익 관리
+- **리스크 관리**: 손절매, 레버리지 설정, 심볼 화이트/블랙리스트
 
-    ## 시작하기
+## 시작하기
 
-    1. API 키 등록: `/exchange/keys` 엔드포인트를 통해 거래소 API 키를 설정하세요
-    2. 봇 시작: `/feature/start` 엔드포인트로 그리드 트레이딩 봇을 시작하세요
-    3. 모니터링: `/logs/ws/{user_id}` WebSocket으로 실시간 로그를 확인하세요
+1. API 키 등록: `/exchange/keys` 엔드포인트를 통해 거래소 API 키를 설정하세요
+2. 봇 시작: `/feature/start` 엔드포인트로 그리드 트레이딩 봇을 시작하세요
+3. 모니터링: `/logs/ws/{user_id}` WebSocket으로 실시간 로그를 확인하세요
 
-    ## 보안 주의사항
+## 보안 주의사항
 
-    - API 키는 암호화되어 저장됩니다
-    - 읽기 전용 권한만 부여하는 것을 권장합니다
-    - 프로덕션 환경에서는 반드시 HTTPS를 사용하세요
-    """,
-        version="1.0.0",
-        contact={
-            "name": "TradingBoost Support",
-            "url": "https://tradingboost.io",
-            "email": "support@tradingboost.io"
+- API 키는 암호화되어 저장됩니다
+- 읽기 전용 권한만 부여하는 것을 권장합니다
+- 프로덕션 환경에서는 반드시 HTTPS를 사용하세요
+""",
+    version="1.0.0",
+    contact={
+        "name": "TradingBoost Support",
+        "url": "https://tradingboost.io",
+        "email": "support@tradingboost.io"
+    },
+    license_info={
+        "name": "Proprietary",
+        "url": "https://tradingboost.io/license"
+    },
+    terms_of_service="https://tradingboost.io/terms",
+    debug=settings.DEBUG,
+    lifespan=lifespan,
+    swagger_ui_parameters={
+        "filter": True,  # 검색 필터 활성화
+        "tryItOutEnabled": True,  # Try it out 기본 활성화
+        "persistAuthorization": True,  # 인증 정보 유지
+        "displayOperationId": False,
+        "displayRequestDuration": True,  # 요청 시간 표시
+    },
+    openapi_tags=[
+        {
+            "name": "feature",
+            "description": "봇 제어 및 기능 관리 엔드포인트 (시작, 중지, 재시작, 매도 등)"
         },
-        license_info={
-            "name": "Proprietary",
-            "url": "https://tradingboost.io/license"
+        {
+            "name": "state",
+            "description": "봇 상태 조회 및 관리 엔드포인트"
         },
-        terms_of_service="https://tradingboost.io/terms",
-        debug=settings.DEBUG,
-        lifespan=lifespan,
-        swagger_ui_parameters={
-            "filter": True,  # 검색 필터 활성화
-            "tryItOutEnabled": True,  # Try it out 기본 활성화
-            "persistAuthorization": True,  # 인증 정보 유지
-            "displayOperationId": False,
-            "displayRequestDuration": True,  # 요청 시간 표시
+        {
+            "name": "trading",
+            "description": "거래 데이터 조회 (승률, 차트, 심볼 관리 등)"
         },
-        openapi_tags=[
-            {
-                "name": "feature",
-                "description": "봇 제어 및 기능 관리 엔드포인트 (시작, 중지, 재시작, 매도 등)"
-            },
-            {
-                "name": "state",
-                "description": "봇 상태 조회 및 관리 엔드포인트"
-            },
-            {
-                "name": "trading",
-                "description": "거래 데이터 조회 (승률, 차트, 심볼 관리 등)"
-            },
-            {
-                "name": "exchange",
-                "description": "거래소 정보 및 API 키 관리"
-            },
-            {
-                "name": "telegram",
-                "description": "텔레그램 알림 설정 및 관리"
-            },
-            {
-                "name": "logs",
-                "description": "로그, 거래량, 손익 데이터 조회 및 WebSocket 연결"
-            },
-            {
-                "name": "user",
-                "description": "사용자 정보 조회 및 관리"
-            },
-            {
-                "name": "auth",
-                "description": "인증 및 회원가입"
-            },
-            {
-                "name": "utils",
-                "description": "유틸리티 엔드포인트 (헬스체크, 버전 등)"
-            }
-        ]
-    )
+        {
+            "name": "exchange",
+            "description": "거래소 정보 및 API 키 관리"
+        },
+        {
+            "name": "telegram",
+            "description": "텔레그램 알림 설정 및 관리"
+        },
+        {
+            "name": "logs",
+            "description": "로그, 거래량, 손익 데이터 조회 및 WebSocket 연결"
+        },
+        {
+            "name": "user",
+            "description": "사용자 정보 조회 및 관리"
+        },
+        {
+            "name": "auth",
+            "description": "인증 및 회원가입"
+        },
+        {
+            "name": "utils",
+            "description": "유틸리티 엔드포인트 (헬스체크, 버전 등)"
+        }
+    ]
+)
 
-    attach_standard_error_examples(app)
+attach_standard_error_examples(app)
 
-    # Register exception handlers (new infrastructure)
-    register_exception_handlers(app)
+# Register exception handlers (new infrastructure)
+register_exception_handlers(app)
 
-    # Register Request ID middleware (MUST be first for proper tracking)
-    app.add_middleware(RequestIDMiddleware)
+# Register Request ID middleware (MUST be first for proper tracking)
+app.add_middleware(RequestIDMiddleware)
 
-    # CORS 미들웨어 설정 - 라우터 등록 전에 추가
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],  # 모든 origin 허용. 프로덕션에서는 구체적인 도메인 지정 필요
-        allow_credentials=True,  # 쿠키 등 인증 정보 허용
-        allow_methods=["*"],  # 모든 HTTP 메서드 허용
-        allow_headers=["*"],  # 모든 헤더 허용
-        expose_headers=["*"],  # 클라이언트에게 노출할 헤더
-    )
+# CORS 미들웨어 설정 - 라우터 등록 전에 추가
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 모든 origin 허용. 프로덕션에서는 구체적인 도메인 지정 필요
+    allow_credentials=True,  # 쿠키 등 인증 정보 허용
+    allow_methods=["*"],  # 모든 HTTP 메서드 허용
+    allow_headers=["*"],  # 모든 헤더 허용
+    expose_headers=["*"],  # 클라이언트에게 노출할 헤더
+)
 
-    # WebSocket 전용 CORS 설정을 위한 미들웨어
-    @app.middleware("http")
+# WebSocket 전용 CORS 설정을 위한 미들웨어
+@app.middleware("http")
 async def add_websocket_cors_headers(request, call_next):
     response = await call_next(request)
     if request.url.path.startswith("/logs/ws/"):

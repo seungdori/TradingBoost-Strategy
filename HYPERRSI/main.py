@@ -70,11 +70,13 @@ def handle_exception(loop, context):
 
 async def shutdown(signal_name: str):
     """
-    Graceful shutdown handler with proper cleanup.
+    Graceful shutdown handler with proper cleanup and forced termination.
 
     This function is called when the application receives a shutdown signal
     (e.g., SIGINT from Ctrl+C). It performs cleanup operations by setting
     the shutdown flag, allowing the lifespan context manager to handle cleanup.
+
+    If shutdown takes too long (>10s), it forces termination to prevent hanging.
 
     Args:
         signal_name: Name of the signal that triggered the shutdown
@@ -101,10 +103,26 @@ async def shutdown(signal_name: str):
             # Wait briefly for task cancellation
             await asyncio.wait(pending_tasks, timeout=3.0)
 
+        # Get all running tasks and cancel them
+        all_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+        if all_tasks:
+            logger.info(f"Force cancelling {len(all_tasks)} remaining async tasks")
+            for task in all_tasks:
+                task.cancel()
+            # Wait with timeout
+            await asyncio.wait(all_tasks, timeout=2.0)
+
     except Exception as e:
         logger.error(f"Error during shutdown task cleanup: {e}", exc_info=True)
     finally:
         logger.info("Signal handler cleanup completed. Lifespan will handle final cleanup.")
+
+async def force_shutdown_after_timeout():
+    """Force shutdown after timeout to prevent hanging"""
+    await asyncio.sleep(10.0)  # Wait 10 seconds
+    if _is_shutting_down:
+        logger.warning("Graceful shutdown timeout exceeded. Forcing immediate exit.")
+        os._exit(1)
 
 def handle_signals():
     """시그널 핸들러 설정"""
@@ -113,12 +131,15 @@ def handle_signals():
     # 예외 핸들러 설정
     loop.set_exception_handler(handle_exception)
 
+    def sigint_handler():
+        """SIGINT 핸들러 - 종료 프로세스를 시작하고 타임아웃 보호를 추가"""
+        # Don't track shutdown task to avoid recursive cancellation
+        asyncio.create_task(shutdown("SIGINT"), name="shutdown-handler")
+        # Start force shutdown timer
+        asyncio.create_task(force_shutdown_after_timeout(), name="force-shutdown-timer")
+
     # Ctrl+C (SIGINT)에만 반응하도록 설정
-    # Don't track shutdown task to avoid recursive cancellation
-    loop.add_signal_handler(
-        signal.SIGINT,
-        lambda: asyncio.create_task(shutdown("SIGINT"), name="shutdown-handler")
-    )
+    loop.add_signal_handler(signal.SIGINT, sigint_handler)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -268,6 +289,8 @@ app.add_middleware(
         "https://tradingboostdemo.com",
         "http://localhost:3000",
         "https://localhost:3000",
+        "http://localhost:3009",
+        "http://localhost:3010",
         "http://158.247.206.127:3000",
         "https://158.247.206.127:3000",
     ],
@@ -315,7 +338,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         # 또는 query params에서
         elif 'user_id' in request.query_params:
             user_id = request.query_params['user_id']
-    except:
+    except Exception:
         pass
 
     # 에러 로깅

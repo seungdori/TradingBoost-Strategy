@@ -76,8 +76,8 @@ async def redis_context() -> AsyncIterator[AsyncRedis]:
         logger.error("Redis operation failed", exc_info=True)
         raise
     finally:
-        # Close returns connection to pool
-        await redis.close()
+        # aclose() returns connection to pool (redis-py 5.0+)
+        await redis.aclose()
 
 
 # =============================================================================

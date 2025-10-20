@@ -501,7 +501,7 @@ def log_bot_start(user_id: str, symbol: str, config: dict[str, Any] | None = Non
                 try:
                     json.dumps({k: v})
                     safe_config[k] = v
-                except:
+                except Exception as e:
                     safe_config[k] = str(v)
             additional_data = {
                 'config': safe_config,
@@ -543,7 +543,7 @@ def log_bot_error(user_id: str, symbol: str, error_message: str, exception: Exce
         try:
             json.dumps({k: v})
             safe_additional_data[k] = v
-        except:
+        except Exception as e:
             safe_additional_data[k] = str(v)
 
     alert_log(

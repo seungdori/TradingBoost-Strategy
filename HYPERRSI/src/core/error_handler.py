@@ -86,7 +86,7 @@ async def handle_critical_error(
             from HYPERRSI.src.bot.telegram_message import send_telegram_message
             if asyncio.iscoroutinefunction(send_telegram_message):
                 await send_telegram_message(simple_message, "system", error=True)
-        except:
+        except Exception as e:
             print(f"Critical: Failed to send error notification - {str(e)}")
 
 # 공통 classify_error 사용 (shared.errors.categories에서 import)

@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 
 import websockets
 
-from GRID.core.redis import get_redis_connection
+from shared.database.redis_patterns import redis_context, RedisTTL
 from shared.config import OKX_API_KEY, OKX_PASSPHRASE, OKX_SECRET_KEY
 
 
@@ -332,20 +332,20 @@ async def get_balance_of_symbol(exchange, symbol, user_id):
     Returns:
         float: Balance or position quantity
     """
-    redis = await get_redis_connection()
-    try:
-        if exchange.id.lower() == 'upbit':
-            cache_key = f"upbit:balance:{user_id}:{symbol}"
-            return await handle_upbit(exchange, symbol, user_id, redis, cache_key)
-        elif exchange.id.lower() == 'okx':
-            cache_key = f"okx:positions:{user_id}"
-            return await handle_okx(exchange, symbol, user_id, redis, cache_key)
-        else:
-            cache_key = f"{exchange.id.lower()}:positions:{user_id}:{symbol}"
-            return await handle_other_exchanges(exchange, symbol, user_id, redis, cache_key)
-    except Exception as e:
-        print(f"An error occurred9: {e}")
-        return 0.0
+    async with redis_context() as redis:
+        try:
+            if exchange.id.lower() == 'upbit':
+                cache_key = f"upbit:balance:{user_id}:{symbol}"
+                return await handle_upbit(exchange, symbol, user_id, redis, cache_key)
+            elif exchange.id.lower() == 'okx':
+                cache_key = f"okx:positions:{user_id}"
+                return await handle_okx(exchange, symbol, user_id, redis, cache_key)
+            else:
+                cache_key = f"{exchange.id.lower()}:positions:{user_id}:{symbol}"
+                return await handle_other_exchanges(exchange, symbol, user_id, redis, cache_key)
+        except Exception as e:
+            print(f"An error occurred9: {e}")
+            return 0.0
 
 
 async def get_all_positions(exchange_name, user_id):
@@ -359,71 +359,70 @@ async def get_all_positions(exchange_name, user_id):
     Returns:
         dict: Dictionary of {symbol: position_quantity}
     """
-    redis = await get_redis_connection()
+    async with redis_context() as redis:
+        # Try new Hash pattern first (Phase 2)
+        index_key = f'positions:index:{user_id}:{exchange_name}'
+        position_keys = await redis.smembers(index_key)
 
-    # Try new Hash pattern first (Phase 2)
-    index_key = f'positions:index:{user_id}:{exchange_name}'
-    position_keys = await redis.smembers(index_key)
+        if position_keys:
+            # New Hash pattern: individual positions
+            result = {}
+            excluded_symbols = ['BTC-USDT-SWAP', 'ETH-USDT-SWAP', 'SOL-USDT-SWAP']
 
-    if position_keys:
-        # New Hash pattern: individual positions
-        result = {}
-        excluded_symbols = ['BTC-USDT-SWAP', 'ETH-USDT-SWAP', 'SOL-USDT-SWAP']
+            for pos_key in position_keys:
+                # pos_key format: "{symbol}:{side}"
+                try:
+                    symbol, side = pos_key.split(':')
+                    position_key = f'positions:{user_id}:{exchange_name}:{symbol}:{side}'
 
-        for pos_key in position_keys:
-            # pos_key format: "{symbol}:{side}"
-            try:
-                symbol, side = pos_key.split(':')
-                position_key = f'positions:{user_id}:{exchange_name}:{symbol}:{side}'
+                    # Get position hash
+                    position = await redis.hgetall(position_key)
+                    if position:
+                        pos = float(position.get('pos', 0))
+                        notional_usd = float(position.get('notionalUsd', 0))
 
-                # Get position hash
-                position = await redis.hgetall(position_key)
-                if position:
-                    pos = float(position.get('pos', 0))
-                    notional_usd = float(position.get('notionalUsd', 0))
+                        if pos != 0 and notional_usd < 10000 and symbol not in excluded_symbols:
+                            # Aggregate positions by symbol (sum long and short)
+                            result[symbol] = result.get(symbol, 0) + pos
+                except (ValueError, KeyError) as e:
+                    print(f"Error processing position key {pos_key}: {e}")
+                    continue
 
-                    if pos != 0 and notional_usd < 10000 and symbol not in excluded_symbols:
-                        # Aggregate positions by symbol (sum long and short)
-                        result[symbol] = result.get(symbol, 0) + pos
-            except (ValueError, KeyError) as e:
-                print(f"Error processing position key {pos_key}: {e}")
-                continue
+            return result
 
-        return result
+        # Fallback to legacy JSON array pattern
+        legacy_key = f'{exchange_name}:positions:{user_id}'
+        position_data = await redis.get(legacy_key)
 
-    # Fallback to legacy JSON array pattern
-    legacy_key = f'{exchange_name}:positions:{user_id}'
-    position_data = await redis.get(legacy_key)
+        if position_data is None:
+            return {}  # 포지션 정보가 없으면 빈 딕셔너리 반환
 
-    if position_data is None:
-        return {}  # 포지션 정보가 없으면 빈 딕셔너리 반환
+        try:
+            positions = json.loads(position_data)
+            result = {}
+            excluded_symbols = ['BTC-USDT-SWAP', 'ETH-USDT-SWAP', 'SOL-USDT-SWAP']
 
-    try:
-        positions = json.loads(position_data)
-        result = {}
-        excluded_symbols = ['BTC-USDT-SWAP', 'ETH-USDT-SWAP', 'SOL-USDT-SWAP']
+            if isinstance(positions, list):
+                for position in positions:
+                    if isinstance(position, dict):
+                        symbol = position.get('instId')
+                        pos = float(position.get('pos', 0))
+                        notional_usd = float(position.get('notionalUsd', 0))
+                        if pos != 0 and notional_usd < 10000 and symbol not in excluded_symbols:
+                            result[symbol] = pos
+            elif isinstance(positions, dict):
+                for symbol, position in positions.items():
+                    if isinstance(position, dict):
+                        pos = float(position.get('pos', 0))
+                        notional_usd = float(position.get('notionalUsd', 0))
+                        if pos != 0 and notional_usd < 10000 and symbol not in excluded_symbols:
+                            result[symbol] = pos
 
-        if isinstance(positions, list):
-            for position in positions:
-                if isinstance(position, dict):
-                    symbol = position.get('instId')
-                    pos = float(position.get('pos', 0))
-                    notional_usd = float(position.get('notionalUsd', 0))
-                    if pos != 0 and notional_usd < 10000 and symbol not in excluded_symbols:
-                        result[symbol] = pos
-        elif isinstance(positions, dict):
-            for symbol, position in positions.items():
-                if isinstance(position, dict):
-                    pos = float(position.get('pos', 0))
-                    notional_usd = float(position.get('notionalUsd', 0))
-                    if pos != 0 and notional_usd < 10000 and symbol not in excluded_symbols:
-                        result[symbol] = pos
+            return result  # 0이 아닌 포지션만 포함된 딕셔너리 반환
 
-        return result  # 0이 아닌 포지션만 포함된 딕셔너리 반환
-
-    except (json.JSONDecodeError, ValueError, AttributeError) as e:
-        print(f"Error processing position data: {e}")
-        return {}  # 데이터 파싱 오류 시 빈 딕셔너리 반환
+        except (json.JSONDecodeError, ValueError, AttributeError) as e:
+            print(f"Error processing position data: {e}")
+            return {}  # 데이터 파싱 오류 시 빈 딕셔너리 반환
 
 
 async def get_position_size(exchange_name, user_id, symbol):
@@ -438,51 +437,50 @@ async def get_position_size(exchange_name, user_id, symbol):
     Returns:
         float: Position size, 0.0 if no position found
     """
-    redis = await get_redis_connection()
+    async with redis_context() as redis:
+        # Try new Hash pattern first (Phase 2)
+        index_key = f'positions:index:{user_id}:{exchange_name}'
+        position_keys = await redis.smembers(index_key)
 
-    # Try new Hash pattern first (Phase 2)
-    index_key = f'positions:index:{user_id}:{exchange_name}'
-    position_keys = await redis.smembers(index_key)
+        if position_keys:
+            # New Hash pattern: check for this specific symbol
+            total_pos = 0.0
 
-    if position_keys:
-        # New Hash pattern: check for this specific symbol
-        total_pos = 0.0
+            for pos_key in position_keys:
+                # pos_key format: "{symbol}:{side}"
+                try:
+                    pos_symbol, side = pos_key.split(':')
+                    if pos_symbol == symbol:
+                        position_key = f'positions:{user_id}:{exchange_name}:{symbol}:{side}'
+                        position = await redis.hgetall(position_key)
+                        if position:
+                            pos = float(position.get('pos', 0))
+                            # Sum both long and short positions for the symbol
+                            total_pos += pos
+                except (ValueError, KeyError) as e:
+                    print(f"Error processing position key {pos_key}: {e}")
+                    continue
 
-        for pos_key in position_keys:
-            # pos_key format: "{symbol}:{side}"
-            try:
-                pos_symbol, side = pos_key.split(':')
-                if pos_symbol == symbol:
-                    position_key = f'positions:{user_id}:{exchange_name}:{symbol}:{side}'
-                    position = await redis.hgetall(position_key)
-                    if position:
-                        pos = float(position.get('pos', 0))
-                        # Sum both long and short positions for the symbol
-                        total_pos += pos
-            except (ValueError, KeyError) as e:
-                print(f"Error processing position key {pos_key}: {e}")
-                continue
+            return total_pos
 
-        return total_pos
+        # Fallback to legacy JSON array pattern
+        position_key = f'{exchange_name}:positions:{user_id}'
+        position_data = await redis.get(position_key)
 
-    # Fallback to legacy JSON array pattern
-    position_key = f'{exchange_name}:positions:{user_id}'
-    position_data = await redis.get(position_key)
+        if position_data is None:
+            return 0.0  # 포지션 정보가 없으면 0 반환
 
-    if position_data is None:
-        return 0.0  # 포지션 정보가 없으면 0 반환
-
-    try:
-        positions = json.loads(position_data)
-        if isinstance(positions, list):
-            for position in positions:
-                if isinstance(position, dict) and position.get('instId') == symbol:
+        try:
+            positions = json.loads(position_data)
+            if isinstance(positions, list):
+                for position in positions:
+                    if isinstance(position, dict) and position.get('instId') == symbol:
+                        return float(position.get('pos', 0))
+            elif isinstance(positions, dict):
+                position = positions.get(symbol)
+                if position:
                     return float(position.get('pos', 0))
-        elif isinstance(positions, dict):
-            position = positions.get(symbol)
-            if position:
-                return float(position.get('pos', 0))
-        return 0.0  # 해당 심볼에 대한 포지션이 없으면 0 반환
-    except (json.JSONDecodeError, ValueError, AttributeError) as e:
-        print(f"Error processing position data: {e}")
+            return 0.0  # 해당 심볼에 대한 포지션이 없으면 0 반환
+        except (json.JSONDecodeError, ValueError, AttributeError) as e:
+            print(f"Error processing position data: {e}")
         return 0.0  # 데이터 파싱 오류 시 0 반환

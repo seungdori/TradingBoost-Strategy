@@ -21,7 +21,7 @@ import requests
 from GRID import telegram_message
 
 # ==================== Core 모듈 ====================
-from GRID.core.redis import get_redis_connection
+from shared.database.redis_patterns import redis_context, RedisTTL
 
 # ==================== 프로젝트 모듈 ====================
 from GRID.database import redis_database
@@ -72,18 +72,18 @@ async def main(exchange_name, direction, enter_symbol_count, enter_symbol_amount
 
         # Redis 및 사용자 데이터 초기화
         try:
-            redis = await get_redis_connection()
-            user_id = int(user_id)
-            if telegram_id is not None:
-                await redis_database.update_telegram_id(exchange_name, user_id, telegram_id)
-            is_running = await get_user_data(exchange_name, user_id, "is_running")
-            if is_running is None:
-                await update_user_data(exchange_name, user_id, is_running=False, tasks=[], running_symbols=set())
-            completed_symbols: set[str] = set()
-            if force_restart:
-                completed_trading_symbols = await get_user_data(exchange_name, user_id, "completed_trading_symbols")
-            else:
-                await redis.hset(f'{exchange_name}:user:{user_id}', 'completed_trading_symbols', json.dumps(list(completed_symbols)))
+            async with redis_context() as redis:
+                user_id = int(user_id)
+                if telegram_id is not None:
+                    await redis_database.update_telegram_id(exchange_name, user_id, telegram_id)
+                is_running = await get_user_data(exchange_name, user_id, "is_running")
+                if is_running is None:
+                    await update_user_data(exchange_name, user_id, is_running=False, tasks=[], running_symbols=set())
+                completed_symbols: set[str] = set()
+                if force_restart:
+                    completed_trading_symbols = await get_user_data(exchange_name, user_id, "completed_trading_symbols")
+                else:
+                    await redis.hset(f'{exchange_name}:user:{user_id}', 'completed_trading_symbols', json.dumps(list(completed_symbols)))
         except Exception as e:
             print(f"Error on initializing user data: {str(e)}")
             raise e
