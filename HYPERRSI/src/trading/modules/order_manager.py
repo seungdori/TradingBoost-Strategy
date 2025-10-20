@@ -186,9 +186,14 @@ class OrderManager:
         order_type: str = 'market',
         price: float = None,
         trigger_price: float = None,
-        direction: Optional[str] = None
+        direction: Optional[str] = None,
+        pos_side: Optional[str] = None
     ) -> OrderStatus:
         """주문 전송"""
+        # pos_side와 direction 중 하나를 direction으로 사용
+        if pos_side and not direction:
+            direction = pos_side
+
         debug_order_params = {
             'symbol': symbol,
             'side': side,

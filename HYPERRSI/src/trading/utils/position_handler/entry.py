@@ -419,7 +419,8 @@ async def _execute_long_entry(
                 f"[{user_id}]⚠️ 롱 포지션 주문 실패\n"
                 f"\n"
                 f"{error_msg}",
-                1709556958
+                1709556958,
+                immediate=True
             )
         return False
 
@@ -549,7 +550,8 @@ async def _execute_short_entry(
                 f"\n"
                 f"{error_msg}",
                 user_id,
-                debug=True
+                debug=True,
+                immediate=True
             )
         return False
 

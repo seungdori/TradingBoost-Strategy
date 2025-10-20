@@ -266,8 +266,16 @@ async def enqueue_telegram_message(message_data):
         # 처리 중이 아니면 메시지 처리 시작
         if not is_processing:
             await redis.set(processing_flag, "1", ex=300)  # 5분 타임아웃 설정
-            asyncio.create_task(process_telegram_messages(okx_uid))
-        
+            task = asyncio.create_task(process_telegram_messages(okx_uid))
+            # 태스크 예외를 로깅하기 위한 콜백 추가
+            def task_exception_handler(t):
+                try:
+                    t.result()
+                except Exception as e:
+                    logger.error(f"Background task exception in process_telegram_messages for okx_uid {okx_uid}: {e}")
+                    traceback.print_exc()
+            task.add_done_callback(task_exception_handler)
+
         return True
     except Exception as e:
         logger.error(f"메시지 큐 추가 실패: {str(e)}")
@@ -571,12 +579,13 @@ async def send_telegram_message_with_reply_markup(okx_uid, text, reply_markup=No
     }
     return await enqueue_telegram_message(message_data)
 
-async def send_telegram_message(message, okx_uid, debug=False, error=False):
+async def send_telegram_message(message, okx_uid, debug=False, error=False, immediate=False):
     """
-    텔레그램 메시지를 큐에 추가합니다 (외부 API용)
+    텔레그램 메시지를 전송합니다 (외부 API용)
     error=True인 경우 ERROR_TELEGRAM_ID로 메시지를 전송합니다.
+    immediate=True인 경우 큐를 우회하고 즉시 전송합니다.
     """
-    logger.info(f"[send_telegram_message] 호출됨 - okx_uid: {okx_uid}, debug: {debug}, error: {error}")
+    logger.info(f"[send_telegram_message] 호출됨 - okx_uid: {okx_uid}, debug: {debug}, error: {error}, immediate: {immediate}")
 
     # 만약 okx_uid가 텔레그램 ID인 경우 (13자리 미만) OKX UID로 변환 시도
     if len(str(okx_uid)) < 13:
@@ -587,7 +596,21 @@ async def send_telegram_message(message, okx_uid, debug=False, error=False):
             okx_uid = converted_okx_uid
         else:
             logger.warning(f"[send_telegram_message] 텔레그램 ID {okx_uid}를 OKX UID로 변환 실패, 그대로 사용")
-    
+
+    # immediate=True이면 큐를 우회하고 직접 전송
+    if immediate:
+        logger.info(f"[send_telegram_message] 즉시 전송 모드 - 큐 우회")
+        category = determine_message_category(message)
+        await send_telegram_message_direct(
+            message=message,
+            okx_uid=okx_uid,
+            debug=debug,
+            category=category,
+            error=error
+        )
+        return True
+
+    # 기본 동작: 큐에 추가
     message_data = {
         "event_type": "text",
         "okx_uid": okx_uid,

@@ -8,10 +8,15 @@ Provides optimized Redis connection management with:
 - Backward compatibility with legacy RedisConnectionManager
 """
 
+import asyncio
 import logging
+import os
 import time
+import warnings
 from threading import Lock
 from typing import Any
+
+from logging import LogRecord
 
 import redis.asyncio as aioredis
 from redis import Redis, RedisError
@@ -23,6 +28,52 @@ from shared.database.pool_monitor import RedisPoolMonitor
 from shared.errors import RedisException
 
 logger = logging.getLogger(__name__)
+
+# c-ares DNS resolver 경고 억제
+os.environ.setdefault('GRPC_DNS_RESOLVER', 'native')
+os.environ.setdefault('GRPC_ENABLE_FORK_SUPPORT', '1')
+os.environ.setdefault('GRPC_VERBOSITY', 'ERROR')
+os.environ.setdefault('GRPC_TRACE', '')
+
+# Python warnings 필터
+warnings.filterwarnings('ignore', message='.*c-ares.*')
+warnings.filterwarnings('ignore', message='.*DNS resolver.*')
+
+# 특정 gRPC 경고 로그 필터링
+
+
+class _GrpcDnsWarningFilter(logging.Filter):
+    """Suppress known noisy gRPC DNS resolver warnings."""
+
+    _SUBSTRINGS = (
+        'Failed to create DNS resolver channel with automatic monitoring of resolver configuration changes.',
+        'Failed to initialize c-ares channel',
+    )
+
+    def filter(self, record: LogRecord) -> bool:  # pragma: no cover - logging side effect
+        if not record.name.startswith('grpc'):
+            return True
+
+        message = record.getMessage()
+        return not any(substring in message for substring in self._SUBSTRINGS)
+
+
+_grpc_dns_warning_filter = _GrpcDnsWarningFilter()
+
+
+def _suppress_grpc_dns_warning_logs() -> None:
+    target_logger_names = ('', 'grpc', 'grpc._cython', 'grpc._cython.cygrpc', 'grpc.aio')
+    for logger_name in target_logger_names:
+        logging.getLogger(logger_name).addFilter(_grpc_dns_warning_filter)
+
+
+_suppress_grpc_dns_warning_logs()
+
+# gRPC 관련 로거 레벨 조정
+for grpc_logger_name in ['grpc', 'grpc._cython', 'grpc.aio']:
+    grpc_logger = logging.getLogger(grpc_logger_name)
+    grpc_logger.setLevel(logging.ERROR)
+    grpc_logger.propagate = False
 
 
 class RedisConnectionManager:
@@ -368,10 +419,21 @@ class RedisConnectionPool:
     async def close_pool(cls):
         """Close Redis connection pool"""
         if cls._pool is not None:
-            await cls._pool.disconnect()
-            cls._pool = None
-            cls._monitor = None
-            logger.info("✅ Redis connection pool closed")
+            try:
+                # Use asyncio.wait_for to add timeout protection
+                await asyncio.wait_for(cls._pool.disconnect(), timeout=3.0)
+            except asyncio.TimeoutError:
+                logger.warning("Redis pool disconnect timed out after 3 seconds")
+            except asyncio.CancelledError:
+                logger.debug("Redis pool disconnect cancelled during shutdown")
+                # Re-raise to allow proper cleanup chain
+                raise
+            except Exception as e:
+                logger.error(f"Error disconnecting Redis pool: {e}", exc_info=True)
+            finally:
+                cls._pool = None
+                cls._monitor = None
+                logger.info("✅ Redis connection pool closed")
 
 
 async def get_redis() -> AsyncRedis:
@@ -415,7 +477,14 @@ async def init_redis():
 
 async def close_redis():
     """Close Redis connections (call at app shutdown)"""
-    await RedisConnectionPool.close_pool()
+    try:
+        await RedisConnectionPool.close_pool()
+    except asyncio.CancelledError:
+        # Suppress CancelledError during shutdown - this is normal when tasks are cancelled
+        logger.debug("Redis close operation cancelled during shutdown")
+        pass
+    except Exception as e:
+        logger.error(f"Error closing Redis: {e}", exc_info=True)
 
 
 async def get_redis_binary() -> AsyncRedis:
@@ -572,4 +641,3 @@ def get_circuit_breaker() -> RedisCircuitBreaker:
     if _global_circuit_breaker is None:
         _global_circuit_breaker = RedisCircuitBreaker()
     return _global_circuit_breaker
-

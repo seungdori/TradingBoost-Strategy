@@ -418,7 +418,15 @@ class TradingService:
             raise RuntimeError("OrderManager not initialized")
         # OrderManager._try_send_order expects: user_id, symbol, side, size, leverage, order_type, price, trigger_price, direction
         return await self.order_manager._try_send_order(
-            user_id, symbol, side, size, leverage or 10.0, order_type, price or 0.0, 0.0, pos_side
+            user_id=user_id,
+            symbol=symbol,
+            side=side,
+            size=size,
+            leverage=leverage or 10.0,
+            order_type=order_type,
+            price=price or 0.0,
+            trigger_price=0.0,
+            direction=pos_side
         )
 
     async def _store_order_in_redis(self, user_id: str, order_state: OrderStatus) -> None:

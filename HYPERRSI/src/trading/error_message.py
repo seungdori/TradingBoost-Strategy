@@ -7,18 +7,20 @@ def map_exchange_error(error: Exception) -> str:
     """
     error_str = str(error).lower()  # 소문자로 변환하여 비교
     
-    # 일반적인 에러 패턴 매칭
+    # 일반적인 에러 패턴 매칭 (우선순위 순서대로 체크)
+    # 최소 수량 에러를 먼저 체크 (더 구체적인 조건)
+    if ("minimum" in error_str or "최소" in error_str) and "수량" in error_str:
+        return "📉 주문 수량이 최소 수량 미만입니다."
+
     if "insufficient" in error_str and "balance" in error_str:
         return "💰 계좌 잔고가 부족합니다. 거래 금액을 줄이거나 잔고를 충전해주세요."
-    
+
     if "position" in error_str and "limit" in error_str:
         return "⚠️ 포지션 한도를 초과했습니다."
-    
-    if "leverage" in error_str:
+
+    # leverage는 매우 구체적인 에러 패턴만 매칭 (일반적인 메시지의 "레버리지" 정보는 제외)
+    if "leverage" in error_str and ("invalid" in error_str or "incorrect" in error_str or "51002" in error_str):
         return "📊 레버리지 설정이 올바르지 않습니다. 다시 확인해주세요."
-    
-    if "minimum" in error_str :
-        return "📉 주문 수량이 최소 수량 미만입니다."
     
     if "maximum" in error_str:
         return "📉 주문 수량이 최대 수량 초과입니다."

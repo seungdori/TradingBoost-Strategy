@@ -576,7 +576,7 @@ async def _execute_long_pyramiding(
                 new_position_contract_size
             )
         except Exception as e:
-            await send_telegram_message(f"롱 추가진입 실패 오류: {e}", user_id, debug=True)
+            await send_telegram_message(f"롱 추가진입 실패 오류: {e}", user_id, debug=True, immediate=True)
             print("롱 추가진입 실패 오류: ", e)
             return
 
@@ -831,7 +831,7 @@ async def _execute_short_pyramiding(
                 new_entry_contracts_amount
             )
         except Exception as e:
-            await send_telegram_message(f"숏 추가진입 실패 오류: {e}", user_id, debug=True)
+            await send_telegram_message(f"숏 추가진입 실패 오류: {e}", user_id, debug=True, immediate=True)
             print("숏 추가진입 실패 오류: ", e)
             return
 

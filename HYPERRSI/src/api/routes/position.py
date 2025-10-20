@@ -1412,6 +1412,9 @@ async def open_position_endpoint(
             order_id=position_result.order_id,
             last_filled_price=position_result.last_filled_price
         )
+    except HTTPException:
+        # HTTPException은 이미 적절한 메시지와 상태 코드를 가지고 있으므로 그대로 raise
+        raise
     except Exception as e:
         log_error(
             error=e,

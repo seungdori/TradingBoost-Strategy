@@ -5,6 +5,7 @@ Provides async session management with proper transaction boundaries,
 connection pooling, and error handling.
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -188,10 +189,21 @@ class DatabaseConfig:
     async def close_engine(cls):
         """Close database engine and cleanup connections"""
         if cls._engine is not None:
-            await cls._engine.dispose()
-            cls._engine = None
-            cls._session_factory = None
-            cls._monitor = None
+            try:
+                # Use asyncio.wait_for to add timeout protection
+                await asyncio.wait_for(cls._engine.dispose(), timeout=3.0)
+            except asyncio.TimeoutError:
+                logger.warning("Database engine disposal timed out after 3 seconds")
+            except asyncio.CancelledError:
+                logger.debug("Database engine disposal cancelled during shutdown")
+                # Re-raise to allow proper cleanup chain
+                raise
+            except Exception as e:
+                logger.error(f"Error disposing database engine: {e}", exc_info=True)
+            finally:
+                cls._engine = None
+                cls._session_factory = None
+                cls._monitor = None
 
 
 @asynccontextmanager
@@ -388,6 +400,13 @@ async def close_db():
 
     Call this during application shutdown.
     """
-    await DatabaseConfig.close_engine()
-    logger.info("Database connections closed")
-    print("✅ Database connections closed")
+    try:
+        await DatabaseConfig.close_engine()
+        logger.info("Database connections closed")
+        print("✅ Database connections closed")
+    except asyncio.CancelledError:
+        # Suppress CancelledError during shutdown - this is normal when tasks are cancelled
+        logger.debug("Database close operation cancelled during shutdown")
+        pass
+    except Exception as e:
+        logger.error(f"Error closing database: {e}", exc_info=True)

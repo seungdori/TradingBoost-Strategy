@@ -434,7 +434,7 @@ class TPSLOrderCreator:
                     tp_contracts_amounts.append(contracts_amount_str)
 
                     try:
-                        tp_order = await self._try_send_order(
+                        tp_order = await self.trading_service.order_manager._try_send_order(
                             user_id=user_id,
                             symbol=symbol,
                             side="sell" if position.side == "long" else "buy",
@@ -503,7 +503,7 @@ class TPSLOrderCreator:
                 await redis.hset(position_key, mapping=tp_data)
             if is_hedge and (hedge_tp_price is not None):
                 try:
-                    tp_order = await self._try_send_order(
+                    tp_order = await self.trading_service.order_manager._try_send_order(
                         user_id=user_id,
                         symbol=symbol,
                         side="sell" if (position.side == "long" or position.side == "buy") else "buy",
@@ -593,7 +593,7 @@ class TPSLOrderCreator:
                 #print(f"[SL AMOUNT : {sl_contracts_amount}] SL 주문 생성 시작 -> SL 가격: {position.sl_price}, SL 수량: {position_size}")
                 if okay_to_order_sl == True:
                     try:
-                        sl_order = await self._try_send_order(
+                        sl_order = await self.trading_service.order_manager._try_send_order(
                             user_id=user_id,
                             symbol=symbol,
                             side="sell" if position.side == "long" else "buy",
@@ -659,7 +659,7 @@ class TPSLOrderCreator:
                 use_dual_sl = dual_side_settings.get('use_dual_sl', False)
                 if use_dual_sl:
                     try:
-                        sl_order = await self._try_send_order(
+                        sl_order = await self.trading_service.order_manager._try_send_order(
                             user_id=user_id,
                             symbol=symbol,
                             side="sell" if position.side == "long" else "buy",

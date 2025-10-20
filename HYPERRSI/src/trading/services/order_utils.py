@@ -474,6 +474,26 @@ async def try_send_order(
             #print(f"DEBUG: 이미 계약 수량으로 전달된 경우: {size}")
             raw_amount = float(size)
 
+            # Validate minimum amount BEFORE rounding (OKX BTC minimum is 0.01)
+            MIN_BTC_AMOUNT = 0.01
+            if raw_amount < MIN_BTC_AMOUNT:
+                # Get current price for minimum investment calculation
+                if current_price == 0.0:
+                    current_price = await get_current_price(symbol)
+
+                min_investment = MIN_BTC_AMOUNT * current_price / (leverage or 1.0)
+                error_msg = f"주문 수량이 최소 요구량보다 작습니다 (요청: {raw_amount}, 최소: {MIN_BTC_AMOUNT})"
+                logger.error(f"[{user_id}] {error_msg}")
+                await send_telegram_message(
+                    f"⚠️ {error_msg}\n"
+                    f"💡 현재 가격: ${current_price:,.2f}\n"
+                    f"💡 레버리지: {leverage}x\n"
+                    f"💡 필요한 최소 투자금: {min_investment:.2f} USDT",
+                    user_id,
+                    debug=True
+                )
+                raise ValueError(error_msg)
+
             # OKX precision requirements - round to appropriate precision
             # BTC requires 0.01 minimum precision (2 decimal places)
             # Use Decimal for precise rounding
@@ -482,14 +502,6 @@ async def try_send_order(
             # Round down to 2 decimal places for BTC (0.01 precision)
             # This ensures we don't exceed available balance due to rounding up
             rounded_amount = float(amount_decimal.quantize(Decimal('0.01'), rounding=ROUND_DOWN))
-
-            # Validate minimum amount (OKX BTC minimum is 0.01)
-            MIN_BTC_AMOUNT = 0.01
-            if rounded_amount < MIN_BTC_AMOUNT:
-                error_msg = f"주문 수량이 최소 요구량보다 작습니다 (요청: {rounded_amount:.2f}, 최소: {MIN_BTC_AMOUNT})"
-                logger.error(f"[{user_id}] {error_msg}")
-                await send_telegram_message(f"⚠️ {error_msg}", user_id, debug=True)
-                raise ValueError(error_msg)
 
             contracts_amount = "{:.2f}".format(rounded_amount)
 

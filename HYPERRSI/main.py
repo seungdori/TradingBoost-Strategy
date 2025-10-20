@@ -172,23 +172,35 @@ async def lifespan(app: FastAPI):
         logger.info("Shutting down application...")
 
         try:
-            # Cleanup infrastructure connections with timeout
+            # Cleanup infrastructure connections with timeout and shield from cancellation
             cleanup_tasks = [
                 asyncio.create_task(close_db(), name="close_db"),
                 asyncio.create_task(close_redis(), name="close_redis")
             ]
 
             # Wait for cleanup with timeout
-            await asyncio.wait(cleanup_tasks, timeout=5.0)
+            done, pending = await asyncio.wait(cleanup_tasks, timeout=5.0)
+
+            # Cancel any pending tasks
+            for task in pending:
+                task.cancel()
+                logger.warning(f"Cleanup task {task.get_name()} timed out and was cancelled")
 
             # Check if any tasks failed
-            for task in cleanup_tasks:
-                if task.done() and not task.cancelled():
+            for task in done:
+                if not task.cancelled():
                     try:
                         task.result()
+                    except asyncio.CancelledError:
+                        # Normal during shutdown
+                        pass
                     except Exception as e:
                         logger.error(f"Cleanup task {task.get_name()} failed: {e}")
 
+        except asyncio.CancelledError:
+            # Suppress CancelledError during shutdown - this is normal
+            logger.debug("Cleanup operations cancelled during shutdown")
+            pass
         except Exception as e:
             logger.error(f"Error during final cleanup: {e}", exc_info=True)
         finally:

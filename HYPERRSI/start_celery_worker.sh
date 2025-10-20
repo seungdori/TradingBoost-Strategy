@@ -2,6 +2,10 @@
 
 # 환경 변수 설정 (macOS용)
 export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES  # macOS에서만 필요
+export GRPC_ENABLE_FORK_SUPPORT=1  # c-ares DNS resolver 경고 해결
+export GRPC_DNS_RESOLVER=native  # 네이티브 DNS resolver 사용
+export GRPC_VERBOSITY=ERROR  # gRPC 로깅 레벨을 ERROR로 설정하여 경고 숨김
+export GRPC_TRACE=""  # gRPC 추적 비활성화
 
 # 색상 정의
 GREEN='\033[0;32m'
