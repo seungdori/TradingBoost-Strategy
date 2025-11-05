@@ -186,7 +186,7 @@ async def process_passphrase(message: types.Message, state: FSMContext):
         is_update = user_data.get('is_update', False)
 
         if is_update:  # API 키 업데이트인 경우
-            # 기존 OKX UID 유지
+            # 기존 OKX UID 확인
             existing_okx_uid = await redis.get(f"user:{telegram_id}:okx_uid")
             if existing_okx_uid:
                 existing_okx_uid = existing_okx_uid.decode('utf-8') if isinstance(existing_okx_uid, bytes) else existing_okx_uid
@@ -194,17 +194,22 @@ async def process_passphrase(message: types.Message, state: FSMContext):
                 # 새 API 키의 UID와 기존 UID 비교
                 new_uid = str(uid)
                 if existing_okx_uid != new_uid:
+                    # 계정 전환 허용 - 기존 UID 업데이트
+                    await redis.set(f"user:{telegram_id}:okx_uid", new_uid)
+
+                    # active_traders 업데이트
+                    await redis.srem("active_traders", existing_okx_uid)
+                    await redis.sadd("active_traders", new_uid)
+
                     await message.reply(
-                        "⚠️ 오류: 새 API 키의 계정이 기존 계정과 다릅니다.\n"
+                        "⚠️ 계정이 변경되었습니다.\n"
                         f"기존 UID: {existing_okx_uid}\n"
                         f"새 API UID: {new_uid}\n\n"
-                        "동일한 OKX 계정의 API 키를 사용해주세요."
+                        "새 계정으로 전환됩니다."
                     )
-                    await state.clear()
-                    return
 
-                okx_uid = existing_okx_uid  # 기존 UID 유지
-                logger.info(f"API key update: keeping existing UID {okx_uid}")
+                okx_uid = new_uid  # 새 UID로 변경
+                logger.info(f"API key update: switched to new UID {okx_uid}")
             else:
                 # 기존 UID가 없는 경우 (예외 상황)
                 okx_uid = str(uid)

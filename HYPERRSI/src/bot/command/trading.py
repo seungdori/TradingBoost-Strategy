@@ -686,7 +686,7 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
             leverage = settings.get("leverage")
 
             actual_investment = float(investment) * float(leverage) if investment and leverage else 0.0
-            min_notional = 200
+            min_notional =100
             if actual_investment < min_notional:
                 msg = (
                     f"⚠️ 최소 주문 금액 오류\n"
@@ -738,26 +738,8 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
 
                 if e.response.status_code == 400 and "이미 트레이딩 태스크가 실행 중입니다" in error_detail:
                     logger.info(f"Trading already running for user {user_id}, treating as success")
-                    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-                        [types.InlineKeyboardButton(
-                            text="🔒 시작 (실행 중)",
-                            callback_data="trade_start",
-                            disabled=True
-                        )],
-                        [types.InlineKeyboardButton(
-                            text="⛔️ 중지",
-                            callback_data="trade_stop",
-                            disabled=False
-                        )]
-                    ])
-
-                    await callback.message.edit_text(
-                        f"📊 트레이딩 상태\n\n"
-                        f"현재 상태: 🟢 실행 중\n"
-                        f"거래 종목: {selected_symbol}\n"
-                        f"타임프레임: {selected_timeframe}",
-                        reply_markup=keyboard
-                    )
+                    # 메시지가 이미 같은 내용인지 확인하기 위해 answer만 호출
+                    # edit_text를 시도하면 Telegram에서 "message is not modified" 에러 발생
                     await callback.answer("이미 트레이딩이 실행 중입니다!")
                     return
 

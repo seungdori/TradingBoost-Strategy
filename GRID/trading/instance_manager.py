@@ -8,7 +8,7 @@ from typing import Any
 
 import ccxt.pro as ccxtpro
 
-from GRID.core.redis import get_redis_connection
+from shared.database.redis_patterns import redis_context
 from shared.config import OKX_API_KEY, OKX_PASSPHRASE, OKX_SECRET_KEY, settings  # 환경 변수에서 키 가져오기
 
 class ReadOnlyKeys:
@@ -39,16 +39,12 @@ class ReadOnlyKeys:
 
 
 class ThreadSafeAsyncExchangeManager:
+    """Thread-safe exchange instance manager using redis_context() pattern"""
     def __init__(self) -> None:
         self.instances: dict[str, dict[str, Any]] = {}
         self.locks: dict[str, asyncio.Lock] = {}
         self.global_lock = Lock()
         self.INSTANCE_TIMEOUT = 3600  # 1 hour
-        self.redis: Any | None = None
-
-    async def init_redis(self) -> None:
-        """Initialize Redis connection using shared connection pool"""
-        self.redis = await get_redis_connection()
 
     async def get_instance(self, exchange_name: str, user_id: str) -> Any | None:
         if exchange_name.lower() != 'okx':
@@ -83,9 +79,7 @@ class ThreadSafeAsyncExchangeManager:
             return self.locks[key]
 
     async def _create_okx_instance(self, user_id: str) -> Any | None:
-        if self.redis is None:
-            await self.init_redis()
-
+        """Create OKX exchange instance using redis_context()"""
         try:
             if user_id == '999999999' or user_id == 'admin':
                 return ccxtpro.okx({
@@ -99,10 +93,9 @@ class ThreadSafeAsyncExchangeManager:
                 })
             else:
                 user_key = f'okx:user:{user_id}'
-                if self.redis is not None:
-                    user_data = await self.redis.hgetall(user_key)
-                else:
-                    user_data = {}
+                async with redis_context() as redis:
+                    user_data = await redis.hgetall(user_key)
+
                 if user_data and 'api_key' in user_data:
                     return ccxtpro.okx({
                         'apiKey': user_data['api_key'],

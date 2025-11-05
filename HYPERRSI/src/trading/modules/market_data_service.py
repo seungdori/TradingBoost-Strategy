@@ -17,16 +17,18 @@ from HYPERRSI.src.trading.services.get_current_price import get_current_price
 from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger
 from shared.utils import safe_float
+from shared.config import get_settings
 
 logger = get_logger(__name__)
 
+# Get settings instance for API URL
+_settings = get_settings()
 
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
         return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
-API_BASE_URL = "/api"
 
 
 class MarketDataService:
@@ -109,12 +111,18 @@ class MarketDataService:
             current_rsi = rsi_values[-1]
             previous_rsi = rsi_values[-2]
 
-            print(f"current_rsi: {current_rsi}, previous_rsi: {previous_rsi}, rsi settings: {rsi_settings}")
-
             # 진입 옵션에 따른 처리
             entry_option = rsi_settings.get('entry_option', '')
             rsi_oversold = rsi_settings['rsi_oversold']
             rsi_overbought = rsi_settings['rsi_overbought']
+
+            # 디버깅: RSI 설정 로그
+            logger.info(f"🔍 RSI 신호 체크:")
+            logger.info(f"  - entry_option: '{entry_option}'")
+            logger.info(f"  - rsi_oversold: {rsi_oversold}")
+            logger.info(f"  - rsi_overbought: {rsi_overbought}")
+            logger.info(f"  - previous_rsi: {previous_rsi:.3f}")
+            logger.info(f"  - current_rsi: {current_rsi:.3f}")
 
             is_oversold = False
             is_overbought = False
@@ -125,24 +133,43 @@ class MarketDataService:
 
                 # 숏: crossunder the rsi_overbought
                 is_overbought = previous_rsi < rsi_overbought and current_rsi >= rsi_overbought
+            elif entry_option == '변곡':
+                # 롱: oversold 영역에서 RSI 상승 시작 (방향 전환)
+                is_oversold = ((previous_rsi < rsi_oversold) or (current_rsi < rsi_oversold)) and current_rsi > previous_rsi
+
+                # 숏: overbought 영역에서 RSI 하락 시작 (방향 전환)
+                is_overbought = ((previous_rsi > rsi_overbought) or (current_rsi > rsi_overbought)) and current_rsi < previous_rsi
 
             elif entry_option == '변곡돌파':
-                # 롱: crossover the rsi_oversold
-                is_oversold = current_rsi < rsi_oversold and previous_rsi >= rsi_oversold
+                # 롱: oversold 위로 crossover (oversold 돌파)
+                is_oversold = current_rsi >= rsi_oversold and previous_rsi < rsi_oversold
 
-                # 숏: crossover the rsi_overbought
-                is_overbought = current_rsi > rsi_overbought and previous_rsi <= rsi_overbought
+                # 숏: overbought 아래로 crossunder (overbought 돌파)
+                is_overbought = current_rsi <= rsi_overbought and previous_rsi > rsi_overbought
 
             elif entry_option == '초과':
-                # 롱: current_rsi > rsi_oversold
+                # 롱: current_rsi < rsi_oversold
                 is_oversold = current_rsi < rsi_oversold
-                # 숏: current_rsi < rsi_overbought
+                # 숏: current_rsi > rsi_overbought
                 is_overbought = current_rsi > rsi_overbought
 
             else:
                 # 기본 동작 (기존 코드와 동일)
                 is_oversold = current_rsi < rsi_oversold
                 is_overbought = current_rsi > rsi_overbought
+
+            # 디버깅: 결과 로그
+            logger.info(f"🎯 RSI 신호 결과:")
+            logger.info(f"  - is_oversold: {is_oversold}")
+            logger.info(f"  - is_overbought: {is_overbought}")
+            if entry_option == '돌파':
+                logger.info(f"  - '돌파' 조건:")
+                logger.info(f"    롱(oversold): prev({previous_rsi:.3f}) > {rsi_oversold} and curr({current_rsi:.3f}) <= {rsi_oversold}")
+                logger.info(f"    숏(overbought): prev({previous_rsi:.3f}) < {rsi_overbought} and curr({current_rsi:.3f}) >= {rsi_overbought}")
+            elif entry_option == '변곡돌파':
+                logger.info(f"  - '변곡돌파' 조건:")
+                logger.info(f"    롱(oversold): curr({current_rsi:.3f}) < {rsi_oversold} and prev({previous_rsi:.3f}) >= {rsi_oversold}")
+                logger.info(f"    숏(overbought): curr({current_rsi:.3f}) > {rsi_overbought} and prev({previous_rsi:.3f}) <= {rsi_overbought}")
 
             return {
                 'rsi': current_rsi,
@@ -195,8 +222,10 @@ class MarketDataService:
                     return None
                 logger.info(f"계약 사양 정보가 없어 새로 조회합니다: {symbol}")
                 async with httpx.AsyncClient() as client:
+                    # Use dynamic API URL from settings
+                    api_url = f"{_settings.hyperrsi_api_url}/account/contract-specs"
                     response = await client.get(
-                        f"{API_BASE_URL}/account/contract-specs",
+                        api_url,
                         params={
                             "user_id": str(user_id),
                             "force_update": True
@@ -238,9 +267,10 @@ class MarketDataService:
 
                 contracts_amount = (size_usdt * leverage) / (contract_size * current_price)
                 contracts_amount = max(min_size, safe_float(contracts_amount))
-                contracts_amount = round(contracts_amount / min_size) * min_size
-                # Round to 2 decimal places for proper precision (BTC contracts)
-                contracts_amount = round(contracts_amount, 2)
+                # minSize 단위로 내림 처리 (이중 반올림 방지)
+                contracts_amount = (contracts_amount // min_size) * min_size
+                # 소수점 정밀도 유지 (최대 8자리)
+                contracts_amount = round(contracts_amount, 8)
 
             return {
                 "symbol": symbol,

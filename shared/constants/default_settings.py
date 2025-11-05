@@ -12,8 +12,19 @@ DEFAULT_PARAMS_SETTINGS = {
     "eth_investment": 20,
     "sol_investment": 20,
     'entry_amount_option': 'usdt',
-    
+
     'symbol_investments': {},  # 심볼별 투입금액 {심볼: 금액}
+
+    # 실행 모드 설정 (글로벌 기본값 + 종목별 Override)
+    "execution_mode": "api_direct",  # 글로벌 기본값: api_direct | signal_bot
+    "signal_bot_token": None,
+    "signal_bot_webhook_url": None,
+
+    # 종목별 실행 모드 Override (선택사항)
+    # 예: {"BTC-USDT-SWAP": "signal_bot", "ETH-USDT-SWAP": "api_direct"}
+    # 설정 없는 종목은 execution_mode 기본값 사용
+    "symbol_execution_modes": {},
+
     "leverage": 10,
     "direction": "롱숏",
     "entry_multiplier": 1.0,
@@ -41,7 +52,7 @@ DEFAULT_PARAMS_SETTINGS = {
     "use_tp3": True,
     
     # SL 설정
-    "use_sl": True,
+    "use_sl": False,  # 기본값: OFF
     "use_sl_on_last": False,
     "sl_option": "퍼센트 기준",
     "sl_value": 5.0,
@@ -62,11 +73,11 @@ DEFAULT_PARAMS_SETTINGS = {
     "pyramiding_value": 3.0,
     
     #트레일링스탑 설정
-    "trailing_stop_active": False,
+    "trailing_stop_active": True,  # 기본값: ON
     "trailing_start_point": "tp3",
-    "trailing_stop_type": None,
+    "trailing_stop_type": "트레일링 스탑 고정값",
     "use_trailing_stop_value_with_tp2_tp3_difference": False,
-    "trailing_stop_offset_value": 0.0,
+    "trailing_stop_offset_value": 0.5,
     
 }
 
@@ -104,11 +115,7 @@ DEFAULT_DUAL_SIDE_ENTRY_SETTINGS = {
 ENTRY_OPTIONS = ["돌파", "변곡", "변곡돌파", "초과"]
 TP_SL_OPTIONS = ["금액 기준", "퍼센트 기준", "ATR 기준"]
 DIRECTION_OPTIONS = ["롱", "숏", "롱숏"]
-PYRAMIDING_TYPES = [
-    "0. 최초 진입한 포지션이 정리되기 전까지는 모든 새로운 신호는 무시",
-    "1. 동일한 방향 신호 발생시 추가 진입",
-    "2. 반대 방향의 신호 발생시 보유포지션 정리 후 반대로 진입"
-]
+
 ENTRY_CRITERION_OPTIONS = [
     "평균 단가",
     "마지막 진입"

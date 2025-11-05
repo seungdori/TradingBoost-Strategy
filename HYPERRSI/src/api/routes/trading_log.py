@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 from typing import Any, List, Optional
 
@@ -10,6 +11,8 @@ from HYPERRSI.src.core.logger import (
     get_user_order_logs_from_file,
 )
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_patterns import redis_context, RedisTimeout
+from shared.database.redis_helpers import safe_exists, safe_delete
 
 trading_log_router = APIRouter()
 
@@ -164,22 +167,30 @@ async def fetch_trading_logs(user_id: str) -> TradingLogResponse:
       - **execution_count**: 실행 횟수 (int)
       - **execution_times**: 실행 시간 목록 (List[str])
     """
-    # Redis 키 설정
-    count_key = f"user:{user_id}:trading_execution_count"
-    times_key = f"user:{user_id}:trading_execution_times"
-    
-    # 실행 횟수 조회
-    execution_count = await get_redis_client().get(count_key)
-    if execution_count is None:
-        execution_count = 0
-    else:
-        execution_count = int(execution_count)
-    
-    # 실행 시간 목록 조회 (List 타입)
-    execution_times_bytes = await get_redis_client().lrange(times_key, 0, -1)
-    # Redis에서 가져온 값은 bytes이므로, 디코딩을 해줘야 문자열로 변환됨
-    execution_times = [x.decode("utf-8") for x in execution_times_bytes]
-    
+    # Use context manager for proper connection management and timeout protection
+    async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+        # Redis 키 설정
+        count_key = f"user:{user_id}:trading_execution_count"
+        times_key = f"user:{user_id}:trading_execution_times"
+
+        # 실행 횟수 조회
+        execution_count = await asyncio.wait_for(
+            redis.get(count_key),
+            timeout=RedisTimeout.FAST_OPERATION
+        )
+        if execution_count is None:
+            execution_count = 0
+        else:
+            execution_count = int(execution_count)
+
+        # 실행 시간 목록 조회 (List 타입)
+        execution_times_bytes = await asyncio.wait_for(
+            redis.lrange(times_key, 0, -1),
+            timeout=RedisTimeout.FAST_OPERATION
+        )
+        # Redis에서 가져온 값은 bytes이므로, 디코딩을 해줘야 문자열로 변환됨
+        execution_times = [x.decode("utf-8") for x in execution_times_bytes]
+
     return TradingLogResponse(
         user_id=user_id,
         execution_count=execution_count,
@@ -360,14 +371,16 @@ async def cleanup_trading_data(user_id: str, symbol: str) -> CleanupResponse:
             f"user:{user_id}:position:{symbol}:short:dca_levels",
             f"user:{user_id}:position:{symbol}:pyramiding_count"
         ]
-        
-        # 키 삭제 실행
-        deleted_keys = []
-        for key in keys_to_delete:
-            if await get_redis_client().exists(key):
-                await get_redis_client().delete(key)
-                deleted_keys.append(key)
-        
+
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 키 삭제 실행 (standardized helpers with timeout protection)
+            deleted_keys = []
+            for key in keys_to_delete:
+                if await safe_exists(redis, key):
+                    if await safe_delete(redis, key) > 0:
+                        deleted_keys.append(key)
+
         return CleanupResponse(
             user_id=user_id,
             symbol=symbol,
@@ -892,7 +905,7 @@ curl "http://localhost:8000/order-logs/date-range?start_date=2025-01-15&end_date
 async def get_order_logs_by_date(
     start_date: str = Query(..., description="시작 날짜 (YYYY-MM-DD)"),
     end_date: str = Query(..., description="종료 날짜 (YYYY-MM-DD)"),
-    user_id: Optional[int] = Query(None, description="조회할 사용자 ID (선택적)"),
+    user_id: Optional[str] = Query(None, description="조회할 사용자 ID (정수 또는 UUID 문자열, 선택적)"),
     limit: int = Query(100, ge=1, le=1000, description="반환할 최대 로그 수"),
     offset: int = Query(0, ge=0, description="건너뛸 로그 수")
 ) -> OrderLogsResponse:
@@ -900,10 +913,10 @@ async def get_order_logs_by_date(
     ### 날짜 범위별 거래 로그 조회
     - **start_date**: 시작 날짜 (YYYY-MM-DD)
     - **end_date**: 종료 날짜 (YYYY-MM-DD)
-    - **user_id**: 조회할 사용자 ID (선택적)
+    - **user_id**: 조회할 사용자 ID (정수 또는 UUID 문자열, 선택적)
     - **limit**: 반환할 최대 로그 수 (기본값: 100, 최대: 1000)
     - **offset**: 건너뛸 로그 수 (페이지네이션 용)
-    
+
     반환값:
     - 조건에 맞는 거래 로그 목록
     """
@@ -912,8 +925,8 @@ async def get_order_logs_by_date(
         start_datetime = datetime.strptime(start_date, "%Y-%m-%d")
         end_datetime = datetime.strptime(end_date, "%Y-%m-%d")
         end_datetime = datetime(end_datetime.year, end_datetime.month, end_datetime.day, 23, 59, 59)
-        
-        # 로그 조회
+
+        # 로그 조회 (user_id를 문자열로 전달)
         logs = get_order_logs_by_date_range(start_datetime, end_datetime, user_id, limit, offset)
         
         # 응답 형식으로 변환

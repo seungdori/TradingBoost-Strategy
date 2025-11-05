@@ -9,6 +9,10 @@ from HYPERRSI.src.core.logger import error_logger as logger
 from shared.errors import ERROR_SEVERITY_MAP, ErrorCategory, ErrorSeverity
 from shared.errors.categories import classify_error as _classify_error
 
+# Error Database 통합 (별도 Pool 사용)
+from shared.database.error_db_session import get_error_db_transactional
+from shared.database.error_log_service import ErrorLogService
+
 
 async def handle_critical_error(
     error: Exception,
@@ -62,6 +66,22 @@ async def handle_critical_error(
             trace_str = '\n'.join(trace_lines)
             admin_message += f"\n<b>스택 트레이스 (마지막 10줄):</b>\n<code>{trace_str}</code>"
         
+        # Error Database에 저장 (별도 Pool 사용 - 메인 Pool 영향 없음)
+        try:
+            async with get_error_db_transactional() as error_db:
+                await ErrorLogService.log_exception(
+                    db=error_db,
+                    exception=error,
+                    user_id=okx_uid,
+                    strategy_type="HYPERRSI",
+                    severity=severity.value.upper(),
+                    module=context.get("function"),
+                    metadata=context
+                )
+        except Exception as db_error:
+            # DB 저장 실패해도 메인 로직은 계속 진행
+            logger.error(f"Failed to save error to database: {db_error}")
+
         # 심각도가 MEDIUM 이상인 경우에만 관리자에게 알림
         if severity in [ErrorSeverity.MEDIUM, ErrorSeverity.HIGH, ErrorSeverity.CRITICAL]:
             # error=True를 설정하면 ERROR_TELEGRAM_ID로 전송됨

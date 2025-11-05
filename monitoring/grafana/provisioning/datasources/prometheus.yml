@@ -1,0 +1,16 @@
+# yamllint disable
+# Grafana Datasource Provisioning
+# Automatically configures Prometheus as a datasource on Grafana startup
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: "15s"
+      httpMethod: POST

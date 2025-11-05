@@ -3,6 +3,7 @@ Position Service
 
 포지션 관리 관련 비즈니스 로직
 """
+import asyncio
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
@@ -24,6 +25,7 @@ from HYPERRSI.src.api.routes.order.services.base_service import BaseService
 from HYPERRSI.src.api.routes.order.services.order_service import OrderService
 from HYPERRSI.src.api.routes.order.validators import validate_close_percent, validate_symbol_format
 from HYPERRSI.src.core.logger import error_logger
+from shared.database.redis_patterns import RedisTimeout
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -133,7 +135,10 @@ class PositionService(BaseService):
         if redis_client:
             try:
                 position_key = f"user:{user_id}:position:{symbol}:closing"
-                await redis_client.setex(position_key, 300, "true")  # 5분 TTL
+                await asyncio.wait_for(
+                    redis_client.setex(position_key, 300, "true"),  # 5분 TTL
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
             except Exception as e:
                 logger.warning(f"{REDIS_UPDATE_FAILED}: {str(e)}")
 
@@ -219,13 +224,16 @@ class PositionService(BaseService):
             dca_levels_key = f"user:{user_id}:position:{symbol}:{side}:dca_levels"
 
             # 기존 데이터 삭제
-            await redis_client.delete(
-                dual_side_position_key,
-                position_state_key,
-                tp_data_key,
-                ts_key,
-                dca_count_key,
-                dca_levels_key
+            await asyncio.wait_for(
+                redis_client.delete(
+                    dual_side_position_key,
+                    position_state_key,
+                    tp_data_key,
+                    ts_key,
+                    dca_count_key,
+                    dca_levels_key
+                ),
+                timeout=RedisTimeout.FAST_OPERATION
             )
 
             logger.info(f"포지션 데이터 초기화 완료: {user_id} - {symbol} {side}")

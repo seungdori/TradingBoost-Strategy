@@ -1,0 +1,66 @@
+# Prometheus Configuration for TradingBoost-Strategy Monitoring
+# Scrapes metrics from HYPERRSI and GRID FastAPI applications
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'tradingboost'
+    environment: 'production'
+
+# Alertmanager configuration (optional)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - 'alertmanager:9093'
+
+# Load rules once and periodically evaluate them
+# rule_files:
+#   - "alerts/*.yml"
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # HYPERRSI Strategy (port 8000)
+  - job_name: 'hyperrsi'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:8000']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'hyperrsi'
+      - source_labels: []
+        target_label: strategy
+        replacement: 'hyperrsi'
+
+  # GRID Strategy (port 8012)
+  - job_name: 'grid'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:8012']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'grid'
+      - source_labels: []
+        target_label: strategy
+        replacement: 'grid'
+
+  # Node Exporter (system metrics)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # Redis Exporter (if using redis_exporter separately)
+  # - job_name: 'redis'
+  #   static_configs:
+  #     - targets: ['redis-exporter:9121']
+
+# Optional: Remote write configuration for long-term storage
+# remote_write:
+#   - url: "http://your-remote-storage:9009/api/v1/write"

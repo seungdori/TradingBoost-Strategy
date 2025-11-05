@@ -43,8 +43,8 @@ from shared.config import settings
 
 redis_manager = RedisConnectionManager()
 
-# Use shared Redis pool - import from GRID.core.redis
-from GRID.core.redis import get_redis_connection as _get_grid_redis
+# Use shared Redis pool directly
+from shared.database.redis import get_redis as get_redis_connection
 
 class QuitException(Exception):
     pass
@@ -61,11 +61,6 @@ MAX_RETRIES = 3
 RETRY_DELAY = 3  # 재시도 사이의 대기 시간(초)
 
 # retry_async is now imported from shared.utils
-
-# Use shared Redis pool through GRID.core.redis
-async def get_redis_connection():
-    """Get Redis connection from shared pool"""
-    return await _get_grid_redis()
 
 #================================================================================================
 # GET SYMBOLS

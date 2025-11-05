@@ -7,6 +7,7 @@ from datetime import datetime
 
 from HYPERRSI.src.core.logger import setup_error_logger
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_patterns import scan_keys_pattern
 from shared.logging import get_logger
 from shared.utils.async_helpers import ensure_async_loop
 
@@ -59,7 +60,8 @@ async def init_user_monitoring_data(user_id: str, symbol: str):
     pattern = f"monitor:user:{user_id}:{symbol}:*"
 
     # pattern에 맞는 모든 키 조회
-    keys = await redis.keys(pattern)
+    # Use SCAN instead of KEYS to avoid blocking Redis
+    keys = await scan_keys_pattern(pattern, redis=redis)
     
     # 조회된 키가 있으면 모두 삭제
     if keys:
@@ -109,26 +111,32 @@ async def calculate_dca_levels(entry_price: float, last_filled_price:float ,sett
         
     print(f"[{user_id}] 🖤entry_price: {entry_price}")
     #print(f"[{user_id}] entry_criterion : {entry_criterion}\n last_filled_price : {last_filled_price}\n current_price : {current_price}")
-    dca_levels = []
-    if pyramiding_entry_type == "퍼센트 기준":
-        if side == "long":
-            level = entry_price * (1 - (pyramiding_value/100))
-        else:
-            level = entry_price * (1 + (pyramiding_value/100))
-    elif pyramiding_entry_type == "금액 기준":
-        if side == "long":
-            level = entry_price - (pyramiding_value)
-        else:
-            level = entry_price + (pyramiding_value)
-    else:  # ATR 기준이라 가정
-        #print("ATR 기준으로 계산") #<-- 문제 없음. 
-        # 실제 ATR 계산 로직은 별도
-        if side == "long":
-            level = entry_price - (atr_value * (pyramiding_value))
-        else:
-            level = entry_price + (atr_value * (pyramiding_value))
-    dca_levels.append(level)
 
+    # pyramiding_limit 만큼 DCA 레벨 생성 (마지막 체결가 기준으로 순차 계산)
+    dca_levels = []
+    base_price = entry_price
+
+    for i in range(1, pyramiding_limit + 1):
+        if pyramiding_entry_type == "퍼센트 기준":
+            if side == "long":
+                level = base_price * (1 - (pyramiding_value / 100))
+            else:
+                level = base_price * (1 + (pyramiding_value / 100))
+        elif pyramiding_entry_type == "금액 기준":
+            if side == "long":
+                level = base_price - pyramiding_value
+            else:
+                level = base_price + pyramiding_value
+        else:  # ATR 기준
+            if side == "long":
+                level = base_price - (atr_value * pyramiding_value)
+            else:
+                level = base_price + (atr_value * pyramiding_value)
+
+        dca_levels.append(level)
+        base_price = level  # 다음 레벨은 이전 레벨 기준으로 계산
+
+    print(f"[{user_id}] 계산된 DCA 레벨: {dca_levels}")
     return dca_levels
 
 async def update_dca_levels_redis(user_id: str, symbol: str, dca_levels: list, side: str):

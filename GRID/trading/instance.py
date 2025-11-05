@@ -7,7 +7,6 @@ from typing import Any, Optional
 import ccxt.pro as ccxtpro
 from pydantic import BaseModel, Field
 
-from GRID.core.redis import get_redis_connection
 from GRID.services import user_service_pg as user_database
 from shared.config import OKX_API_KEY, OKX_PASSPHRASE, OKX_SECRET_KEY, settings  # 환경 변수에서 키 가져오기
 

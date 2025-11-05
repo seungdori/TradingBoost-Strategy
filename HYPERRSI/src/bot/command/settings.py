@@ -26,7 +26,6 @@ from shared.constants.default_settings import (
     ENTRY_AMOUNT_UNITS,
     ENTRY_CRITERION_OPTIONS,
     ENTRY_OPTIONS,
-    PYRAMIDING_TYPES,
     SETTINGS_CONSTRAINTS,
     TP_SL_OPTIONS,
     TRAILING_STOP_TYPES,
@@ -304,10 +303,6 @@ async def handle_setting_callback(callback: types.CallbackQuery, state: FSMConte
             "sl_option": [
                 [types.InlineKeyboardButton(text=option, callback_data=f"sl_option:{option}")]
                 for option in TP_SL_OPTIONS
-            ],
-            "pyramiding_type": [
-                [types.InlineKeyboardButton(text=ptype, callback_data=f"pyramiding_type:{i}")]
-                for i, ptype in enumerate(PYRAMIDING_TYPES)
             ],
             "pyramiding_entry_type": [
                 [types.InlineKeyboardButton(text=option, callback_data=f"pyramiding_entry_type:{option}")]

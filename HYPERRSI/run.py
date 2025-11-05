@@ -53,18 +53,18 @@ def main():
     # macOS fork safety 설정
     os.environ['OBJC_DISABLE_INITIALIZE_FORK_SAFETY'] = 'YES'
 
-    # FastAPI 서버 실행 (HYPERRSI 디렉토리에서)
+    # FastAPI 서버 실행 (프로젝트 루트에서 HYPERRSI.main:app으로 실행)
     fastapi_process = manager.run_process(
         "FastAPI Server",
-        ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"],
-        cwd=str(HYPERRSI_DIR)
+        ["uvicorn", "HYPERRSI.main:app", "--host", "0.0.0.0", "--port", "8000"],
+        cwd=str(PROJECT_ROOT)
     )
 
-    # Telegram 봇 실행 (HYPERRSI 디렉토리에서)
+    # Telegram 봇 실행 (프로젝트 루트에서)
     bot_process = manager.run_process(
         "Telegram Bot",
-        [sys.executable, "bot.py"],
-        cwd=str(HYPERRSI_DIR)
+        [sys.executable, str(HYPERRSI_DIR / "bot.py")],
+        cwd=str(PROJECT_ROOT)
     )
 
     # Celery Worker 실행 (프로젝트 루트에서)

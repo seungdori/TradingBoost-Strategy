@@ -63,7 +63,7 @@ fi
 
 # 임시 파일 정리 (HYPERRSI 디렉토리)
 echo -e "${YELLOW}🧹 Celery 임시 파일 정리 중...${NC}"
-rm -f "$SCRIPT_DIR/celerybeat.pid" "$SCRIPT_DIR/celerybeat-schedule.db" 2>/dev/null || true
+rm -f "$SCRIPT_DIR/celerybeat.pid" "$SCRIPT_DIR/celerybeat-schedule.db" "$SCRIPT_DIR/.celery_pids" 2>/dev/null || true
 
 # 필요한 경우 디렉토리 생성 (HYPERRSI/logs 디렉토리)
 echo -e "${YELLOW}📁 로그 디렉토리 확인 중...${NC}"

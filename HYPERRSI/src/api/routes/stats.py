@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 from datetime import datetime, timedelta
@@ -14,6 +15,7 @@ from HYPERRSI.src.trading.stats import (
     get_user_trading_statistics,
 )
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_patterns import scan_keys_pattern, redis_context, RedisTimeout
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -1394,18 +1396,23 @@ async def get_user_trade_history(
     try:
         # 캐시 키 생성
         cache_key = f"stats:trade_history:{user_id}:{limit}:{status or 'all'}"
-        
-        # 최근 거래 확인을 위한 키
-        history_key = f"user:{user_id}:history"
-        current_latest_trade = await get_redis_client().lindex(history_key, 0)
-        
+
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 최근 거래 확인을 위한 키
+            history_key = f"user:{user_id}:history"
+            current_latest_trade = await asyncio.wait_for(
+                redis.lindex(history_key, 0),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
         # 새로운 거래가 있는지 확인 (캐시 무효화 조건)
         if not refresh and user_id in last_trade_keys:
             if current_latest_trade == last_trade_keys[user_id]:
                 cached_data = await cache.get(cache_key)
                 if cached_data:
                     return cached_data
-        
+
         # 새로운 거래 ID 업데이트
         if current_latest_trade:
             last_trade_keys[user_id] = current_latest_trade
@@ -1462,17 +1469,23 @@ async def clear_stats_cache(user_id: str = Query(..., description="사용자 ID"
     try:
         # 사용자의 모든 통계 캐시 키 패턴
         cache_pattern = f"stats:*:{user_id}*"
-        
-        # Redis에서 패턴과 일치하는 모든 키 조회
-        keys = await get_redis_client().keys(cache_pattern)
-        
-        # 모든 키 삭제
-        if keys:
-            pipeline = get_redis_client().pipeline()
-            for key in keys:
-                pipeline.delete(key)
-            await pipeline.execute()
-        
+
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # Redis에서 패턴과 일치하는 모든 키 조회
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            keys = await scan_keys_pattern(cache_pattern, redis=redis)
+
+            # 모든 키 삭제
+            if keys:
+                pipeline = redis.pipeline()
+                for key in keys:
+                    pipeline.delete(key)
+                await asyncio.wait_for(
+                    pipeline.execute(),
+                    timeout=RedisTimeout.PIPELINE
+                )
+
         return {
             "status": "success",
             "message": f"{len(keys)}개의 캐시가 삭제되었습니다.",

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -15,6 +16,7 @@ from HYPERRSI.src.api.routes.account import get_balance
 from HYPERRSI.src.config import OKX_API_KEY, OKX_PASSPHRASE, OKX_SECRET_KEY
 from HYPERRSI.src.utils.check_invitee import check_invitee, get_uid_from_api_keys
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_patterns import redis_context, RedisTimeout
 
 # 고정 API 키 (check_invitee.py에서 가져오기)
 fixed_api_key = '29568592-e1de-4c0d-af89-999018c8c3bf'
@@ -270,7 +272,23 @@ async def check_valid_user(credentials: OkxCredentials):
         if (uid is not None) or uid != "":
             last_updated_time = int(time.time())
             last_update_time_kr = datetime.now(pytz.timezone('Asia/Seoul')).strftime('%Y-%m-%d %H:%M:%S')
-            await get_redis_client().hset(f"user:{uid}:api:keys", mapping={"api_key": credentials.api_key, "api_secret": credentials.api_secret, "passphrase": credentials.passphrase, "uid": uid, "last_updated_time": last_updated_time, "last_update_time_kr": last_update_time_kr})
+
+            # Use context manager for proper connection management and timeout protection
+            async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                await asyncio.wait_for(
+                    redis.hset(
+                        f"user:{uid}:api:keys",
+                        mapping={
+                            "api_key": credentials.api_key,
+                            "api_secret": credentials.api_secret,
+                            "passphrase": credentials.passphrase,
+                            "uid": uid,
+                            "last_updated_time": last_updated_time,
+                            "last_update_time_kr": last_update_time_kr
+                        }
+                    ),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
         
         # 2. 잔고 조회를 통해 API 키 유효성 검사
         has_valid_balance = False
@@ -336,7 +354,14 @@ async def check_valid_user(credentials: OkxCredentials):
             
         # 3. 캐시에서 초대 여부 확인
         cache_key = f"{INVITEE_CACHE_KEY_PREFIX}{uid}"
-        cached_invitee_data = await get_redis_client().get(cache_key)
+
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            cached_invitee_data = await asyncio.wait_for(
+                redis.get(cache_key),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
         print("================================================")
         print(cached_invitee_data)
         print("================================================")
@@ -370,7 +395,11 @@ async def check_valid_user(credentials: OkxCredentials):
             except Exception as e:
                 print(f"캐시 데이터 파싱 오류: {str(e)}")
                 # 캐시 파싱 오류 시 삭제하고 계속 진행
-                await get_redis_client().delete(cache_key)
+                async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                    await asyncio.wait_for(
+                        redis.delete(cache_key),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
         
         # 4. 직접 OKX API를 호출하여 초대 여부 확인
         request_path = f'/api/v5/affiliate/invitee/detail'
@@ -398,11 +427,16 @@ async def check_valid_user(credentials: OkxCredentials):
                     'cached_at': int(time.time()),
                     'valid_until': int(time.time()) + INVITEE_CACHE_FALSE_TTL
                 }
-                await get_redis_client().set(
-                    cache_key,
-                    json.dumps(cache_data),
-                    ex=INVITEE_CACHE_FALSE_TTL
-                )
+
+                async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                    await asyncio.wait_for(
+                        redis.set(
+                            cache_key,
+                            json.dumps(cache_data),
+                            ex=INVITEE_CACHE_FALSE_TTL
+                        ),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
                 
                 # 응답 생성
                 response_content = {
@@ -451,11 +485,16 @@ async def check_valid_user(credentials: OkxCredentials):
                     'cached_at': int(time.time()),
                     'valid_until': int(time.time()) + INVITEE_CACHE_TRUE_TTL
                 }
-                await get_redis_client().set(
-                    cache_key,
-                    json.dumps(cache_data),
-                    ex=INVITEE_CACHE_TRUE_TTL
-                )
+
+                async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                    await asyncio.wait_for(
+                        redis.set(
+                            cache_key,
+                            json.dumps(cache_data),
+                            ex=INVITEE_CACHE_TRUE_TTL
+                        ),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
                 
                 return JSONResponse(
                     status_code=200,
@@ -479,11 +518,16 @@ async def check_valid_user(credentials: OkxCredentials):
                 'cached_at': int(time.time()),
                 'valid_until': int(time.time()) + INVITEE_CACHE_FALSE_TTL
             }
-            await get_redis_client().set(
-                cache_key,
-                json.dumps(cache_data),
-                ex=INVITEE_CACHE_FALSE_TTL
-            )
+
+            async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                await asyncio.wait_for(
+                    redis.set(
+                        cache_key,
+                        json.dumps(cache_data),
+                        ex=INVITEE_CACHE_FALSE_TTL
+                    ),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
             
             # 응답 반환
             response_content = {

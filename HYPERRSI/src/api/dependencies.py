@@ -53,6 +53,36 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+async def resolve_user_id_to_okx_uid(user_id: str) -> str:
+    """
+    user_id가 telegram_id인 경우 OKX UID로 변환합니다.
+
+    Args:
+        user_id: 사용자 ID (telegram_id 또는 OKX UID)
+
+    Returns:
+        str: OKX UID (변환 실패 시 원본 user_id 반환)
+    """
+    from shared.database.redis import get_redis_binary
+
+    # telegram_id 판단: 숫자이고 13자리 이하
+    if user_id.isdigit() and len(user_id) <= 13:
+        try:
+            redis_client = await get_redis_binary()
+            okx_uid = await redis_client.get(f"user:{user_id}:okx_uid")
+            if okx_uid:
+                resolved_uid = okx_uid.decode('utf-8') if isinstance(okx_uid, bytes) else okx_uid
+                logger.debug(f"Resolved telegram_id {user_id} to OKX UID: {resolved_uid}")
+                return resolved_uid
+            else:
+                logger.warning(f"OKX UID not found for telegram_id {user_id}, using original ID")
+        except Exception as e:
+            logger.warning(f"Failed to resolve telegram_id {user_id}: {e}")
+
+    return user_id
+
+
 class ExchangeConnectionPool:
     def __init__(
         self,
@@ -293,24 +323,62 @@ def get_redis_keys(user_id: str, symbol:str, side:str) -> dict:
     }
 
 async def get_user_api_keys(user_id: str, raise_on_missing: bool = True) -> Optional[dict]:
-    """Redis에서 사용자의 API 키 정보를 가져옴
+    """사용자의 API 키 정보를 TimescaleDB (primary)와 Redis (fallback)에서 가져옴
+
+    조회 우선순위:
+    1. TimescaleDB (영구 저장소)
+    2. Redis (캐시 레이어) - TimescaleDB 실패 시 fallback
 
     Args:
-        user_id: 사용자 ID
+        user_id: 사용자 ID (telegram_id 또는 OKX UID)
         raise_on_missing: True일 경우 키가 없으면 HTTPException 발생, False일 경우 None 반환
 
     Returns:
         API 키 딕셔너리 또는 None (raise_on_missing=False이고 키가 없는 경우)
     """
     from shared.database.redis import get_redis_binary
+    from HYPERRSI.src.services.timescale_service import TimescaleUserService
+    from shared.security import decrypt_api_key
 
-    key = f"user:{user_id}:api:keys"
     try:
+        # telegram_id를 OKX UID로 변환
+        resolved_user_id = await resolve_user_id_to_okx_uid(user_id)
+
+        # 1️⃣ TimescaleDB 우선 조회 (Primary Storage)
+        try:
+            api_keys = await TimescaleUserService.get_api_keys(resolved_user_id)
+            if api_keys:
+                logger.debug(f"API 키 조회 성공 (TimescaleDB): {resolved_user_id}")
+
+                # API 키 복호화 (TimescaleDB에 암호화되어 저장됨)
+                decrypted_keys = {}
+                for key_name, encrypted_value in api_keys.items():
+                    try:
+                        decrypted_keys[key_name] = decrypt_api_key(encrypted_value)
+                    except Exception as e:
+                        logger.warning(f"API 키 복호화 실패 ({key_name}): {e}, 평문 사용")
+                        decrypted_keys[key_name] = encrypted_value
+
+                # Redis에도 캐싱 (향후 빠른 조회를 위해)
+                try:
+                    redis_client = await get_redis_binary()
+                    cache_key = f"user:{resolved_user_id}:api:keys"
+                    await redis_client.hmset(cache_key, decrypted_keys)
+                    logger.debug(f"API 키 Redis 캐싱 완료: {resolved_user_id}")
+                except Exception as cache_error:
+                    logger.warning(f"Redis 캐싱 실패: {cache_error}")
+
+                return decrypted_keys
+        except Exception as ts_error:
+            logger.warning(f"TimescaleDB API 키 조회 실패: {ts_error}, Redis fallback 시도")
+
+        # 2️⃣ Redis fallback (Cache Layer)
         redis_client = await get_redis_binary()
+        key = f"user:{resolved_user_id}:api:keys"
         api_keys = await redis_client.hgetall(key)
 
         if not api_keys:
-            logger.info(f"API 키 조회 실패: {str(user_id)}, 빈 결과 반환됨")
+            logger.info(f"API 키 조회 실패 (Redis + TimescaleDB): {str(user_id)} (resolved: {resolved_user_id})")
             if raise_on_missing:
                 raise HTTPException(status_code=404, detail="API keys not found")
             return None
@@ -332,12 +400,13 @@ async def get_user_api_keys(user_id: str, raise_on_missing: bool = True) -> Opti
                 raise HTTPException(status_code=400, detail="Incomplete API keys")
             return None
 
+        logger.info(f"API 키 조회 성공 (Redis fallback): {resolved_user_id}")
         return decoded_keys
     except HTTPException:
         # HTTPException은 그대로 재발생
         raise
     except Exception as e:
-        logger.error(f"API 키 조회 중 예외 발생: {str(e)}, 키: {key}")
+        logger.error(f"API 키 조회 중 예외 발생: {str(e)}, user_id: {user_id}")
         if raise_on_missing:
             raise HTTPException(status_code=500, detail=f"Failed to retrieve API keys: {str(e)}")
         return None
@@ -348,15 +417,19 @@ async def get_user_api_keys(user_id: str, raise_on_missing: bool = True) -> Opti
 async def get_exchange_context(user_id: str):
     exchange = None
     pool = get_connection_pool()
+
+    # telegram_id를 OKX UID로 변환 (pool 키 일관성 유지)
+    resolved_user_id = await resolve_user_id_to_okx_uid(user_id)
+
     try:
         exchange = await get_exchange_client(user_id)
         yield exchange
     finally:
         if exchange:
             try:
-                await pool.release_client(user_id, exchange)
+                await pool.release_client(resolved_user_id, exchange)
             except Exception as e:
-                logger.error(f"클라이언트 해제 중 오류 발생(context manager): {str(e)}, user_id: {user_id}")
+                logger.error(f"클라이언트 해제 중 오류 발생(context manager): {str(e)}, user_id: {user_id} (resolved: {resolved_user_id})")
                 # 오류는 기록하되 예외가 전파되지 않도록 합니다
                 pass
 
@@ -364,14 +437,17 @@ async def get_exchange_context(user_id: str):
 async def get_exchange_client(user_id: str) -> ccxt.okx:
     pool = get_connection_pool()
     try:
+        # telegram_id를 OKX UID로 변환 (connection pool 키 일관성 유지)
+        resolved_user_id = await resolve_user_id_to_okx_uid(user_id)
+
         #logger.info(f"Getting exchange client for user {user_id}")
-        client = await pool.get_client(user_id)
+        client = await pool.get_client(resolved_user_id)
 
         # 풀 상태 로깅
-        if user_id in pool.pools:
-            total = len(pool.pools[user_id]['clients'])
-            in_use = len(pool.pools[user_id]['in_use'])
-            #logger.info(f"Pool status for user {user_id}: {in_use}/{total} clients in use")
+        if resolved_user_id in pool.pools:
+            total = len(pool.pools[resolved_user_id]['clients'])
+            in_use = len(pool.pools[resolved_user_id]['in_use'])
+            #logger.info(f"Pool status for user {resolved_user_id}: {in_use}/{total} clients in use")
 
         return client
     except HTTPException:
@@ -384,10 +460,15 @@ async def get_exchange_client(user_id: str) -> ccxt.okx:
 
 async def invalidate_exchange_client(user_id: str):
     pool = get_connection_pool()
+
+    # telegram_id를 OKX UID로 변환 (pool 키 일관성 유지)
+    resolved_user_id = await resolve_user_id_to_okx_uid(user_id)
+
     async with pool._lock:
-        if user_id in pool.pools:
+        if resolved_user_id in pool.pools:
             # 모든 클라이언트 정리
-            for client in pool.pools[user_id]['clients']:
+            for client in pool.pools[resolved_user_id]['clients']:
                 await client.close()
             # pool 제거
-            pool.pools.pop(user_id)
+            pool.pools.pop(resolved_user_id)
+            logger.info(f"Invalidated exchange client pool for user {user_id} (resolved: {resolved_user_id})")

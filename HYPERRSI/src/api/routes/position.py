@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -11,6 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from HYPERRSI.src.core.error_handler import log_error
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_patterns import redis_context, RedisTimeout
 from shared.dtos.trading import ClosePositionRequest, OpenPositionRequest, PositionResponse
 from shared.helpers.user_id_resolver import get_okx_uid_from_telegram, resolve_user_identifier
 
@@ -122,13 +124,18 @@ async def get_user_api_keys(user_id: str) -> Dict[str, str]:
     try:
         # 텔레그램 ID인지 OKX UID인지 확인하고 변환
         okx_uid = await resolve_user_identifier(user_id)
-        
-        api_key_format = f"user:{okx_uid}:api:keys"
-        api_keys = await get_redis_client().hgetall(api_key_format)
-        
-        if not api_keys:
-            raise HTTPException(status_code=404, detail="API keys not found in Redis")
-        return dict(api_keys)
+
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            api_key_format = f"user:{okx_uid}:api:keys"
+            api_keys = await asyncio.wait_for(
+                redis.hgetall(api_key_format),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
+            if not api_keys:
+                raise HTTPException(status_code=404, detail="API keys not found in Redis")
+            return dict(api_keys)
     except HTTPException:
         raise
     except Exception as e:
@@ -375,14 +382,25 @@ async def fetch_okx_position(
         # 포지션이 없거나 비어있는 경우 처리
         if not positions or all(float(pos.get('info', {}).get('pos', 0)) == 0 for pos in positions):
             if symbol:
-                # 특정 심볼에 대한 포지션이 없는 경우, Redis에 저장된 해당 종목 포지션 키(long, short)를 삭제
-                for side in ['long', 'short']:
-                    redis_key = f"user:{okx_uid}:position:{symbol}:{side}"
-                    await get_redis_client().delete(redis_key)
-                position_state_key = f"user:{okx_uid}:position:{symbol}:position_state"
-                current_state = await get_redis_client().get(position_state_key)
-                if current_state and int(current_state) != 0:
-                    await get_redis_client().set(position_state_key, "0")
+                # Use context manager for proper connection management and timeout protection
+                async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                    # 특정 심볼에 대한 포지션이 없는 경우, Redis에 저장된 해당 종목 포지션 키(long, short)를 삭제
+                    for side in ['long', 'short']:
+                        redis_key = f"user:{okx_uid}:position:{symbol}:{side}"
+                        await asyncio.wait_for(
+                            redis.delete(redis_key),
+                            timeout=RedisTimeout.FAST_OPERATION
+                        )
+                    position_state_key = f"user:{okx_uid}:position:{symbol}:position_state"
+                    current_state = await asyncio.wait_for(
+                        redis.get(position_state_key),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
+                    if current_state and int(current_state) != 0:
+                        await asyncio.wait_for(
+                            redis.set(position_state_key, "0"),
+                            timeout=RedisTimeout.FAST_OPERATION
+                        )
             return ApiResponse(
                 timestamp=str(datetime.utcnow()),
                 logger="root",
@@ -438,66 +456,83 @@ async def fetch_okx_position(
                 continue
 
         # === Redis 업데이트 로직 ===
-        symbols_to_process = [symbol] if symbol else symbols_to_update
-        
-        for curr_symbol in symbols_to_process:
-            # 해당 심볼에 대한 유효한 포지션 필터링
-            symbol_positions = [p for p in valid_positions if p.symbol == curr_symbol]
-            
-            # 양 방향("long", "short")에 대해, Redis에 저장된 포지션과 조회된 포지션을 비교하여 업데이트 또는 삭제
-            for side in ['long', 'short']:
-                redis_key = f"user:{okx_uid}:position:{curr_symbol}:{side}"
-                # 조회된 포지션 중 해당 side에 해당하는 포지션 찾기
-                fetched_position = next((p for p in symbol_positions if p.side.lower() == side), None)
-                # Redis에 저장된 데이터 가져오기 (hash 형식)
-                redis_data = await get_redis_client().hgetall(redis_key)
-                if fetched_position:
-                    # 조회된 포지션이 있는 경우
-                    new_position_info = fetched_position.json()
-                    # redis_data가 없거나 기존에 저장된 정보와 다르면 업데이트
-                    if not redis_data or redis_data.get("position_info") != new_position_info:
-                        position_data = {
-                            "position_info": new_position_info,
-                            "entry_price": str(fetched_position.entryPrice),
-                            "size": str(fetched_position.contracts),
-                            "leverage": str(fetched_position.leverage),
-                            "liquidation_price": str(fetched_position.liquidationPrice),
-                        }
-                        # 기존 initial_size와 last_entry_size 보존
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            symbols_to_process = [symbol] if symbol else symbols_to_update
+
+            for curr_symbol in symbols_to_process:
+                # 해당 심볼에 대한 유효한 포지션 필터링
+                symbol_positions = [p for p in valid_positions if p.symbol == curr_symbol]
+
+                # 양 방향("long", "short")에 대해, Redis에 저장된 포지션과 조회된 포지션을 비교하여 업데이트 또는 삭제
+                for side in ['long', 'short']:
+                    redis_key = f"user:{okx_uid}:position:{curr_symbol}:{side}"
+                    # 조회된 포지션 중 해당 side에 해당하는 포지션 찾기
+                    fetched_position = next((p for p in symbol_positions if p.side.lower() == side), None)
+                    # Redis에 저장된 데이터 가져오기 (hash 형식)
+                    redis_data = await asyncio.wait_for(
+                        redis.hgetall(redis_key),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
+                    if fetched_position:
+                        # 조회된 포지션이 있는 경우
+                        new_position_info = fetched_position.json()
+                        # redis_data가 없거나 기존에 저장된 정보와 다르면 업데이트
+                        if not redis_data or redis_data.get("position_info") != new_position_info:
+                            position_data = {
+                                "position_info": new_position_info,
+                                "entry_price": str(fetched_position.entryPrice),
+                                "size": str(fetched_position.contracts),
+                                "leverage": str(fetched_position.leverage),
+                                "liquidation_price": str(fetched_position.liquidationPrice),
+                            }
+                            # 기존 initial_size와 last_entry_size 보존
+                            if redis_data:
+                                if "initial_size" in redis_data:
+                                    position_data["initial_size"] = redis_data["initial_size"]
+                                if "last_entry_size" in redis_data:
+                                    position_data["last_entry_size"] = redis_data["last_entry_size"]
+                            await asyncio.wait_for(
+                                redis.hset(redis_key, mapping=position_data),
+                                timeout=RedisTimeout.FAST_OPERATION
+                            )
+                    else:
+                        # 조회된 포지션이 없는 경우, Redis에 해당 키가 있다면 삭제
                         if redis_data:
-                            if "initial_size" in redis_data:
-                                position_data["initial_size"] = redis_data["initial_size"]
-                            if "last_entry_size" in redis_data:
-                                position_data["last_entry_size"] = redis_data["last_entry_size"]
-                        await get_redis_client().hset(redis_key, mapping=position_data)
-                else:
-                    # 조회된 포지션이 없는 경우, Redis에 해당 키가 있다면 삭제
-                    if redis_data:
-                        await get_redis_client().delete(redis_key)
-            
-            # === 추가 로직: position_state 업데이트 ===
-            position_state_key = f"user:{okx_uid}:position:{curr_symbol}:position_state"
-            current_state = await get_redis_client().get(position_state_key)
-            try:
-                position_state = int(current_state) if current_state is not None else 0
-            except Exception:
-                position_state = 0
+                            await asyncio.wait_for(
+                                redis.delete(redis_key),
+                                timeout=RedisTimeout.FAST_OPERATION
+                            )
 
-            # 존재하는 포지션 여부
-            long_exists = any(p for p in symbol_positions if p.side.lower() == "long")
-            short_exists = any(p for p in symbol_positions if p.side.lower() == "short")
+                # === 추가 로직: position_state 업데이트 ===
+                position_state_key = f"user:{okx_uid}:position:{curr_symbol}:position_state"
+                current_state = await asyncio.wait_for(
+                    redis.get(position_state_key),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
+                try:
+                    position_state = int(current_state) if current_state is not None else 0
+                except Exception:
+                    position_state = 0
 
-            # 조건 1: position_state > 1 인데 long 포지션이 없고 short 포지션만 있을 경우 -> -1로 업데이트
-            if position_state > 1 and (not long_exists) and short_exists:
-                position_state = -1
-            # 조건 2: position_state < -1 인데 short 포지션이 없고 long 포지션만 있을 경우 -> 1로 업데이트
-            elif position_state < -1 and (not short_exists) and long_exists:
-                position_state = 1
-            # 조건 3: position_state가 0이 아닌데, 양쪽 모두 포지션이 없으면 -> 0으로 업데이트
-            elif position_state != 0 and (not long_exists and not short_exists):
-                position_state = 0
+                # 존재하는 포지션 여부
+                long_exists = any(p for p in symbol_positions if p.side.lower() == "long")
+                short_exists = any(p for p in symbol_positions if p.side.lower() == "short")
 
-            await get_redis_client().set(position_state_key, str(position_state))
+                # 조건 1: position_state > 1 인데 long 포지션이 없고 short 포지션만 있을 경우 -> -1로 업데이트
+                if position_state > 1 and (not long_exists) and short_exists:
+                    position_state = -1
+                # 조건 2: position_state < -1 인데 short 포지션이 없고 long 포지션만 있을 경우 -> 1로 업데이트
+                elif position_state < -1 and (not short_exists) and long_exists:
+                    position_state = 1
+                # 조건 3: position_state가 0이 아닌데, 양쪽 모두 포지션이 없으면 -> 0으로 업데이트
+                elif position_state != 0 and (not long_exists and not short_exists):
+                    position_state = 0
+
+                await asyncio.wait_for(
+                    redis.set(position_state_key, str(position_state)),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
         # ==============================
         
         return ApiResponse(
@@ -1304,7 +1339,7 @@ async def open_position_endpoint(
     지정된 매개변수로 새로운 트레이딩 포지션을 생성합니다.
 
     매개변수:
-    - user_id (int): API 키 조회를 위한 사용자 식별자
+    - user_id (str): API 키 조회를 위한 사용자 식별자
     - symbol (str): 거래 쌍 심볼 (예: "BTC-USDT-SWAP")
     - direction (str): 포지션 방향 - "long" 또는 "short"
     - size (float): 기준 화폐 단위의 포지션 크기
@@ -1324,6 +1359,19 @@ async def open_position_endpoint(
     try:
         # user_id를 OKX UID로 변환
         okx_uid = await resolve_user_identifier(str(req.user_id))
+
+        # 트레이딩 상태 체크 - 중지되었으면 주문하지 않음
+        redis = await get_redis_client()
+        trading_status = await redis.get(f"user:{okx_uid}:trading:status")
+        if isinstance(trading_status, bytes):
+            trading_status = trading_status.decode('utf-8')
+
+        if trading_status != "running":
+            logger.info(f"[{okx_uid}] 트레이딩이 중지된 상태입니다. 주문을 생성하지 않습니다. (status: {trading_status})")
+            raise HTTPException(
+                status_code=400,
+                detail=f"트레이딩이 중지된 상태입니다. 주문을 생성할 수 없습니다. (현재 상태: {trading_status})"
+            )
 
         client = await TradingService.create_for_user(okx_uid)
 

@@ -29,14 +29,14 @@ from shared.config import get_settings
 from shared.database import RedisConnectionManager
 from shared.logging import get_logger
 
-from .api.routes import init_managers, router
-from .core.pubsub_manager import PubSubManager
-from .core.websocket_manager import WebSocketManager
-from .managers.conditional_cancellation import ConditionalCancellationManager
-from .managers.order_tracker import OrderTracker
-from .managers.position_tracker import PositionTracker
-from .managers.trailing_stop_manager import TrailingStopManager
-from .workers.active_user_manager import ActiveUserManager
+from shared.services.position_order_service.api.routes import init_managers, router
+from shared.services.position_order_service.core.pubsub_manager import PubSubManager
+from shared.services.position_order_service.core.websocket_manager import WebSocketManager
+from shared.services.position_order_service.managers.conditional_cancellation import ConditionalCancellationManager
+from shared.services.position_order_service.managers.order_tracker import OrderTracker
+from shared.services.position_order_service.managers.position_tracker import PositionTracker
+from shared.services.position_order_service.managers.trailing_stop_manager import TrailingStopManager
+from shared.services.position_order_service.workers.active_user_manager import ActiveUserManager
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -191,7 +191,7 @@ class PositionOrderService:
         Publishes events to appropriate pub/sub channels.
         """
         try:
-            from .core.event_types import OrderEvent, PositionEvent
+            from shared.services.position_order_service.core.event_types import OrderEvent, PositionEvent
 
             if isinstance(event, PositionEvent):
                 await self.pubsub_manager.publish_position_event(event)

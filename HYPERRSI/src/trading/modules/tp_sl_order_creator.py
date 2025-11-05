@@ -71,8 +71,8 @@ class TPSLOrderCreator:
         #print("일단 amount인걸로 추측됨. ")
         try:
             min_qty = await get_minimum_qty(symbol)
-            decimal_places = get_decimal_places(min_qty) 
-            position_qty = await self.contract_size_to_qty(user_id, symbol, contracts_amount)
+            decimal_places = get_decimal_places(min_qty)
+            position_qty = await self.trading_service.contract_size_to_qty(user_id, symbol, contracts_amount)
             # 처음 전달받은 position_size를 로그로 남김
             #print(f"[DEBUG] _create_tp_sl_orders 호출됨 | user_id: {user_id}, symbol: {symbol}, side: {side}")
             #print(f"[DEBUG] 초기 입력 position_size: {position_size}")
@@ -263,7 +263,7 @@ class TPSLOrderCreator:
                     logger.info(f"[DCA] Redis에 저장된 기존 TP/SL 정보 삭제 완료")
 
                     # 최신 포지션 사이즈/평단가 확인
-                    pos_dict = await self.fetch_okx_position(user_id, symbol, side, debug_entry_number=3)
+                    pos_dict = await self.trading_service.fetch_okx_position(user_id, symbol, side, debug_entry_number=3)
                     #print(f"[DEBUG] fetch_okx_position 결과: {pos_dict}")
 
                     if pos_dict:
@@ -279,7 +279,7 @@ class TPSLOrderCreator:
                 traceback.print_exc()
             # DCA가 아닐 때, 현 시점 포지션 사이즈 다시 불러오기
             if not is_DCA:
-                pos_dict = await self.fetch_okx_position(user_id, symbol, side, debug_entry_number=2)
+                pos_dict = await self.trading_service.fetch_okx_position(user_id, symbol, side, debug_entry_number=2)
                 if pos_dict:
                     # 만약 fetch_okx_position()이 'long'/'short' 키없이 반환한다면 수정 필요
                     # 현재 로직에 맞춰 size 필드가 바로 있는 경우 fallback
@@ -296,13 +296,13 @@ class TPSLOrderCreator:
             if is_DCA and not is_hedge:
                 position_avg_price = float(pos_dict.get(side, {}).get('avgPrice', 0.0)) or current_price
                 if position_avg_price == 0.0:
-                    current_price = await self._get_current_price(symbol)
+                    current_price = await self.trading_service._get_current_price(symbol)
                 else:
                     current_price = position_avg_price
 
                 print(f"[DEBUG] DCA - TP 계산용 current_price: {current_price}")
 
-                tp_prices = await self.calculate_tp_prices(user_id = user_id, current_price = current_price,settings= settings, side= side, symbol=symbol, atr_value=atr_value)
+                tp_prices = await self.trading_service.calculate_tp_prices(user_id = user_id, current_price = current_price,settings= settings, side= side, symbol=symbol, atr_value=atr_value)
                 print(f"[DEBUG] calculate_tp_prices 결과: {tp_prices}")
 
                 if tp_prices:
@@ -377,7 +377,7 @@ class TPSLOrderCreator:
                 tp_sizes = []
                 tp_contracts_amounts = []
                 successful_tps = []
-                contract_size = await self.get_contract_size(symbol)
+                contract_size = await self.trading_service.get_contract_size(user_id, symbol)
                 print(f"[DEBUG] TP 생성 시작 | contract_size: {contract_size}")
                 
                 # 활성화된 TP 레벨만큼만 처리

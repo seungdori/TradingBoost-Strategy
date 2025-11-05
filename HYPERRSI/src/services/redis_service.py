@@ -4,13 +4,14 @@ Redis Service - Migrated to New Infrastructure
 
 Manages user settings, API keys, and caching with structured logging
 and exception handling. Includes automatic stale cache cleanup.
+
+Updated: 2025-10-22 - Added timeout protection for all Redis operations
 """
 
 import asyncio
 import json
 import os
 import time
-from threading import Lock
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
@@ -21,22 +22,25 @@ from shared.constants.default_settings import (
     DEFAULT_PARAMS_SETTINGS,
     DIRECTION_OPTIONS,
     ENTRY_OPTIONS,
-    PYRAMIDING_TYPES,
     SETTINGS_CONSTRAINTS,
     TP_SL_OPTIONS,
 )
 from shared.database.redis import get_redis, RedisConnectionPool
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_patterns import RedisTimeout, RedisTTL, redis_context  # Import timeout, TTL, and context manager
 from shared.errors import ConfigurationException, DatabaseException, ValidationException
 from shared.logging import get_logger
+from shared.security import encrypt_api_key, decrypt_api_key, EncryptionError
 from shared.utils import retry_decorator
 
 logger = get_logger(__name__)
 
+# Default timeout for Redis operations in this service
+DEFAULT_REDIS_TIMEOUT = RedisTimeout.NORMAL_OPERATION  # 5 seconds
+
 class RedisService:
     _instance = None
     _redis = None
-    _lock = Lock()
     _pool = None
     _cleanup_task: Optional[asyncio.Task] = None
     _cleanup_interval = 60  # Clean stale cache every 60 seconds
@@ -44,19 +48,20 @@ class RedisService:
     cache_hits = Counter('redis_hits_total', 'Redis hit count')
     cache_misses = Counter('redis_misses_total', 'Redis miss count')
     operation_duration = Histogram('redis_operation_seconds', 'Redis operation duration')
-    
-    
+
+
     def __new__(cls, *args, **kwargs):
         # 외부 redis 클라이언트가 제공된 경우 새 인스턴스 생성
         if 'external_redis' in kwargs and kwargs['external_redis'] is not None:
             return super().__new__(cls)
-            
-        with cls._lock:
-            if cls._instance is None:
-                cls._instance = super().__new__(cls)
-                cls._pool = None
-                cls._redis = None
-            return cls._instance
+
+        # Simple singleton pattern without lock (safe for single-threaded async)
+        # Python's GIL and __new__ atomicity ensure thread safety for this simple check
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._pool = None
+            cls._redis = None
+        return cls._instance
 
     def __init__(self, host=None, port=None, db=None, password=None, external_redis=None):
         # 외부 redis 클라이언트가 제공된 경우, 그것을 사용
@@ -148,9 +153,9 @@ class RedisService:
 
     async def ping(self) -> None:
         try:
-            redis = await self._ensure_redis()
-            await redis.ping()
-            logger.info("Redis connection established successfully")
+            async with redis_context(timeout=RedisTimeout.FAST_OPERATION) as redis:
+                await redis.ping()
+                logger.info("Redis connection established successfully")
         except Exception as e:
             logger.error(f"Failed to connect to Redis: {str(e)}")
             raise
@@ -169,8 +174,6 @@ class RedisService:
     async def get_user_settings(self, user_id: str) -> Optional[Dict[str, Any]]:
         with self.operation_duration.time():
             try:
-                redis = await self._ensure_redis()
-
                 # 먼저 로컬 캐시 확인
                 cache_key = f"user:{user_id}:settings"
                 if cache_key in self._local_cache:
@@ -182,29 +185,31 @@ class RedisService:
                         del self._local_cache[cache_key]
                         del self._cache_ttl[cache_key]
 
-                # Redis에서 조회
-                settings = await redis.get(cache_key)
-                if not settings:
-                    self.cache_misses.inc()
-                    return None
+                async with redis_context(timeout=DEFAULT_REDIS_TIMEOUT) as redis:
+                    # Redis에서 조회
+                    settings = await redis.get(cache_key)
+                    if not settings:
+                        self.cache_misses.inc()
+                        return None
 
-                user_settings: Dict[str, Any] = json.loads(settings)
-                updated = False
+                    user_settings: Dict[str, Any] = json.loads(settings)
+                    updated = False
 
-                # 기본값 확인 및 업데이트
-                for k, v in DEFAULT_PARAMS_SETTINGS.items():
-                    if k not in user_settings:
-                        user_settings[k] = v
-                        updated = True
+                    # 기본값 확인 및 업데이트
+                    for k, v in DEFAULT_PARAMS_SETTINGS.items():
+                        if k not in user_settings:
+                            user_settings[k] = v
+                            updated = True
 
-                if updated:
-                    await redis.set(cache_key, json.dumps(user_settings))
+                    if updated:
+                        # Save without TTL (permanent storage)
+                        await redis.set(cache_key, json.dumps(user_settings))
 
-                # 로컬 캐시 업데이트
-                self._local_cache[cache_key] = user_settings
-                self._cache_ttl[cache_key] = time.time() + 30  # 30초 캐시
+                    # 로컬 캐시 업데이트
+                    self._local_cache[cache_key] = user_settings
+                    self._cache_ttl[cache_key] = time.time() + 30  # 30초 캐시
 
-                return user_settings
+                    return user_settings
 
             except Exception as e:
                 logger.error(f"Error getting user settings: {e}")
@@ -214,14 +219,18 @@ class RedisService:
     async def set_user_settings(self, user_id: str, settings: dict) -> None:
         with self.operation_duration.time():
             try:
-                redis = await self._ensure_redis()
-
                 cache_key = f"user:{user_id}:settings"
-                # Redis 업데이트
-                await redis.set(cache_key, json.dumps(settings))
-                # 로컬 캐시 업데이트
+
+                async with redis_context(timeout=DEFAULT_REDIS_TIMEOUT) as redis:
+                    # Redis 업데이트 (no TTL - permanent storage)
+                    await redis.set(cache_key, json.dumps(settings))
+
+                # 로컬 캐시 업데이트 (즉시 반영)
                 self._local_cache[cache_key] = settings
                 self._cache_ttl[cache_key] = time.time() + 300
+
+                # PUBLISH to notify other instances to invalidate their cache
+                await redis.publish(f"settings:update:{user_id}", cache_key)
             except Exception as e:
                 logger.error(f"Error setting user settings: {e}")
                 raise
@@ -240,30 +249,29 @@ class RedisService:
         """
         with self.operation_duration.time():
             try:
-                redis = await self._ensure_redis()
+                async with redis_context(timeout=RedisTimeout.PIPELINE) as redis:
+                    pipeline = redis.pipeline()
+                    for user_id in user_ids:
+                        pipeline.get(f"user:{user_id}:settings")
 
-                pipeline = redis.pipeline()
-                for user_id in user_ids:
-                    pipeline.get(f"user:{user_id}:settings")
+                    results = await pipeline.execute()
 
-                results = await pipeline.execute()
-
-                parsed_results: Dict[str, Optional[Dict[str, Any]]] = {}
-                for user_id, result in zip(user_ids, results):
-                    if result:
-                        try:
-                            parsed_results[user_id] = json.loads(result)
-                            # 로컬 캐시 업데이트
-                            cache_key = f"user:{user_id}:settings"
-                            self._local_cache[cache_key] = parsed_results[user_id]
-                            self._cache_ttl[cache_key] = time.time() + 30
-                        except json.JSONDecodeError:
+                    parsed_results: Dict[str, Optional[Dict[str, Any]]] = {}
+                    for user_id, result in zip(user_ids, results):
+                        if result:
+                            try:
+                                parsed_results[user_id] = json.loads(result)
+                                # 로컬 캐시 업데이트
+                                cache_key = f"user:{user_id}:settings"
+                                self._local_cache[cache_key] = parsed_results[user_id]
+                                self._cache_ttl[cache_key] = time.time() + 30
+                            except json.JSONDecodeError:
+                                parsed_results[user_id] = None
+                        else:
                             parsed_results[user_id] = None
-                    else:
-                        parsed_results[user_id] = None
 
-                logger.info(f"Batch fetched {len(user_ids)} user settings")
-                return parsed_results
+                    logger.info(f"Batch fetched {len(user_ids)} user settings")
+                    return parsed_results
 
             except Exception as e:
                 logger.error(f"Error in batch get_multiple_user_settings: {e}")
@@ -280,18 +288,18 @@ class RedisService:
         """
         with self.operation_duration.time():
             try:
-                redis = await self._ensure_redis()
+                async with redis_context(timeout=RedisTimeout.PIPELINE) as redis:
+                    pipeline = redis.pipeline()
+                    for user_id, settings in settings_dict.items():
+                        cache_key = f"user:{user_id}:settings"
+                        # Save without TTL (permanent storage)
+                        pipeline.set(cache_key, json.dumps(settings))
+                        # 로컬 캐시 업데이트
+                        self._local_cache[cache_key] = settings
+                        self._cache_ttl[cache_key] = time.time() + 300
 
-                pipeline = redis.pipeline()
-                for user_id, settings in settings_dict.items():
-                    cache_key = f"user:{user_id}:settings"
-                    pipeline.set(cache_key, json.dumps(settings))
-                    # 로컬 캐시 업데이트
-                    self._local_cache[cache_key] = settings
-                    self._cache_ttl[cache_key] = time.time() + 300
-
-                await pipeline.execute()
-                logger.info(f"Batch saved {len(settings_dict)} user settings")
+                    await pipeline.execute()
+                    logger.info(f"Batch saved {len(settings_dict)} user settings")
 
             except Exception as e:
                 logger.error(f"Error in batch set_multiple_user_settings: {e}")
@@ -309,8 +317,6 @@ class RedisService:
         """
         with self.operation_duration.time():
             try:
-                redis = await self._ensure_redis()
-
                 # 먼저 로컬 캐시 확인
                 results: Dict[str, Any] = {}
                 missing_keys: List[str] = []
@@ -328,25 +334,26 @@ class RedisService:
 
                 # Redis에서 없는 키들 조회
                 if missing_keys:
-                    pipeline = redis.pipeline()
-                    for key in missing_keys:
-                        pipeline.get(key)
+                    async with redis_context(timeout=RedisTimeout.PIPELINE) as redis:
+                        pipeline = redis.pipeline()
+                        for key in missing_keys:
+                            pipeline.get(key)
 
-                    redis_results = await pipeline.execute()
+                        redis_results = await pipeline.execute()
 
-                    for key, value in zip(missing_keys, redis_results):
-                        if value:
-                            try:
-                                parsed = json.loads(value)
-                                results[key] = parsed
-                                # 로컬 캐시 업데이트
-                                self._local_cache[key] = parsed
-                                self._cache_ttl[key] = time.time() + 30
-                                self.cache_hits.inc()
-                            except json.JSONDecodeError:
-                                results[key] = value
-                        else:
-                            self.cache_misses.inc()
+                        for key, value in zip(missing_keys, redis_results):
+                            if value:
+                                try:
+                                    parsed = json.loads(value)
+                                    results[key] = parsed
+                                    # 로컬 캐시 업데이트
+                                    self._local_cache[key] = parsed
+                                    self._cache_ttl[key] = time.time() + 30
+                                    self.cache_hits.inc()
+                                except json.JSONDecodeError:
+                                    results[key] = value
+                            else:
+                                self.cache_misses.inc()
 
                 logger.debug(f"Batch get: {len(keys)} keys, {len(results)} found")
                 return results
@@ -365,22 +372,21 @@ class RedisService:
         """
         with self.operation_duration.time():
             try:
-                redis = await self._ensure_redis()
+                async with redis_context(timeout=RedisTimeout.PIPELINE) as redis:
+                    pipeline = redis.pipeline()
+                    for key, value in items.items():
+                        if isinstance(value, (dict, list)):
+                            serialized = json.dumps(value)
+                        else:
+                            serialized = str(value)
+                        pipeline.setex(key, ttl, serialized)
 
-                pipeline = redis.pipeline()
-                for key, value in items.items():
-                    if isinstance(value, (dict, list)):
-                        serialized = json.dumps(value)
-                    else:
-                        serialized = str(value)
-                    pipeline.setex(key, ttl, serialized)
+                        # 로컬 캐시 업데이트
+                        self._local_cache[key] = value
+                        self._cache_ttl[key] = time.time() + ttl
 
-                    # 로컬 캐시 업데이트
-                    self._local_cache[key] = value
-                    self._cache_ttl[key] = time.time() + ttl
-
-                await pipeline.execute()
-                logger.debug(f"Batch set: {len(items)} keys")
+                    await pipeline.execute()
+                    logger.debug(f"Batch set: {len(items)} keys")
 
             except Exception as e:
                 logger.error(f"Error in batch set_many: {e}")
@@ -483,15 +489,6 @@ def validate_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
                 }
             )
 
-        if "pyramiding_type" in settings and settings["pyramiding_type"] not in PYRAMIDING_TYPES:
-            raise ValidationException(
-                f"Invalid pyramiding type: {settings['pyramiding_type']}",
-                details={
-                    "value": settings["pyramiding_type"],
-                    "valid_options": PYRAMIDING_TYPES
-                }
-            )
-
         logger.debug(
             "Settings validation successful",
             extra={"settings_keys": list(settings.keys())}
@@ -527,56 +524,121 @@ class ApiKeyService:
         """
         사용자 ID를 기반으로 Redis에서 OKX API 키를 가져오는 함수
 
+        API 키가 암호화되어 있으면 자동으로 복호화합니다.
+        Backward compatibility: 평문 키도 읽을 수 있습니다.
+
         Args:
             user_id (str): 사용자 ID
 
         Returns:
-            dict: API 키 정보 (api_key, api_secret, passphrase)
+            dict: API 키 정보 (api_key, api_secret, passphrase) - 복호화됨
 
         Raises:
             HTTPException: API 키를 찾을 수 없거나 오류 발생 시
         """
         try:
-            redis = await get_redis_client()
-            api_key_format = f"user:{user_id}:api:keys"
-            api_keys_result = await redis.hgetall(api_key_format)
+            async with redis_context(timeout=DEFAULT_REDIS_TIMEOUT) as redis:
+                api_key_format = f"user:{user_id}:api:keys"
+                api_keys_result = await redis.hgetall(api_key_format)
 
-            if not api_keys_result:
-                raise HTTPException(status_code=404, detail="API keys not found in Redis")
+                if not api_keys_result:
+                    raise HTTPException(status_code=404, detail="API keys not found in Redis")
 
-            # Ensure we return a proper Dict[str, str]
-            api_keys: Dict[str, str] = {k: str(v) for k, v in api_keys_result.items()}
-            return api_keys
+                # Convert to Dict[str, str]
+                encrypted_keys: Dict[str, str] = {k: str(v) for k, v in api_keys_result.items()}
+
+                # Decrypt API keys (backward compatible - handles plaintext too)
+                decrypted_keys: Dict[str, str] = {}
+                for key_name, encrypted_value in encrypted_keys.items():
+                    try:
+                        # decrypt_api_key handles both encrypted and plaintext keys
+                        decrypted_keys[key_name] = decrypt_api_key(encrypted_value)
+                    except EncryptionError as e:
+                        logger.error(
+                            f"Failed to decrypt {key_name} for user {user_id}: {e}",
+                            extra={"user_id": user_id, "key_name": key_name}
+                        )
+                        # Return encrypted value as fallback (for debugging)
+                        decrypted_keys[key_name] = encrypted_value
+
+                return decrypted_keys
+
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"2API 키 조회 실패: {str(e)}")
+            logger.error(f"API 키 조회 실패: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error fetching API keys: {str(e)}")
 
     @staticmethod
     async def set_user_api_keys(user_id: str, api_key: str, api_secret: str, passphrase: str) -> bool:
         """
-        사용자 API 키 정보를 Redis에 저장
+        사용자 API 키 정보를 암호화하여 TimescaleDB (primary)와 Redis (cache)에 저장
+
+        저장 순서:
+        1. TimescaleDB (영구 저장소) - 암호화 저장
+        2. Redis (캐시 레이어) - 암호화 저장
 
         Args:
-            user_id (str): 사용자 ID
-            api_key (str): API 키
-            api_secret (str): API 시크릿
-            passphrase (str): API 패스프레이즈
+            user_id (str): 사용자 ID (OKX UID 또는 Telegram ID)
+            api_key (str): API 키 (평문)
+            api_secret (str): API 시크릿 (평문)
+            passphrase (str): API 패스프레이즈 (평문)
 
         Returns:
             bool: 성공 여부
         """
+        from HYPERRSI.src.services.timescale_service import TimescaleUserService
+
         try:
-            redis = await get_redis_client()
-            api_key_format = f"user:{user_id}:api:keys"
-            await redis.hmset(api_key_format, {
-                'api_key': api_key,
-                'api_secret': api_secret,
-                'passphrase': passphrase
-            })
-            logger.info(f"API 키 저장 성공: {user_id}")
-            return True
+            # Encrypt API keys before storing
+            encrypted_data = {
+                'api_key': encrypt_api_key(api_key),
+                'api_secret': encrypt_api_key(api_secret),
+                'passphrase': encrypt_api_key(passphrase)
+            }
+
+            # 1️⃣ TimescaleDB 저장 (Primary Storage)
+            try:
+                result = await TimescaleUserService.upsert_api_credentials(
+                    identifier=user_id,
+                    api_key=encrypted_data['api_key'],
+                    api_secret=encrypted_data['api_secret'],
+                    passphrase=encrypted_data['passphrase']
+                )
+                if result:
+                    logger.info(
+                        f"API 키 TimescaleDB 저장 성공: {user_id}",
+                        extra={"user_id": user_id}
+                    )
+            except Exception as ts_error:
+                logger.error(
+                    f"TimescaleDB API 키 저장 실패: {ts_error}",
+                    extra={"user_id": user_id}
+                )
+                # TimescaleDB 실패해도 Redis 저장은 시도
+
+            # 2️⃣ Redis 저장 (Cache Layer)
+            async with redis_context(timeout=DEFAULT_REDIS_TIMEOUT) as redis:
+                api_key_format = f"user:{user_id}:api:keys"
+
+                # Store encrypted keys (no TTL - permanent storage)
+                await redis.hmset(api_key_format, encrypted_data)
+
+                logger.info(
+                    f"API 키 Redis 캐싱 성공: {user_id}",
+                    extra={"user_id": user_id}
+                )
+                return True
+
+        except EncryptionError as e:
+            logger.error(
+                f"API 키 암호화 실패: {str(e)}",
+                extra={"user_id": user_id}
+            )
+            return False
         except Exception as e:
-            logger.error(f"API 키 저장 실패: {str(e)}")
+            logger.error(
+                f"API 키 저장 실패: {str(e)}",
+                extra={"user_id": user_id}
+            )
             return False

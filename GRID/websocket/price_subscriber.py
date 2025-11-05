@@ -9,7 +9,6 @@ import ccxt.pro as ccxt
 import redis.asyncio as aioredis
 
 from shared.config import settings
-from GRID.core.redis import get_redis_connection
 
 REDIS_URL = settings.REDIS_URL
 

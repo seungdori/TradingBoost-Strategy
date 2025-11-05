@@ -9,7 +9,9 @@ import pandas as pd
 
 from HYPERRSI.src.api.dependencies import get_exchange_context
 from HYPERRSI.src.trading.models import Position
-from shared.database.redis_helper import get_redis_client
+from shared.database.redis_helper import get_redis_client  # Legacy - deprecated
+from shared.database.redis_patterns import scan_keys_pattern, redis_context, RedisTimeout
+from shared.database.redis_migration import get_redis_context
 from shared.logging import get_logger, log_order
 from shared.utils import get_contract_size
 
@@ -129,83 +131,84 @@ async def get_trade_history(
     """거래 히스토리 조회 및 상태 업데이트"""
     history_key = get_redis_key(user_id, "history")
     try:
-        redis = await get_redis_client()
-        history = await redis.lrange(history_key, 0, limit-1)
-        result = []
-        
-        async with get_exchange_context(str(user_id)) as exchange:
-            for trade_str in history:
-                trade_info = json.loads(trade_str)
-                #logger.info(f"[DEBUG] 처리 전 거래 정보: {json.dumps(trade_info, indent=2)}")
-                
-                if status and trade_info['status'] != status:
-                    continue
+        # Use migration-aware context manager with normal timeout (LRANGE + LSET operations)
+        async with get_redis_context(user_id=str(user_id), timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            history = await redis.lrange(history_key, 0, limit-1)
+            result = []
 
-                try:
-                    order_id = trade_info.get('order_id')
-                    symbol = trade_info.get('symbol')
-                    
-                    if not order_id or not symbol:
+            async with get_exchange_context(str(user_id)) as exchange:
+                for trade_str in history:
+                    trade_info = json.loads(trade_str)
+                    #logger.info(f"[DEBUG] 처리 전 거래 정보: {json.dumps(trade_info, indent=2)}")
+
+                    if status and trade_info['status'] != status:
                         continue
 
-                    # 1. 주문 상세 정보 조회
                     try:
-                        order = await exchange.fetch_order(order_id, symbol)
-                        #logger.info(f"[DEBUG] 주문 상세 조회 결과: {json.dumps(order, indent=2)}")
-                        
-                        # 주문 상태가 종료된 경우
-                        if order['status'] in ['closed', 'canceled', 'expired']:
-                            trade_info['status'] = TradeStatus.CLOSED
-                            
-                            # 2. 실제 체결 정보 업데이트
-                            trade_info['exit_price'] = float(order['average']) if order.get('average') else float(order['price'])
-                            trade_info['exit_timestamp'] = datetime.fromtimestamp(
-                                order.get('lastTradeTimestamp', order['timestamp']) / 1000
-                            ).strftime('%Y-%m-%d %H:%M:%S')
-                            
-                            # 3. PNL 계산
-                            entry_price = float(trade_info['entry_price'])
-                            exit_price = float(trade_info['exit_price'])
-                            size = float(trade_info['size'])
-                            is_long = trade_info['side'] == 'long'
-                            
-                            if entry_price > 0 and size > 0:
-                                if is_long:
-                                    pnl = (exit_price - entry_price) * size
+                        order_id = trade_info.get('order_id')
+                        symbol = trade_info.get('symbol')
+
+                        if not order_id or not symbol:
+                            continue
+
+                        # 1. 주문 상세 정보 조회
+                        try:
+                            order = await exchange.fetch_order(order_id, symbol)
+                            #logger.info(f"[DEBUG] 주문 상세 조회 결과: {json.dumps(order, indent=2)}")
+
+                            # 주문 상태가 종료된 경우
+                            if order['status'] in ['closed', 'canceled', 'expired']:
+                                trade_info['status'] = TradeStatus.CLOSED
+
+                                # 2. 실제 체결 정보 업데이트
+                                trade_info['exit_price'] = float(order['average']) if order.get('average') else float(order['price'])
+                                trade_info['exit_timestamp'] = datetime.fromtimestamp(
+                                    order.get('lastTradeTimestamp', order['timestamp']) / 1000
+                                ).strftime('%Y-%m-%d %H:%M:%S')
+
+                                # 3. PNL 계산
+                                entry_price = float(trade_info['entry_price'])
+                                exit_price = float(trade_info['exit_price'])
+                                size = float(trade_info['size'])
+                                is_long = trade_info['side'] == 'long'
+
+                                if entry_price > 0 and size > 0:
+                                    if is_long:
+                                        pnl = (exit_price - entry_price) * size
+                                    else:
+                                        pnl = (entry_price - exit_price) * size
+
+                                    trade_info['pnl'] = pnl
+                                    trade_info['pnl_percent'] = (pnl / (entry_price * size)) * 100
+
+                                # 4. 수수료 정보 추가
+                                if order.get('fee'):
+                                    trade_info['fee'] = {
+                                        'cost': float(order['fee']['cost']),
+                                        'currency': order['fee']['currency']
+                                    }
+
+                                # 5. 청산 유형 판단
+                                if order.get('info', {}).get('tpTriggerPx'):
+                                    trade_info['close_type'] = 'TP'
+                                elif order.get('info', {}).get('slTriggerPx'):
+                                    trade_info['close_type'] = 'SL'
                                 else:
-                                    pnl = (entry_price - exit_price) * size
-                                    
-                                trade_info['pnl'] = pnl
-                                trade_info['pnl_percent'] = (pnl / (entry_price * size)) * 100
-                                
-                            # 4. 수수료 정보 추가
-                            if order.get('fee'):
-                                trade_info['fee'] = {
-                                    'cost': float(order['fee']['cost']),
-                                    'currency': order['fee']['currency']
-                                }
-                            
-                            # 5. 청산 유형 판단
-                            if order.get('info', {}).get('tpTriggerPx'):
-                                trade_info['close_type'] = 'TP'
-                            elif order.get('info', {}).get('slTriggerPx'):
-                                trade_info['close_type'] = 'SL'
-                            else:
-                                trade_info['close_type'] = 'Manual'
-                            
-                            # Redis 업데이트
-                            await redis.lset(history_key, history.index(trade_str), json.dumps(trade_info))
-                            
+                                    trade_info['close_type'] = 'Manual'
+
+                                # Redis 업데이트 (within same context - connection guaranteed)
+                                await redis.lset(history_key, history.index(trade_str), json.dumps(trade_info))
+
+                        except Exception as e:
+                            logger.error(f"주문 정보 조회 실패 (order_id: {order_id}): {str(e)}")
+
                     except Exception as e:
-                        logger.error(f"주문 정보 조회 실패 (order_id: {order_id}): {str(e)}")
-                        
-                except Exception as e:
-                    logger.error(f"거래 정보 처리 중 오류: {str(e)}")
-                    
-                result.append(trade_info)
-                
-        return result
-        
+                        logger.error(f"거래 정보 처리 중 오류: {str(e)}")
+
+                    result.append(trade_info)
+
+            return result
+
     except Exception as e:
         logger.error(f"거래 히스토리 조회 실패: {str(e)}")
         return []
@@ -222,7 +225,7 @@ async def record_trade_history_entry(
 ) -> None:
     """새로운 거래 진입을 히스토리에 기록"""
     history_key = get_redis_key(user_id, "history")
-    
+
     trade_history = TRADE_HISTORY_SCHEMA.copy()
     trade_history.update({
         "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -235,14 +238,14 @@ async def record_trade_history_entry(
         "status": TradeStatus.OPEN,
         "order_id": order_id,
         "last_filled_price": last_filled_price,
-        
+
     })
-    
+
     try:
-        # Redis에 저장 (최근 100개만 유지)
-        redis = await get_redis_client()
-        await redis.lpush(history_key, json.dumps(trade_history))
-        await redis.ltrim(history_key, 0, 99)
+        # Redis에 저장 (최근 100개만 유지) - LPUSH + LTRIM operations
+        async with get_redis_context(user_id=str(user_id), timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            await redis.lpush(history_key, json.dumps(trade_history))
+            await redis.ltrim(history_key, 0, 99)
         logger.info(f"거래 히스토리 기록 완료: {trade_history}")
     except Exception as e:
         logger.error(f"거래 히스토리 기록 실패: {str(e)}")
@@ -259,46 +262,46 @@ async def update_trade_history_exit(
 ) -> None:
     """기존 거래 히스토리 업데이트 (청산 시)"""
     history_key = get_redis_key(user_id, "history")
-    
+
     try:
-        # 최근 히스토리에서 해당 거래 찾기
-        redis = await get_redis_client()
-        history = await redis.lrange(history_key, 0, -1)
-        for i, trade in enumerate(history):
-            trade_info = json.loads(trade)
-            if (trade_info['symbol'] == symbol and 
-                trade_info['status'] == TradeStatus.OPEN and 
-                trade_info['order_id'] == order_id):
-                
-                # 진입가 기준으로 수익률 계산
-                entry_price = float(trade_info['entry_price'])
-                size = float(trade_info['size'])
-                contract_size = await get_contract_size(trade_info['symbol'])
-                pnl_percent = (pnl / (entry_price * size)) * 100
-                position_qty = size * contract_size
-                # 히스토리 업데이트
-                trade_info.update({
-                    'status': TradeStatus.CLOSED if percent_closed >= 99.9 else TradeStatus.PARTIALLY_CLOSED,
-                    'exit_price': exit_price,
-                    'exit_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'pnl': pnl,
-                    'pnl_percent': pnl_percent,
-                    'position_qty': position_qty,
-                    'close_type': close_type,
-                    'close_comment': comment
-                })
-                
-                # 부분 청산의 경우
-                if percent_closed < 99.9:
-                    remaining_size = size * (1 - percent_closed/100)
-                    trade_info['remaining_size'] = remaining_size
-                
-                # Redis 히스토리 업데이트
-                await redis.lset(history_key, i, json.dumps(trade_info))
-                break
-                
-        logger.info(f"거래 히스토리 업데이트 완료: {trade_info}")
-        
+        # 최근 히스토리에서 해당 거래 찾기 - LRANGE + LSET operations
+        async with get_redis_context(user_id=str(user_id), timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            history = await redis.lrange(history_key, 0, -1)
+            for i, trade in enumerate(history):
+                trade_info = json.loads(trade)
+                if (trade_info['symbol'] == symbol and
+                    trade_info['status'] == TradeStatus.OPEN and
+                    trade_info['order_id'] == order_id):
+
+                    # 진입가 기준으로 수익률 계산
+                    entry_price = float(trade_info['entry_price'])
+                    size = float(trade_info['size'])
+                    contract_size = await get_contract_size(trade_info['symbol'])
+                    pnl_percent = (pnl / (entry_price * size)) * 100
+                    position_qty = size * contract_size
+                    # 히스토리 업데이트
+                    trade_info.update({
+                        'status': TradeStatus.CLOSED if percent_closed >= 99.9 else TradeStatus.PARTIALLY_CLOSED,
+                        'exit_price': exit_price,
+                        'exit_timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'pnl': pnl,
+                        'pnl_percent': pnl_percent,
+                        'position_qty': position_qty,
+                        'close_type': close_type,
+                        'close_comment': comment
+                    })
+
+                    # 부분 청산의 경우
+                    if percent_closed < 99.9:
+                        remaining_size = size * (1 - percent_closed/100)
+                        trade_info['remaining_size'] = remaining_size
+
+                    # Redis 히스토리 업데이트 (within same context)
+                    await redis.lset(history_key, i, json.dumps(trade_info))
+                    break
+
+            logger.info(f"거래 히스토리 업데이트 완료: {trade_info}")
+
     except Exception as e:
         logger.error(f"거래 히스토리 업데이트 실패: {str(e)}")
 
@@ -318,122 +321,132 @@ async def record_trade_entry(
     existing_trade: Dict[str, Any] = {}
 
     try:
-        redis = await get_redis_client()
-        # 계약 사양 정보 조회
-        contract_key = get_redis_key(user_id, f"symbol_info:contract_specifications")
-        contract_raw = await redis.get(contract_key)
-        if contract_raw:
-            contract_info = json.loads(contract_raw)
-            contract_size = contract_info.get(symbol, {}).get("contractSize", 1)
+        # CRITICAL FIX: Consolidated into single Redis context (was 2 separate calls - connection leak!)
+        # Operations: GET + HGETALL + HSET + GET + SET (all within one context)
+        async with get_redis_context(user_id=str(user_id), timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 계약 사양 정보 조회
+            contract_key = get_redis_key(user_id, f"symbol_info:contract_specifications")
+            contract_raw = await redis.get(contract_key)
+            if contract_raw:
+                contract_info = json.loads(contract_raw)
+                contract_size = contract_info.get(symbol, {}).get("contractSize", 1)
 
-        # 기존 거래 정보 조회
-        existing_trade = await redis.hgetall(trade_key)
+            # 기존 거래 정보 조회
+            existing_trade = await redis.hgetall(trade_key)
+
+            # Calculate entry data
+            position_qty = contracts_amount * contract_size
+            entry_data: Dict[str, Any]
+            if existing_trade and is_DCA:
+                # DCA인 경우 기존 거래 정보 업데이트
+                total_contracts = float(existing_trade.get("total_contracts_amount", 0)) + contracts_amount
+                total_qty = float(existing_trade.get("total_position_qty", 0)) + position_qty
+                entry_data = {
+                    "last_dca_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    "last_filled_price": current_price,
+                    "last_dca_contracts_amount": contracts_amount,
+                    "last_dca_position_qty": position_qty,
+                    "dca_count": dca_count,
+                    "total_contracts_amount": total_contracts,
+                    "total_position_qty": total_qty,
+                    "status": TradeStatus.OPEN
+                }
+            else:
+                # 새로운 진입인 경우
+                entry_data = {
+                    "entry_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    "entry_price": entry_price,
+                    "initial_contracts_amount": contracts_amount,
+                    "initial_position_qty": position_qty,
+                    "total_contracts_amount": contracts_amount,
+                    "total_position_qty": position_qty,
+                    "last_filled_price": current_price,
+                    "side": side,
+                    "symbol": symbol,
+                    "status": TradeStatus.OPEN,
+                    "dca_count": 1
+                }
+
+            log_order(user_id, symbol, 'entry', side, current_price, contracts_amount, dca_count)
+
+            # CRITICAL FIX: Use same redis context (was second get_redis_client() call!)
+            await redis.hset(trade_key, mapping=entry_data)
+            logger.info(f"거래 진입 기록 완료: {entry_data}")
+
+            # Cooldown management (within same context)
+            cooldown_key = f"user:{user_id}:cooldown:{symbol}:{side}"
+            cooldown_seconds = 30  # 30초
+            if not await redis.get(cooldown_key):
+                await redis.set(cooldown_key, "true", ex=cooldown_seconds)
+
     except Exception as e:
         logger.error(f"거래 정보 조회 실패: {str(e)}")
-    
-    position_qty = contracts_amount * contract_size
-    entry_data: Dict[str, Any]
-    if existing_trade and is_DCA:
-        # DCA인 경우 기존 거래 정보 업데이트
-        total_contracts = float(existing_trade.get("total_contracts_amount", 0)) + contracts_amount
-        total_qty = float(existing_trade.get("total_position_qty", 0)) + position_qty
-        entry_data = {
-            "last_dca_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            "last_filled_price": current_price,
-            "last_dca_contracts_amount": contracts_amount,
-            "last_dca_position_qty": position_qty,
-            "dca_count": dca_count,
-            "total_contracts_amount": total_contracts,
-            "total_position_qty": total_qty,
-            "status": TradeStatus.OPEN
-        }
-    else:
-        # 새로운 진입인 경우
-        entry_data = {
-            "entry_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            "entry_price": entry_price,
-            "initial_contracts_amount": contracts_amount,
-            "initial_position_qty": position_qty,
-            "total_contracts_amount": contracts_amount,
-            "total_position_qty": position_qty,
-            "last_filled_price": current_price,
-            "side": side,
-            "symbol": symbol,
-            "status": TradeStatus.OPEN,
-            "dca_count": 1
-        }
-    log_order(user_id, symbol, 'entry', side, current_price, contracts_amount, dca_count)
-    redis = await get_redis_client()
-    await redis.hset(trade_key, mapping=entry_data)
-    logger.info(f"거래 진입 기록 완료: {entry_data}")
-    cooldown_key = f"user:{user_id}:cooldown:{symbol}:{side}"
-    cooldown_seconds = 30  # 30초
-    if not await redis.get(cooldown_key):
-        await redis.set(cooldown_key, "true", ex=cooldown_seconds)
     
 
 async def record_trade_exit(user_id: str, symbol: str, position: Position, exchange: Any) -> None:
     trade_key = get_redis_key(user_id, f"current_trade:{symbol}")
     stats_key = get_redis_key(user_id, "stats")
 
-    redis = await get_redis_client()
-    # 진입 데이터 조회
-    entry_data = await redis.hgetall(trade_key)
-    if not entry_data:
-        return
+    # Operations: HGETALL + GET + SET + DELETE + GET + SET (all within one context)
+    async with get_redis_context(user_id=str(user_id), timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+        # 진입 데이터 조회
+        entry_data = await redis.hgetall(trade_key)
+        if not entry_data:
+            return
 
-    # PNL 정보 조회
-    pnl_info = await get_position_pnl(exchange, symbol)
-    if pnl_info:
-        trade_data: Dict[str, Any] = {
-            **entry_data,
-            "exit_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            "exit_price": pnl_info['exit_price'],
-            "realized_pnl": pnl_info['realized_pnl'],
-            "final_size": position.size,
-            "status": TradeStatus.CLOSED
-        }
+        # PNL 정보 조회
+        pnl_info = await get_position_pnl(exchange, symbol)
+        if pnl_info:
+            trade_data: Dict[str, Any] = {
+                **entry_data,
+                "exit_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "exit_price": pnl_info['exit_price'],
+                "realized_pnl": pnl_info['realized_pnl'],
+                "final_size": position.size,
+                "status": TradeStatus.CLOSED
+            }
 
-        # 통계 업데이트
-        current_stats = await redis.get(stats_key)
-        stats_dict: Dict[str, Any] = json.loads(current_stats) if current_stats else TRADING_STATS_SCHEMA.copy()
+            # 통계 업데이트
+            current_stats = await redis.get(stats_key)
+            stats_dict: Dict[str, Any] = json.loads(current_stats) if current_stats else TRADING_STATS_SCHEMA.copy()
 
-        stats_dict['total_trades'] = int(stats_dict.get('total_trades', 0)) + 1
-        realized_pnl = float(pnl_info['realized_pnl'])
-        if realized_pnl > 0:
-            stats_dict['winning_trades'] = int(stats_dict.get('winning_trades', 0)) + 1
-            stats_dict['total_profit'] = float(stats_dict.get('total_profit', 0.0)) + realized_pnl
-        else:
-            stats_dict['losing_trades'] = int(stats_dict.get('losing_trades', 0)) + 1
-            stats_dict['total_loss'] = float(stats_dict.get('total_loss', 0.0)) + abs(realized_pnl)
+            stats_dict['total_trades'] = int(stats_dict.get('total_trades', 0)) + 1
+            realized_pnl = float(pnl_info['realized_pnl'])
+            if realized_pnl > 0:
+                stats_dict['winning_trades'] = int(stats_dict.get('winning_trades', 0)) + 1
+                stats_dict['total_profit'] = float(stats_dict.get('total_profit', 0.0)) + realized_pnl
+            else:
+                stats_dict['losing_trades'] = int(stats_dict.get('losing_trades', 0)) + 1
+                stats_dict['total_loss'] = float(stats_dict.get('total_loss', 0.0)) + abs(realized_pnl)
 
-        # 거래 기록 저장
-        trades_list: List[Dict[str, Any]] = stats_dict.get('trades', [])
-        trades_list.append(trade_data)
-        stats_dict['trades'] = trades_list
+            # 거래 기록 저장
+            trades_list: List[Dict[str, Any]] = stats_dict.get('trades', [])
+            trades_list.append(trade_data)
+            stats_dict['trades'] = trades_list
 
-        await redis.set(stats_key, json.dumps(stats_dict))
-        await redis.delete(trade_key)  # 현재 거래 정보 삭제
-        side = trade_data.get("side", trade_data.get("direction", ""))
-        if side == "buy":
-            side = "long"
-        elif side == "sell":
-            side = "short"
-        cooldown_key = f"user:{user_id}:cooldown:{symbol}:{side}"
-        cooldown_seconds = 40  # 40초
-        if not await redis.get(cooldown_key):
-            await redis.set(cooldown_key, "true", ex=cooldown_seconds)
+            await redis.set(stats_key, json.dumps(stats_dict))
+            await redis.delete(trade_key)  # 현재 거래 정보 삭제
+            side = trade_data.get("side", trade_data.get("direction", ""))
+            if side == "buy":
+                side = "long"
+            elif side == "sell":
+                side = "short"
+            cooldown_key = f"user:{user_id}:cooldown:{symbol}:{side}"
+            cooldown_seconds = 40  # 40초
+            if not await redis.get(cooldown_key):
+                await redis.set(cooldown_key, "true", ex=cooldown_seconds)
     
 
 async def get_trading_stats(user_id: str) -> Dict[str, Any]:
     stats_key = get_redis_key(user_id, "stats")
-    redis = await get_redis_client()
-    stats_data = await redis.get(stats_key)
-    if not stats_data:
-        schema_copy: Dict[str, Any] = TRADING_STATS_SCHEMA.copy()
-        return schema_copy
-    result: Dict[str, Any] = json.loads(stats_data)
-    return result
+    # Simple GET operation - use fast timeout
+    async with get_redis_context(user_id=str(user_id), timeout=RedisTimeout.FAST_OPERATION) as redis:
+        stats_data = await redis.get(stats_key)
+        if not stats_data:
+            schema_copy: Dict[str, Any] = TRADING_STATS_SCHEMA.copy()
+            return schema_copy
+        result: Dict[str, Any] = json.loads(stats_data)
+        return result
 
 async def update_trading_stats(
     user_id: str,
@@ -449,60 +462,61 @@ async def update_trading_stats(
     stats_key = get_redis_key(user_id, "stats")
 
     try:
-        redis = await get_redis_client()
-        # 현재 통계 데이터 가져오기
-        current_stats = await redis.get(stats_key)
-        stats_dict: Dict[str, Any] = json.loads(current_stats) if current_stats else TRADING_STATS_SCHEMA.copy()
+        # GET + SET operations - use normal timeout
+        async with get_redis_context(user_id=str(user_id), timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 현재 통계 데이터 가져오기
+            current_stats = await redis.get(stats_key)
+            stats_dict: Dict[str, Any] = json.loads(current_stats) if current_stats else TRADING_STATS_SCHEMA.copy()
 
-        # 새로운 거래 정보
-        trade_info: Dict[str, Any] = {
-            "symbol": symbol,
-            "side": side,
-            "entry_price": entry_price,
-            "exit_price": exit_price,
-            "position_size": position_size,
-            "pnl": pnl,
-            "entry_time": entry_time,
-            "exit_time": exit_time,
-        }
+            # 새로운 거래 정보
+            trade_info: Dict[str, Any] = {
+                "symbol": symbol,
+                "side": side,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "position_size": position_size,
+                "pnl": pnl,
+                "entry_time": entry_time,
+                "exit_time": exit_time,
+            }
 
-        # 통계 업데이트
-        stats_dict["total_trades"] = int(stats_dict.get("total_trades", 0)) + 1
-        if pnl > 0:
-            stats_dict["winning_trades"] = int(stats_dict.get("winning_trades", 0)) + 1
-            stats_dict["total_profit"] = float(stats_dict.get("total_profit", 0.0)) + pnl
-            stats_dict["max_profit"] = max(float(stats_dict.get("max_profit", 0.0)), pnl)
-        else:
-            stats_dict["losing_trades"] = int(stats_dict.get("losing_trades", 0)) + 1
-            stats_dict["total_loss"] = float(stats_dict.get("total_loss", 0.0)) + abs(pnl)
-            stats_dict["max_loss"] = min(float(stats_dict.get("max_loss", 0.0)), pnl)
+            # 통계 업데이트
+            stats_dict["total_trades"] = int(stats_dict.get("total_trades", 0)) + 1
+            if pnl > 0:
+                stats_dict["winning_trades"] = int(stats_dict.get("winning_trades", 0)) + 1
+                stats_dict["total_profit"] = float(stats_dict.get("total_profit", 0.0)) + pnl
+                stats_dict["max_profit"] = max(float(stats_dict.get("max_profit", 0.0)), pnl)
+            else:
+                stats_dict["losing_trades"] = int(stats_dict.get("losing_trades", 0)) + 1
+                stats_dict["total_loss"] = float(stats_dict.get("total_loss", 0.0)) + abs(pnl)
+                stats_dict["max_loss"] = min(float(stats_dict.get("max_loss", 0.0)), pnl)
 
-        # 평균값 계산
-        winning_trades = int(stats_dict.get("winning_trades", 0))
-        losing_trades = int(stats_dict.get("losing_trades", 0))
-        if winning_trades > 0:
-            stats_dict["avg_profit"] = float(stats_dict.get("total_profit", 0.0)) / winning_trades
-        if losing_trades > 0:
-            stats_dict["avg_loss"] = float(stats_dict.get("total_loss", 0.0)) / losing_trades
+            # 평균값 계산
+            winning_trades = int(stats_dict.get("winning_trades", 0))
+            losing_trades = int(stats_dict.get("losing_trades", 0))
+            if winning_trades > 0:
+                stats_dict["avg_profit"] = float(stats_dict.get("total_profit", 0.0)) / winning_trades
+            if losing_trades > 0:
+                stats_dict["avg_loss"] = float(stats_dict.get("total_loss", 0.0)) / losing_trades
 
-        # 승률 계산
-        total_trades = int(stats_dict.get("total_trades", 1))
-        stats_dict["win_rate"] = (winning_trades / total_trades) * 100
+            # 승률 계산
+            total_trades = int(stats_dict.get("total_trades", 1))
+            stats_dict["win_rate"] = (winning_trades / total_trades) * 100
 
-        # 수익률 계산
-        total_loss = float(stats_dict.get("total_loss", 0.0))
-        if total_loss > 0:
-            stats_dict["profit_factor"] = float(stats_dict.get("total_profit", 0.0)) / total_loss
+            # 수익률 계산
+            total_loss = float(stats_dict.get("total_loss", 0.0))
+            if total_loss > 0:
+                stats_dict["profit_factor"] = float(stats_dict.get("total_profit", 0.0)) / total_loss
 
-        # 거래 기록 추가 (최근 100개만 유지)
-        trades_list: List[Dict[str, Any]] = stats_dict.get("trades", [])
-        trades_list.append(trade_info)
-        if len(trades_list) > 100:
-            trades_list = trades_list[-100:]
-        stats_dict["trades"] = trades_list
+            # 거래 기록 추가 (최근 100개만 유지)
+            trades_list: List[Dict[str, Any]] = stats_dict.get("trades", [])
+            trades_list.append(trade_info)
+            if len(trades_list) > 100:
+                trades_list = trades_list[-100:]
+            stats_dict["trades"] = trades_list
 
-        # Redis에 저장
-        await redis.set(stats_key, json.dumps(stats_dict))
+            # Redis에 저장
+            await redis.set(stats_key, json.dumps(stats_dict))
 
     except Exception as e:
         logger.error(f"통계 업데이트 실패: {str(e)}")
@@ -532,104 +546,108 @@ async def get_user_trading_statistics(user_id: str) -> Dict[str, Any]:
             "worst_trade": {"pnl": float('inf'), "symbol": None}
         }
         start_time = time.time()
-        redis = await get_redis_client()
-        # 1. 기존 PnL 데이터 조회
-        pnl_pattern = f"user:{user_id}:pnl:*"
-        pnl_keys = await redis.keys(pnl_pattern)
+        # CRITICAL: All SCAN operations must be within SINGLE context (multiple scan_keys_pattern + hgetall calls)
+        async with get_redis_context(user_id=str(user_id), timeout=RedisTimeout.SLOW_OPERATION) as redis:
+            # 1. 기존 PnL 데이터 조회
+            pnl_pattern = f"user:{user_id}:pnl:*"
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            pnl_keys = await scan_keys_pattern(pnl_pattern, redis=redis)
 
-        for key in pnl_keys:
-            pnl_data = await redis.hgetall(key)
-            if pnl_data and 'pnl' in pnl_data:
-                current_pnl: float = float(pnl_data['pnl'])
-                symbol = key.split(":")[3]
+            for key in pnl_keys:
+                pnl_data = await redis.hgetall(key)
+                if pnl_data and 'pnl' in pnl_data:
+                    current_pnl: float = float(pnl_data['pnl'])
+                    symbol = key.split(":")[3]
 
-                stats["total_pnl"] += current_pnl
-                stats["total_trades"] += 1
-                stats["symbols"].add(symbol)
-
-                if current_pnl > 0:
-                    stats["winning_trades"] += 1
-                elif current_pnl < 0:
-                    stats["losing_trades"] += 1
-
-                # 최고/최저 수익 거래 기록
-                if current_pnl > stats["best_trade"]["pnl"]:
-                    stats["best_trade"] = {"pnl": current_pnl, "symbol": symbol}
-                if current_pnl < stats["worst_trade"]["pnl"]:
-                    stats["worst_trade"] = {"pnl": current_pnl, "symbol": symbol}
-        end_time = time.time()
-        print("================================================")
-        print(f"get_user_trading_statistics 소요시간: {end_time - start_time}초")
-        print("================================================")
-        # 2. completed 주문 데이터 조회
-        
-        start_time = time.time()
-        completed_pattern = f"completed:user:{user_id}:*:order:*"
-        completed_keys = await redis.keys(completed_pattern)
-
-        for key in completed_keys:
-            data = await redis.hgetall(key)
-            if data and data.get('status') == 'filled' and all(field in data for field in ['price', 'contracts_amount', 'position_side']):
-                parts = key.split(":")
-                symbol = parts[3]
-                
-                # PnL 계산 시도
-                try:
-                    # None 값 처리 로직 추가
-                    filled_contracts_str = data.get('filled_contracts_amount', '0')
-                    filled_contracts: float = float(filled_contracts_str) if filled_contracts_str != 'None' else 0.0
-
-                    price_str = data.get('price', '0')
-                    price: float = float(price_str) if price_str != 'None' else 0.0
-
-                    position_side = data.get('position_side', 'unknown')
-
-                    # 진입가격 정보 가져오기 - 우선 completed 주문 데이터에서 직접 확인
-                    entry_price: float = 0.0
-                    if 'entry_price' in data:
-                        # completed 주문 데이터에 진입가격이 저장되어 있는 경우
-                        entry_price_str = data.get('entry_price', '0')
-                        entry_price = float(entry_price_str) if entry_price_str != 'None' else 0.0
-                    else:
-                        # 기존 방식으로 포지션 데이터에서 조회
-                        position_key = f"user:{user_id}:position:{symbol}:{position_side}"
-                        position_data = await redis.hgetall(position_key)
-                        if position_data and 'entry_price' in position_data:
-                            entry_price_str = position_data['entry_price']
-                            entry_price = float(entry_price_str) if entry_price_str != 'None' else 0.0
-
-                    # PnL 계산
-                    pnl: float = 0.0
-                    if entry_price > 0 and price > 0 and filled_contracts > 0:
-                        contract_value = await get_contract_value(symbol, filled_contracts)
-                        if position_side == 'long':
-                            pnl = (price - entry_price) * contract_value
-                        else:  # short
-                            pnl = (entry_price - price) * contract_value
-                    
-                    # 빈 거래(PnL 계산 안 된 경우) 건너뛰기
-                    if pnl == 0:
-                        continue
-                    
-                    stats["total_pnl"] += pnl
+                    stats["total_pnl"] += current_pnl
                     stats["total_trades"] += 1
                     stats["symbols"].add(symbol)
-                    
-                    if pnl > 0:
+
+                    if current_pnl > 0:
                         stats["winning_trades"] += 1
-                    elif pnl < 0:
+                    elif current_pnl < 0:
                         stats["losing_trades"] += 1
-                    
+
                     # 최고/최저 수익 거래 기록
-                    if pnl > stats["best_trade"]["pnl"]:
-                        stats["best_trade"] = {"pnl": pnl, "symbol": symbol}
-                    if pnl < stats["worst_trade"]["pnl"]:
-                        stats["worst_trade"] = {"pnl": pnl, "symbol": symbol}
-                
-                except Exception as e:
-                    logger.error(f"Error processing completed order for statistics: {str(e)}")
-                    continue
-        end_time = time.time()
+                    if current_pnl > stats["best_trade"]["pnl"]:
+                        stats["best_trade"] = {"pnl": current_pnl, "symbol": symbol}
+                    if current_pnl < stats["worst_trade"]["pnl"]:
+                        stats["worst_trade"] = {"pnl": current_pnl, "symbol": symbol}
+            end_time = time.time()
+            print("================================================")
+            print(f"get_user_trading_statistics 소요시간: {end_time - start_time}초")
+            print("================================================")
+            # 2. completed 주문 데이터 조회
+
+
+            start_time = time.time()
+            completed_pattern = f"completed:user:{user_id}:*:order:*"
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            completed_keys = await scan_keys_pattern(completed_pattern, redis=redis)
+
+            for key in completed_keys:
+                data = await redis.hgetall(key)
+                if data and data.get('status') == 'filled' and all(field in data for field in ['price', 'contracts_amount', 'position_side']):
+                    parts = key.split(":")
+                    symbol = parts[3]
+
+                    # PnL 계산 시도
+                    try:
+                        # None 값 처리 로직 추가
+                        filled_contracts_str = data.get('filled_contracts_amount', '0')
+                        filled_contracts: float = float(filled_contracts_str) if filled_contracts_str != 'None' else 0.0
+
+                        price_str = data.get('price', '0')
+                        price: float = float(price_str) if price_str != 'None' else 0.0
+
+                        position_side = data.get('position_side', 'unknown')
+
+                        # 진입가격 정보 가져오기 - 우선 completed 주문 데이터에서 직접 확인
+                        entry_price: float = 0.0
+                        if 'entry_price' in data:
+                            # completed 주문 데이터에 진입가격이 저장되어 있는 경우
+                            entry_price_str = data.get('entry_price', '0')
+                            entry_price = float(entry_price_str) if entry_price_str != 'None' else 0.0
+                        else:
+                            # 기존 방식으로 포지션 데이터에서 조회 (within same context)
+                            position_key = f"user:{user_id}:position:{symbol}:{position_side}"
+                            position_data = await redis.hgetall(position_key)
+                            if position_data and 'entry_price' in position_data:
+                                entry_price_str = position_data['entry_price']
+                                entry_price = float(entry_price_str) if entry_price_str != 'None' else 0.0
+
+                        # PnL 계산
+                        pnl: float = 0.0
+                        if entry_price > 0 and price > 0 and filled_contracts > 0:
+                            contract_value = await get_contract_value(symbol, filled_contracts)
+                            if position_side == 'long':
+                                pnl = (price - entry_price) * contract_value
+                            else:  # short
+                                pnl = (entry_price - price) * contract_value
+
+                        # 빈 거래(PnL 계산 안 된 경우) 건너뛰기
+                        if pnl == 0:
+                            continue
+
+                        stats["total_pnl"] += pnl
+                        stats["total_trades"] += 1
+                        stats["symbols"].add(symbol)
+
+                        if pnl > 0:
+                            stats["winning_trades"] += 1
+                        elif pnl < 0:
+                            stats["losing_trades"] += 1
+
+                        # 최고/최저 수익 거래 기록
+                        if pnl > stats["best_trade"]["pnl"]:
+                            stats["best_trade"] = {"pnl": pnl, "symbol": symbol}
+                        if pnl < stats["worst_trade"]["pnl"]:
+                            stats["worst_trade"] = {"pnl": pnl, "symbol": symbol}
+
+                    except Exception as e:
+                        logger.error(f"Error processing completed order for statistics: {str(e)}")
+                        continue
+            end_time = time.time()
         print("================================================")
         print(f"completed 주문 데이터 조회 소요시간: {end_time - start_time}초")
         print("================================================")
@@ -652,95 +670,97 @@ async def get_pnl_history(user_id: str, limit: int = 10) -> List[Dict[str, Any]]
     """Redis에 저장된 TP PnL 데이터와 완료된 주문 데이터를 거래 내역 형식으로 조회"""
     try:
         trades: List[Dict[str, Any]] = []
-        redis = await get_redis_client()
+        # SCAN operations require longer timeout - all Redis operations in single context
+        async with get_redis_context(user_id=str(user_id), timeout=RedisTimeout.SLOW_OPERATION) as redis:
+            # 1. 기존 PnL 데이터 조회
+            pnl_pattern = f"user:{user_id}:pnl:*"
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            pnl_keys = await scan_keys_pattern(pnl_pattern, redis=redis)
 
-        # 1. 기존 PnL 데이터 조회
-        pnl_pattern = f"user:{user_id}:pnl:*"
-        pnl_keys = await redis.keys(pnl_pattern)
+            for key in pnl_keys:
+                data = await redis.hgetall(key)
+                if data and all(field in data for field in ['pnl', 'filled_price', 'filled_qty', 'entry_price', 'timestamp', 'side']):
+                    # user:1709556958:pnl:BTC-USDT-SWAP:2237354016760684544:tp1
+                    symbol = key.split(":")[3]
+                    tp_level = key.split(":")[-1]  # tp1, tp2, tp3 등
 
-        for key in pnl_keys:
-            data = await redis.hgetall(key)
-            if data and all(field in data for field in ['pnl', 'filled_price', 'filled_qty', 'entry_price', 'timestamp', 'side']):
-                # user:1709556958:pnl:BTC-USDT-SWAP:2237354016760684544:tp1
-                symbol = key.split(":")[3]
-                tp_level = key.split(":")[-1]  # tp1, tp2, tp3 등
+                    trade: Dict[str, Any] = {
+                        'timestamp': datetime.fromtimestamp(int(data['timestamp'])).strftime('%Y-%m-%d %H:%M:%S'),
+                        'symbol': symbol,
+                        'tp_level': tp_level,
+                        'side': data['side'],
+                        'size': float(data['filled_qty']) if data['filled_qty'] != 'None' else 0.0,
+                        'entry_price': float(data['entry_price']) if data['entry_price'] != 'None' else 0.0,
+                        'exit_price': float(data['filled_price']) if data['filled_price'] != 'None' else 0.0,
+                        'pnl': float(data['pnl']) if data['pnl'] != 'None' else 0.0
+                    }
+                    trades.append(trade)
 
-                trade: Dict[str, Any] = {
-                    'timestamp': datetime.fromtimestamp(int(data['timestamp'])).strftime('%Y-%m-%d %H:%M:%S'),
-                    'symbol': symbol,
-                    'tp_level': tp_level,
-                    'side': data['side'],
-                    'size': float(data['filled_qty']) if data['filled_qty'] != 'None' else 0.0,
-                    'entry_price': float(data['entry_price']) if data['entry_price'] != 'None' else 0.0,
-                    'exit_price': float(data['filled_price']) if data['filled_price'] != 'None' else 0.0,
-                    'pnl': float(data['pnl']) if data['pnl'] != 'None' else 0.0
-                }
-                trades.append(trade)
-        
-        # 2. completed 주문 데이터 조회 (update_order_status에서 저장한 데이터)
-        completed_pattern = f"completed:user:{user_id}:*:order:*"
-        completed_keys = await redis.keys(completed_pattern)
+            # 2. completed 주문 데이터 조회 (update_order_status에서 저장한 데이터)
+            completed_pattern = f"completed:user:{user_id}:*:order:*"
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            completed_keys = await scan_keys_pattern(completed_pattern, redis=redis)
 
-        for key in completed_keys:
-            data = await redis.hgetall(key)
-            if data and data.get('status') == 'filled' and all(field in data for field in ['price', 'contracts_amount', 'position_side', 'order_type']):
-                # completed:user:{user_id}:{symbol}:order:{order_id}
-                parts = key.split(":")
-                symbol = parts[3]
-                
-                # order_type에서 tp_level 추출 (tp1, tp2, tp3 등)
-                order_type = data.get('order_type', 'unknown')
-                tp_level = order_type if (order_type.startswith('tp') or order_type.startswith('take_profit')) else 'unknown'
-                
-                timestamp = data.get('last_updated_time', data.get('create_time', '0'))
-                filled_contracts_str = data.get('filled_contracts_amount', '0')
-                filled_contracts: float = float(filled_contracts_str) if filled_contracts_str != 'None' else 0.0
-                price_str = data.get('price', '0')
-                price: float = float(price_str) if price_str != 'None' else 0.0
-                position_side = data.get('position_side', 'unknown')
+            for key in completed_keys:
+                data = await redis.hgetall(key)
+                if data and data.get('status') == 'filled' and all(field in data for field in ['price', 'contracts_amount', 'position_side', 'order_type']):
+                    # completed:user:{user_id}:{symbol}:order:{order_id}
+                    parts = key.split(":")
+                    symbol = parts[3]
 
-                # 진입가격 정보 가져오기 - 우선 completed 주문 데이터에서 직접 확인
-                entry_price: float = 0.0
-                if 'entry_price' in data:
-                    # completed 주문 데이터에 진입가격이 저장되어 있는 경우 (수정된 로직)
-                    entry_price_str = data.get('entry_price', '0')
-                    entry_price = float(entry_price_str) if entry_price_str != 'None' else 0.0
-                else:
-                    # 기존 방식으로 포지션 데이터에서 조회 시도
-                    position_key = f"user:{user_id}:position:{symbol}:{position_side}"
-                    position_data = await redis.hgetall(position_key)
-                    if position_data and 'entry_price' in position_data:
-                        entry_price_str = position_data.get('entry_price', '0')
+                    # order_type에서 tp_level 추출 (tp1, tp2, tp3 등)
+                    order_type = data.get('order_type', 'unknown')
+                    tp_level = order_type if (order_type.startswith('tp') or order_type.startswith('take_profit')) else 'unknown'
+
+                    timestamp = data.get('last_updated_time', data.get('create_time', '0'))
+                    filled_contracts_str = data.get('filled_contracts_amount', '0')
+                    filled_contracts: float = float(filled_contracts_str) if filled_contracts_str != 'None' else 0.0
+                    price_str = data.get('price', '0')
+                    price: float = float(price_str) if price_str != 'None' else 0.0
+                    position_side = data.get('position_side', 'unknown')
+
+                    # 진입가격 정보 가져오기 - 우선 completed 주문 데이터에서 직접 확인
+                    entry_price: float = 0.0
+                    if 'entry_price' in data:
+                        # completed 주문 데이터에 진입가격이 저장되어 있는 경우 (수정된 로직)
+                        entry_price_str = data.get('entry_price', '0')
                         entry_price = float(entry_price_str) if entry_price_str != 'None' else 0.0
+                    else:
+                        # 기존 방식으로 포지션 데이터에서 조회 시도 (within same context)
+                        position_key = f"user:{user_id}:position:{symbol}:{position_side}"
+                        position_data = await redis.hgetall(position_key)
+                        if position_data and 'entry_price' in position_data:
+                            entry_price_str = position_data.get('entry_price', '0')
+                            entry_price = float(entry_price_str) if entry_price_str != 'None' else 0.0
 
-                # PnL 계산
-                pnl: float = 0.0
-                if entry_price > 0 and price > 0 and filled_contracts > 0:
-                    try:
-                        contract_value = await get_contract_value(symbol, filled_contracts)
-                        if position_side == 'long':
-                            pnl = (price - entry_price) * contract_value
-                        else:  # short
-                            pnl = (entry_price - price) * contract_value
-                    except Exception:
-                        pass
+                    # PnL 계산
+                    pnl: float = 0.0
+                    if entry_price > 0 and price > 0 and filled_contracts > 0:
+                        try:
+                            contract_value = await get_contract_value(symbol, filled_contracts)
+                            if position_side == 'long':
+                                pnl = (price - entry_price) * contract_value
+                            else:  # short
+                                pnl = (entry_price - price) * contract_value
+                        except Exception:
+                            pass
 
-                completed_trade: Dict[str, Any] = {
-                    'timestamp': datetime.fromtimestamp(int(timestamp)).strftime('%Y-%m-%d %H:%M:%S') if timestamp.isdigit() else 'Unknown',
-                    'symbol': symbol,
-                    'tp_level': tp_level,
-                    'side': position_side,
-                    'size': filled_contracts,
-                    'entry_price': entry_price,
-                    'exit_price': price,
-                    'pnl': pnl
-                }
-                trades.append(completed_trade)
-        
-        # 시간순 정렬 (최신 거래가 앞으로)
-        trades.sort(key=lambda x: x['timestamp'], reverse=True)
-        
-        return trades[:limit]
+                    completed_trade: Dict[str, Any] = {
+                        'timestamp': datetime.fromtimestamp(int(timestamp)).strftime('%Y-%m-%d %H:%M:%S') if timestamp.isdigit() else 'Unknown',
+                        'symbol': symbol,
+                        'tp_level': tp_level,
+                        'side': position_side,
+                        'size': filled_contracts,
+                        'entry_price': entry_price,
+                        'exit_price': price,
+                        'pnl': pnl
+                    }
+                    trades.append(completed_trade)
+
+            # 시간순 정렬 (최신 거래가 앞으로)
+            trades.sort(key=lambda x: x['timestamp'], reverse=True)
+
+            return trades[:limit]
         
     except Exception as e:
         logger.error(f"Error getting PnL history from Redis: {str(e)}")
@@ -764,89 +784,91 @@ async def generate_pnl_statistics_image(user_id: str) -> Optional[str]:
     """
     try:
         pnl_data: List[Dict[str, Any]] = []
-        redis = await get_redis_client()
+        # SCAN operations require longer timeout - all Redis operations in single context
+        async with get_redis_context(user_id=str(user_id), timeout=RedisTimeout.SLOW_OPERATION) as redis:
+            # 1. 기존 PnL 데이터 수집
+            pnl_pattern = f"user:{user_id}:pnl:*"
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            pnl_keys = await scan_keys_pattern(pnl_pattern, redis=redis)
 
-        # 1. 기존 PnL 데이터 수집
-        pnl_pattern = f"user:{user_id}:pnl:*"
-        pnl_keys = await redis.keys(pnl_pattern)
+            for key in pnl_keys:
+                data = await redis.hgetall(key)
+                if data:
+                    timestamp_str = data.get("timestamp", "0")
+                    timestamp = int(timestamp_str) if timestamp_str.isdigit() else 0
 
-        for key in pnl_keys:
-            data = await redis.hgetall(key)
-            if data:
-                timestamp_str = data.get("timestamp", "0")
-                timestamp = int(timestamp_str) if timestamp_str.isdigit() else 0
+                    pnl_str = data.get("pnl", "0")
+                    historical_pnl: float = float(pnl_str) if pnl_str != 'None' else 0.0
 
-                pnl_str = data.get("pnl", "0")
-                historical_pnl: float = float(pnl_str) if pnl_str != 'None' else 0.0
+                    symbol = key.split(":")[3]
 
-                symbol = key.split(":")[3]
-
-                pnl_data.append({
-                    'timestamp': datetime.fromtimestamp(timestamp),
-                    'pnl': historical_pnl,
-                    'symbol': symbol
-                })
-        
-        # 2. completed 주문 데이터 수집
-        completed_pattern = f"completed:user:{user_id}:*:order:*"
-        completed_keys = await redis.keys(completed_pattern)
-
-        for key in completed_keys:
-            data = await redis.hgetall(key)
-            if data and data.get('status') == 'filled':
-                try:
-                    parts = key.split(":")
-                    symbol = parts[3]
-                    
-                    timestamp_str = data.get('last_updated_time', data.get('create_time', '0'))
-                    if not timestamp_str.isdigit():
-                        continue  # 타임스탬프가 유효하지 않으면 건너뛰기
-                    
-                    timestamp = int(timestamp_str)
-                    
-                    filled_contracts_str = data.get('filled_contracts_amount', '0')
-                    filled_contracts: float = float(filled_contracts_str) if filled_contracts_str != 'None' else 0.0
-
-                    price_str = data.get('price', '0')
-                    price: float = float(price_str) if price_str != 'None' else 0.0
-
-                    position_side = data.get('position_side', 'unknown')
-
-                    # 진입가격 정보 가져오기 - 우선 completed 주문 데이터에서 직접 확인
-                    entry_price: float = 0.0
-                    if 'entry_price' in data:
-                        # completed 주문 데이터에 진입가격이 저장되어 있는 경우
-                        entry_price_str = data.get('entry_price', '0')
-                        entry_price = float(entry_price_str) if entry_price_str != 'None' else 0.0
-                    else:
-                        # 기존 방식으로 포지션 데이터에서 조회 시도
-                        position_key = f"user:{user_id}:position:{symbol}:{position_side}"
-                        position_data = await redis.hgetall(position_key)
-                        if position_data and 'entry_price' in position_data:
-                            entry_price_str = position_data.get('entry_price', '0')
-                            entry_price = float(entry_price_str) if entry_price_str != 'None' else 0.0
-
-                    # PnL 계산
-                    pnl: float = 0.0
-                    if entry_price > 0 and price > 0 and filled_contracts > 0:
-                        contract_value = await get_contract_value(symbol, filled_contracts)
-                        if position_side == 'long':
-                            pnl = (price - entry_price) * contract_value
-                        else:  # short
-                            pnl = (entry_price - price) * contract_value
-                    
-                    # PnL이 0이면 계산 불가능한 경우이므로 건너뛰기
-                    if pnl == 0:
-                        continue
-                    
                     pnl_data.append({
                         'timestamp': datetime.fromtimestamp(timestamp),
-                        'pnl': pnl,
+                        'pnl': historical_pnl,
                         'symbol': symbol
                     })
-                except Exception as e:
-                    logger.error(f"Error processing completed order for PnL chart: {str(e)}")
-                    continue
+
+            # 2. completed 주문 데이터 수집
+            completed_pattern = f"completed:user:{user_id}:*:order:*"
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            completed_keys = await scan_keys_pattern(completed_pattern, redis=redis)
+
+            for key in completed_keys:
+                data = await redis.hgetall(key)
+                if data and data.get('status') == 'filled':
+                    try:
+                        parts = key.split(":")
+                        symbol = parts[3]
+
+                        timestamp_str = data.get('last_updated_time', data.get('create_time', '0'))
+                        if not timestamp_str.isdigit():
+                            continue  # 타임스탬프가 유효하지 않으면 건너뛰기
+
+                        timestamp = int(timestamp_str)
+
+                        filled_contracts_str = data.get('filled_contracts_amount', '0')
+                        filled_contracts: float = float(filled_contracts_str) if filled_contracts_str != 'None' else 0.0
+
+                        price_str = data.get('price', '0')
+                        price: float = float(price_str) if price_str != 'None' else 0.0
+
+                        position_side = data.get('position_side', 'unknown')
+
+                        # 진입가격 정보 가져오기 - 우선 completed 주문 데이터에서 직접 확인
+                        entry_price: float = 0.0
+                        if 'entry_price' in data:
+                            # completed 주문 데이터에 진입가격이 저장되어 있는 경우
+                            entry_price_str = data.get('entry_price', '0')
+                            entry_price = float(entry_price_str) if entry_price_str != 'None' else 0.0
+                        else:
+                            # 기존 방식으로 포지션 데이터에서 조회 시도 (within same context)
+                            position_key = f"user:{user_id}:position:{symbol}:{position_side}"
+                            position_data = await redis.hgetall(position_key)
+                            if position_data and 'entry_price' in position_data:
+                                entry_price_str = position_data.get('entry_price', '0')
+                                entry_price = float(entry_price_str) if entry_price_str != 'None' else 0.0
+
+                        # PnL 계산
+                        pnl: float = 0.0
+                        if entry_price > 0 and price > 0 and filled_contracts > 0:
+                            contract_value = await get_contract_value(symbol, filled_contracts)
+                            if position_side == 'long':
+                                pnl = (price - entry_price) * contract_value
+                            else:  # short
+                                pnl = (entry_price - price) * contract_value
+
+                        # PnL이 0이면 계산 불가능한 경우이므로 건너뛰기
+                        if pnl == 0:
+                            continue
+
+                        pnl_data.append({
+                            'timestamp': datetime.fromtimestamp(timestamp),
+                            'pnl': pnl,
+                            'symbol': symbol
+                        })
+                    except Exception as e:
+                        logger.error(f"Error processing completed order for PnL chart: {str(e)}")
+                        continue
         
         if not pnl_data:
             return None

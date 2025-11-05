@@ -9,7 +9,6 @@ from datetime import datetime, timedelta, timezone
 import ccxt.pro as ccxt
 
 from shared.config import settings
-from GRID.core.redis import get_redis_connection
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 

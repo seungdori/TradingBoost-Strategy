@@ -13,6 +13,7 @@ from typing import Dict, Optional
 import telegram
 
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_patterns import scan_keys_pattern
 from shared.logging import get_logger
 
 from .utils import MESSAGE_PROCESSING_FLAG, MESSAGE_QUEUE_KEY
@@ -82,7 +83,8 @@ async def get_telegram_id_from_okx_uid(okx_uid: str) -> Optional[Dict]:
         redis = await get_redis_client()
         # 모든 사용자 키를 검색하기 위한 패턴
         pattern = "user:*:okx_uid"
-        keys = await redis.keys(pattern)
+        # Use SCAN instead of KEYS to avoid blocking Redis
+        keys = await scan_keys_pattern(pattern, redis=redis)
 
         valid_telegram_ids = []
 
@@ -112,8 +114,15 @@ async def get_telegram_id_from_okx_uid(okx_uid: str) -> Optional[Dict]:
                         print(f"통계 정보 가져오기 오류: {str(e)}")
                         pass
 
+                    # telegram_id는 정수여야 하므로 안전하게 변환
+                    try:
+                        telegram_id = int(user_id)
+                    except (ValueError, TypeError):
+                        # UUID인 경우 건너뛰기 (텔레그램 ID가 아님)
+                        continue
+
                     valid_telegram_ids.append({
-                        "telegram_id": int(user_id),
+                        "telegram_id": telegram_id,
                         "last_activity": last_activity
                     })
 

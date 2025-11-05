@@ -15,6 +15,7 @@ import psutil
 
 from shared.database.redis import ping_redis as check_redis_connection, reconnect_redis
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_patterns import scan_keys_pattern
 from shared.logging import get_logger
 
 from .telegram_service import get_identifier
@@ -50,7 +51,8 @@ async def get_all_running_users() -> List[int]:
                 logger.warning(f"Redis 연결 상태 불량, 재연결 시도 ({retry_count+1}/{max_retry})")
                 await reconnect_redis()
 
-            status_keys = await redis.keys("user:*:trading:status")
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            status_keys = await scan_keys_pattern("user:*:trading:status", redis=redis)
             running_users = []
 
             for key in status_keys:
@@ -120,7 +122,8 @@ async def perform_memory_cleanup():
             # 2주 이상 지난 완료된 주문 데이터 삭제
             two_weeks_ago = int((datetime.now() - timedelta(days=14)).timestamp())
             pattern = "completed:user:*:order:*"
-            old_order_keys = await redis.keys(pattern)
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            old_order_keys = await scan_keys_pattern(pattern, redis=redis)
 
             for key in old_order_keys:
                 try:
@@ -177,7 +180,8 @@ async def get_user_monitor_orders(user_id: str) -> Dict[str, Dict]:
 
         # 사용자 주문 모니터링 키 패턴
         pattern = f"monitor:user:{okx_uid}:*:order:*"
-        order_keys = await redis.keys(pattern)
+        # Use SCAN instead of KEYS to avoid blocking Redis
+        order_keys = await scan_keys_pattern(pattern, redis=redis)
 
         orders = {}
         for key in order_keys:

@@ -32,7 +32,6 @@ from GRID import telegram_message
 from GRID.core.exceptions import AddAnotherException, QuitException
 
 # ==================== Core 모듈 ====================
-from GRID.core.redis import get_redis_connection
 from GRID.core.websocket import log_exception
 
 # ==================== 프로젝트 모듈 ====================
@@ -140,20 +139,20 @@ async def place_grid_orders(symbol, initial_investment, direction, grid_levels, 
             try:
                 order_placed = {}
                 adx_4h = 0
-                redis = await get_redis_connection()
-                user_key = f'{exchange_name}:user:{user_id}'
-                symbol_key = f'{user_key}:symbol:{symbol}'
-                max_notional_value = initial_investment[1]*20
-                user_data = await redis.hgetall(user_key)
-                symbol_data = await redis.hgetall(symbol_key)
-                numbers_to_entry = int(user_data.get(b'numbers_to_entry', b'5').decode())
-                position_size = 0.0
-                running_symbols = set(json.loads(user_data.get('running_symbols', '[]')))
-                completed_symbols = set(json.loads(user_data.get('completed_trading_symbols', '[]')))
-                #print(f"Debug: Before update - running_symbols = {running_symbols}")  # 디버그 출력
-                await ensure_symbol_initialized(exchange_name, user_id, symbol, grid_num)
-                ensure_symbol_initialized_old_struc(user_id, symbol, grid_num)
-                await initialize_active_grid(redis, exchange_name, user_id, symbol)
+                async with redis_context() as redis:
+                    user_key = f'{exchange_name}:user:{user_id}'
+                    symbol_key = f'{user_key}:symbol:{symbol}'
+                    max_notional_value = initial_investment[1]*20
+                    user_data = await redis.hgetall(user_key)
+                    symbol_data = await redis.hgetall(symbol_key)
+                    numbers_to_entry = int(user_data.get(b'numbers_to_entry', b'5').decode())
+                    position_size = 0.0
+                    running_symbols = set(json.loads(user_data.get('running_symbols', '[]')))
+                    completed_symbols = set(json.loads(user_data.get('completed_trading_symbols', '[]')))
+                    #print(f"Debug: Before update - running_symbols = {running_symbols}")  # 디버그 출력
+                    await ensure_symbol_initialized(exchange_name, user_id, symbol, grid_num)
+                    ensure_symbol_initialized_old_struc(user_id, symbol, grid_num)
+                    await initialize_active_grid(redis, exchange_name, user_id, symbol)
                 order_buffer = float((numbers_to_entry / 25))
                 temporally_waiting_long_order = False
                 temporally_waiting_short_order = False

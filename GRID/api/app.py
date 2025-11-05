@@ -1,6 +1,6 @@
 # ruff: noqa: E402
 # Auto-configure PYTHONPATH for monorepo structure
-from shared.database.redis_patterns import redis_context, RedisTTL
+from shared.database.redis_patterns import redis_context, scan_keys_pattern
 from shared.utils.path_config import configure_pythonpath
 
 configure_pythonpath()
@@ -18,7 +18,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html
 
 import GRID.strategies.grid_process
-from GRID.core.redis import get_redis_connection
 from GRID.dtos.feature import StartFeatureDto
 from GRID.routes import (
     auth_route,
@@ -150,7 +149,8 @@ async def restart_running_bots(app: FastAPI) -> None:
                 print(f"Checking for request body in {redis_key}")
                 request_body_str = await get_request_body(redis, exchange_id, user_id)
                 if not request_body_str:
-                    request_body_str = await redis.keys(f"{exchange_id}:request_body:{user_id}:*")
+                    # Use SCAN instead of KEYS to avoid blocking Redis
+                    request_body_str = await scan_keys_pattern(f"{exchange_id}:request_body:{user_id}:*", redis=redis)
                     # if request_body_str:
                     #     print(f"No port info found for user {user_id}, will restart on port 8000")
                     #     current_port = 8000

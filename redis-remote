@@ -1,0 +1,17 @@
+#!/bin/bash
+# Redis Remote CLI Wrapper
+# Automatically connects to remote Redis server configured in .env
+
+# Load environment variables
+if [ -f "$(dirname "$0")/.env" ]; then
+    export $(grep -v '^#' "$(dirname "$0")/.env" | grep 'REDIS_' | xargs)
+fi
+
+# Default values from .env
+REDIS_HOST="${REDIS_HOST:-158.247.251.34}"
+REDIS_PORT="${REDIS_PORT:-6379}"
+REDIS_PASSWORD="${REDIS_PASSWORD:-moggle_temp_3181}"
+REDIS_DB="${REDIS_DB:-0}"
+
+# Execute redis-cli with credentials
+exec redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASSWORD" -n "$REDIS_DB" --no-auth-warning "$@"

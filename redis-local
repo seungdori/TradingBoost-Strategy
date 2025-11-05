@@ -1,0 +1,9 @@
+#!/bin/bash
+# Redis Local CLI Wrapper (for Celery)
+# Connects to local Redis server (used by Celery tasks)
+
+# Celery uses DB 1 by default
+REDIS_DB="${1:-1}"
+
+# Execute redis-cli for local instance
+exec redis-cli -n "$REDIS_DB" "${@:2}"

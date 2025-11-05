@@ -41,6 +41,35 @@ class PositionManager:
             trading_service: TradingService 인스턴스
         """
         self.trading_service = trading_service
+        self._position_mode_cache = {}  # 계정별 포지션 모드 캐시
+
+    async def get_position_mode(self, user_id: str) -> str:
+        """
+        계정의 포지션 모드 조회 (캐싱)
+
+        Returns:
+            'long_short_mode': Hedge Mode (양방향)
+            'net_mode': Net Mode (단방향)
+        """
+        if user_id in self._position_mode_cache:
+            return self._position_mode_cache[user_id]
+
+        try:
+            # OKX API: GET /api/v5/account/config
+            account_config = await self.trading_service.client.privateGetAccountConfig()
+
+            # Response structure: {"code":"0","data":[{"posMode":"long_short_mode",...}],"msg":""}
+            if account_config and 'data' in account_config and len(account_config['data']) > 0:
+                pos_mode = account_config['data'][0].get('posMode', 'net_mode')
+                self._position_mode_cache[user_id] = pos_mode
+                logger.info(f"계정 포지션 모드: user={user_id}, mode={pos_mode}")
+                return pos_mode
+            else:
+                logger.warning(f"포지션 모드 조회 실패, 기본값 사용: user={user_id}")
+                return 'net_mode'  # 기본값
+        except Exception as e:
+            logger.error(f"포지션 모드 조회 에러: user={user_id}, error={str(e)}")
+            return 'net_mode'  # 에러 시 안전한 기본값
 
     async def contract_size_to_qty(self, user_id: str, symbol: str, contracts_amount: float) -> float:
         """
@@ -90,38 +119,39 @@ class PositionManager:
                     return None
                 # symbol과 pos_side가 모두 주어진 경우
                 if symbol and pos_side:
-                    # 정확히 해당하는 포지션이 있으면 반환
-                    if symbol in positions and pos_side in positions[symbol]:
-                        pos_data = positions[symbol][pos_side]
-                        position = Position(
-                            symbol=pos_data["symbol"],
-                            side=pos_data["side"],
-                            size=safe_float(pos_data.get("size", 0)),
-                            contracts_amount=safe_float(pos_data.get("size", 0)),
-                            entry_price=safe_float(pos_data.get("entry_price", 0)),
-                            leverage=safe_float(pos_data.get("leverage", 1)),
-                            sl_order_id=pos_data.get("sl_order_id"),
-                            sl_price=safe_float(pos_data.get("sl_price")) if pos_data.get("sl_price") else None,
-                            tp_order_ids=pos_data.get("tp_order_ids", []),
-                            tp_prices=pos_data.get("tp_prices", []),
-                            order_id=pos_data.get("order_id")
-                        )
-                        return position
-                    else:
-                        # 정확한 symbol + side를 찾지 못했으면 None
-                        return None
+                    # positions는 {side: {...}} 형식이므로 pos_side를 직접 확인
+                    if pos_side in positions:
+                        pos_data = positions[pos_side]
+                        # symbol 일치 여부 확인
+                        if pos_data.get("symbol") == symbol:
+                            position = Position(
+                                symbol=pos_data["symbol"],
+                                side=pos_data["side"],
+                                size=safe_float(pos_data.get("size", 0)),
+                                contracts_amount=safe_float(pos_data.get("size", 0)),
+                                entry_price=safe_float(pos_data.get("entry_price", 0)),
+                                leverage=safe_float(pos_data.get("leverage", 1)),
+                                sl_order_id=pos_data.get("sl_order_id"),
+                                sl_price=safe_float(pos_data.get("sl_price")) if pos_data.get("sl_price") else None,
+                                tp_order_ids=pos_data.get("tp_order_ids", []),
+                                tp_prices=pos_data.get("tp_prices", []),
+                                order_id=pos_data.get("order_id")
+                            )
+                            return position
+                    # 정확한 symbol + side를 찾지 못했으면 None
+                    return None
                 # symbol만 주어진 경우
                 elif symbol:
-                    if symbol not in positions:
-                        return None
-                    # 해당 심볼에 대해 long, short 중 하나 반환 (long 우선)
+                    # positions는 {side: {...}} 형식이므로 직접 side를 확인
                     pos_data = None
-                    if "long" in positions[symbol]:
-                        pos_data = positions[symbol]["long"]
-                    elif "short" in positions[symbol]:
-                        pos_data = positions[symbol]["short"]
+                    if "long" in positions:
+                        pos_data = positions["long"]
+                    elif "short" in positions:
+                        pos_data = positions["short"]
+
                     if not pos_data:
                         return None
+
                     position = Position(
                         symbol=pos_data["symbol"],
                         side=pos_data["side"],
@@ -138,8 +168,9 @@ class PositionManager:
                     return position
                 else:
                     # symbol도 pos_side도 없으면 첫 번째 포지션 반환
-                    for sym, side_dict in positions.items():
-                        for s, pos_data in side_dict.items():
+                    # positions는 {side: {...}} 형식이므로 직접 순회
+                    for side, pos_data in positions.items():
+                        if side in ['long', 'short']:  # 유효한 side인지 확인
                             position = Position(
                                 symbol=pos_data["symbol"],
                                 side=pos_data["side"],
@@ -273,24 +304,23 @@ class PositionManager:
             if position_qty < minimum_qty:
                 raise ValueError(f"포지션 수량이 최소 주문 수량보다 작습니다. position_qty : {position_qty}, minimum_qty : {minimum_qty}")
             # # ========== 레버리지 설정 =============
-            leverage_body = {
-                "instId": symbol,
-                "lever": str(int(leverage)),
-                "mgnMode": "isolated",
-                "posSide": direction  # OKX requires posSide for isolated margin
-            }
+            # 포지션 모드 확인
+            position_mode = await self.get_position_mode(user_id)
+
+            # Net Mode: posSide 제거, Hedge Mode: posSide 필수
+            leverage_params = {'mgnMode': 'isolated'}
+            if position_mode == 'long_short_mode':
+                leverage_params['posSide'] = direction  # 'long' or 'short'
+
             try:
                 await self.trading_service.client.set_leverage(
                     leverage=int(leverage),
                     symbol=symbol,
-                    params={
-                        'mgnMode': 'isolated',
-                        'posSide': direction  # 'long' or 'short'
-                    }
+                    params=leverage_params
                 )
-                logger.info(f"레버리지 설정 성공: user={user_id}, symbol={symbol}, leverage={leverage}, direction={direction}")
+                logger.info(f"레버리지 설정 성공: user={user_id}, symbol={symbol}, leverage={leverage}, direction={direction}, mode={position_mode}")
             except Exception as e:
-                logger.error(f"레버리지 설정 실패: user={user_id}, symbol={symbol}, leverage={leverage}, direction={direction}, error={str(e)}")
+                logger.error(f"레버리지 설정 실패: user={user_id}, symbol={symbol}, leverage={leverage}, direction={direction}, mode={position_mode}, error={str(e)}")
                 raise ValueError(f"레버리지 설정 실패. error={str(e)}")
 
             #=============== 주문 생성 로직 =================
@@ -312,8 +342,11 @@ class PositionManager:
                 direction=direction,  # long or short - correct parameter name
                 leverage=leverage
             )
-            if order_state.status not in ["open", "closed"]:
-                raise ValueError(f"주문 생성 실패: {order_state.message}")
+            # 실패 상태만 에러로 처리
+            if order_state.status in ["canceled", "rejected", "expired"]:
+                # OrderStatus has no 'message' attribute - use status and order_id instead
+                error_detail = f"status={order_state.status}, order_id={order_state.order_id}"
+                raise ValueError(f"주문 생성 실패: {error_detail}")
 
             # Position 객체 생성
             position = Position(
@@ -321,13 +354,14 @@ class PositionManager:
                 side=direction,
                 size=contracts_amount,
                 contracts_amount=contracts_amount,
-                entry_price=safe_float(order_state.price),
+                entry_price=safe_float(order_state.avg_fill_price),
                 leverage=leverage,
                 order_id=order_state.order_id,
                 sl_order_id=None,
                 sl_price=None,
                 tp_order_ids=[],
-                tp_prices=[]
+                tp_prices=[],
+                last_filled_price=safe_float(order_state.avg_fill_price)  # 체결 가격 설정
             )
 
             # TP/SL 주문 생성
@@ -355,11 +389,54 @@ class PositionManager:
                 symbol=symbol,
                 side=direction,
                 size=contracts_amount,
-                entry_price=safe_float(order_state.price),
+                entry_price=safe_float(order_state.avg_fill_price),
                 leverage=leverage,
                 order_id=order_state.order_id or "",
-                last_filled_price=safe_float(order_state.price)
+                last_filled_price=safe_float(order_state.avg_fill_price)
             )
+
+            # 텔레그램 포지션 오픈 성공 알림
+            try:
+                # Redis에서 최신 TP/SL 정보 조회
+                position_key = f"user:{user_id}:position:{symbol}:{direction}"
+                position_data = await redis.hgetall(position_key)
+
+                tp_prices_str = position_data.get("tp_prices", "")
+                sl_price = position_data.get("sl_price", "N/A")
+
+                # TP 가격 포맷팅
+                if tp_prices_str:
+                    tp_prices = [float(p) for p in tp_prices_str.split(",") if p]
+                    tp_text = "\n".join([f"  TP{i+1}: {price:.2f}" for i, price in enumerate(tp_prices)])
+                else:
+                    tp_text = "  설정 안 됨"
+
+                # SL 가격 포맷팅
+                sl_text = f"{float(sl_price):.2f}" if sl_price != "N/A" else "설정 안 됨"
+
+                direction_emoji = "🟢" if direction == "long" else "🔴"
+                telegram_content = (
+                    f"{direction_emoji} 포지션 오픈 완료\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"심볼: {symbol}\n"
+                    f"방향: {direction.upper()}\n"
+                    f"수량: {contracts_amount}\n"
+                    f"진입가: {safe_float(order_state.avg_fill_price):.2f}\n"
+                    f"레버리지: {leverage}x\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"익절(TP):\n{tp_text}\n"
+                    f"손절(SL): {sl_text}\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"주문ID: {order_state.order_id}"
+                )
+
+                await send_telegram_message(
+                    message=telegram_content,
+                    okx_uid=str(user_id)
+                )
+                logger.info(f"포지션 오픈 알림 전송 완료: user={user_id}, symbol={symbol}, direction={direction}")
+            except Exception as e:
+                logger.error(f"텔레그램 포지션 오픈 알림 전송 실패: {str(e)}")
 
             return position
 
@@ -459,14 +536,16 @@ class PositionManager:
             )
 
             if order_state.status not in ["open", "closed"]:
-                raise ValueError(f"청산 주문 실패: {order_state.message}")
+                # OrderStatus has no 'message' attribute - use status and order_id instead
+                error_detail = f"status={order_state.status}, order_id={order_state.order_id}"
+                raise ValueError(f"청산 주문 실패: {error_detail}")
 
             # 6) Exit 히스토리 업데이트
             await update_trade_history_exit(
                 user_id=str(user_id),
                 symbol=symbol,
                 order_id=order_state.order_id or "",
-                exit_price=safe_float(order_state.price),
+                exit_price=safe_float(order_state.avg_fill_price),
                 pnl=0.0,  # TODO: 실제 PnL 계산 로직 추가
                 close_type="manual",
                 comment=reason
@@ -491,7 +570,7 @@ class PositionManager:
                     f"심볼: {symbol}\n"
                     f"방향: {side}\n"
                     f"청산 수량: {size}\n"
-                    f"청산 가격: {order_state.price}\n"
+                    f"청산 가격: {order_state.avg_fill_price}\n"
                     f"사유: {reason}"
                 )
                 await send_telegram_message(

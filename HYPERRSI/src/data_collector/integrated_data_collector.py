@@ -26,7 +26,8 @@ SYMBOLS = ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]
 TIMEFRAMES = [1, 3, 5, 15, 30, 60, 240]  # 분 단위
 TF_MAP = {1: '1m', 3: '3m', 5: '5m', 15: '15m', 30: '30m', 60: '1h', 240: '4h'}
 MAX_CANDLE_LEN = 3000
-POLLING_CANDLES = 400  # 한 번에 폴링할 캔들 수
+POLLING_CANDLES = 10  # 한 번에 폴링할 캔들 수 (바 종료 시점에 최신 몇 개만 확인)
+MIN_CANDLES_FOR_INDICATORS = 199  # 지표 계산에 필요한 최소 캔들 수 (SMA200은 인덱스 199부터 정확하게 계산됨)
 
 # 역매핑 생성 (ex: '1m' -> 1)
 REVERSE_TF_MAP = {v: k for k, v in TF_MAP.items()}
@@ -67,6 +68,9 @@ exchange = ccxt.okx({
 # 안전한 종료를 위한 이벤트 객체
 shutdown_event = threading.Event()
 
+# 초기 데이터 로드 완료 플래그
+initial_data_loaded = threading.Event()
+
 # 마지막 캔들 타임스탬프 및 마지막 체크 시간 저장
 last_candle_timestamps: dict[str, int] = {}
 last_check_times: dict[str, float] = {}
@@ -75,100 +79,186 @@ from shared.utils.time_helpers import align_timestamp, calculate_update_interval
 
 
 def fetch_latest_candles(symbol, timeframe, limit=POLLING_CANDLES, include_current=False):
-    """최신 캔들 데이터 가져오기"""
+    """
+    최신 캔들 데이터 가져오기
+    OKX API는 최대 300개까지만 반환하므로, limit이 300보다 크면 여러 번 요청
+    """
     tf_str = TF_MAP.get(timeframe, "1m")
     logger.debug(f"최신 캔들 폴링: {symbol} {tf_str} - {limit}개 요청 (현재 진행 캔들 포함: {include_current})")
-    
+
     try:
-        # 재시도 로직 (최대 5회 재시도, 지수 백오프)
-        max_retries = 5
-        attempt = 0
-        
-        while True:
-            try:
-                params = {'instType': 'SWAP'}
-                # 오류 디버깅을 위한 출력 추가
-                logger.debug(f"API 요청 정보: symbol={symbol}, timeframe={tf_str.lower()}, limit={limit}, params={params}")
-                
+        OKX_MAX_LIMIT = 300  # OKX API 최대 limit
+        all_candles = []
+
+        # limit이 300 이하면 한 번만 요청
+        if limit <= OKX_MAX_LIMIT:
+            ohlcvs = _fetch_ohlcv_with_retry(symbol, tf_str, limit, None)
+            if not ohlcvs:
+                return []
+            all_candles = _parse_ohlcv_data(symbol, tf_str, timeframe, ohlcvs, include_current)
+        else:
+            # limit이 300보다 크면 여러 번 요청
+            # OKX API는 since를 기준으로 이후 데이터를 반환하므로, 과거로 가려면 다른 방식 필요
+            total_batches = (limit + OKX_MAX_LIMIT - 1) // OKX_MAX_LIMIT  # ceil division
+            logger.info(f"총 {total_batches}번의 배치 요청 예정: {symbol} {tf_str}")
+
+            for batch_num in range(total_batches):
+                batch_limit = min(limit - len(all_candles), OKX_MAX_LIMIT)
+                if batch_limit <= 0:
+                    break
+
+                # since 계산: 이미 가진 가장 오래된 캔들보다 더 과거
+                if all_candles:
+                    # 가장 오래된 캔들의 timestamp (초 단위)
+                    oldest_ts = min(c["timestamp"] for c in all_candles)
+                    # 타임프레임 길이를 고려해서 그 이전 시점 계산
+                    tf_seconds = timeframe * 60
+                    since = (oldest_ts - batch_limit * tf_seconds) * 1000  # milliseconds
+                    logger.info(f"캔들 배치 #{batch_num+1} 요청: {symbol} {tf_str} - {batch_limit}개 (since: {datetime.fromtimestamp(since/1000)})")
+                else:
+                    # 첫 요청은 최신부터
+                    since = None
+                    logger.info(f"캔들 배치 #{batch_num+1} 요청: {symbol} {tf_str} - {batch_limit}개 (최신부터)")
+
+                ohlcvs = _fetch_ohlcv_with_retry(symbol, tf_str, batch_limit, since)
+                if not ohlcvs:
+                    logger.warning(f"캔들 배치 요청 실패: {symbol} {tf_str}")
+                    break
+
+                batch_candles = _parse_ohlcv_data(symbol, tf_str, timeframe, ohlcvs, include_current)
+                if not batch_candles:
+                    logger.warning(f"파싱된 캔들 없음: {symbol} {tf_str}")
+                    break
+
+                # 중복 제거하면서 병합
+                added_count = 0
+                for candle in batch_candles:
+                    if not any(c["timestamp"] == candle["timestamp"] for c in all_candles):
+                        all_candles.append(candle)
+                        added_count += 1
+
+                logger.info(f"배치 #{batch_num+1} 완료: {added_count}개 새 캔들 추가 (총 {len(all_candles)}개)")
+
+                # 새로 추가된 캔들이 없으면 중단 (더 이상 과거 데이터 없음)
+                if added_count == 0:
+                    logger.info(f"더 이상 가져올 캔들 없음: {symbol} {tf_str}")
+                    break
+
+                # 목표 개수 달성하면 중단
+                if len(all_candles) >= limit:
+                    logger.info(f"목표 개수 달성: {symbol} {tf_str} - {len(all_candles)}개")
+                    break
+
+                # API rate limit 고려
+                time.sleep(0.5)
+
+            # 시간순 정렬
+            all_candles.sort(key=lambda x: x["timestamp"])
+            logger.info(f"총 {len(all_candles)}개 캔들 수집 완료: {symbol} {tf_str}")
+
+        return all_candles
+
+    except Exception as e:
+        logger.error(f"캔들 데이터 가져오기 오류: {symbol} {tf_str} - {e}", exc_info=True)
+        return []
+
+
+def _fetch_ohlcv_with_retry(symbol, tf_str, limit, since):
+    """OHLCV 데이터 가져오기 (재시도 로직 포함)"""
+    max_retries = 5
+    attempt = 0
+
+    while True:
+        try:
+            params = {'instType': 'SWAP'}
+            logger.debug(f"API 요청: symbol={symbol}, timeframe={tf_str.lower()}, limit={limit}, since={since}")
+
+            if since is None:
                 ohlcvs = exchange.fetch_ohlcv(
                     symbol,
                     timeframe=tf_str.lower(),
                     limit=limit,
                     params=params
                 )
-                break  # 성공하면 반복문 탈출
-            except ccxt.RateLimitExceeded as e:
-                attempt += 1
-                if attempt >= max_retries:
-                    logger.error(f"최대 재시도 횟수 초과: {symbol} ({tf_str}). 오류: {e}")
-                    raise e
-                wait_time = 2 ** attempt  # 지수 백오프: 2, 4, 8, ... 초
-                logger.warning(f"속도 제한 초과: {symbol} ({tf_str}). {wait_time}초 대기 후 재시도... (시도 {attempt}/{max_retries})")
-                time.sleep(wait_time)
-            except Exception as e:
-                logger.error(f"OHLCV 데이터 가져오기 실패: {symbol} ({tf_str}). 오류: {e}")
-                return []  # 오류 발생 시 빈 리스트 반환
-        
-        candles = []
-        for row in ohlcvs:
-            # None 값 체크 추가
-            if row is None or len(row) < 6:
-                logger.warning(f"잘못된 캔들 데이터 (None 또는 불완전): {symbol} {tf_str}")
+            else:
+                ohlcvs = exchange.fetch_ohlcv(
+                    symbol,
+                    timeframe=tf_str.lower(),
+                    since=since,
+                    limit=limit,
+                    params=params
+                )
+            return ohlcvs
+
+        except ccxt.RateLimitExceeded as e:
+            attempt += 1
+            if attempt >= max_retries:
+                logger.error(f"최대 재시도 횟수 초과: {symbol} ({tf_str}). 오류: {e}")
+                raise e
+            wait_time = 2 ** attempt
+            logger.warning(f"속도 제한 초과: {symbol} ({tf_str}). {wait_time}초 대기 후 재시도... (시도 {attempt}/{max_retries})")
+            time.sleep(wait_time)
+        except Exception as e:
+            logger.error(f"OHLCV 데이터 가져오기 실패: {symbol} ({tf_str}). 오류: {e}")
+            return []
+
+
+def _parse_ohlcv_data(symbol, tf_str, timeframe, ohlcvs, include_current):
+    """OHLCV 데이터 파싱"""
+    candles = []
+    for row in ohlcvs:
+        # None 값 체크 추가
+        if row is None or len(row) < 6:
+            logger.warning(f"잘못된 캔들 데이터 (None 또는 불완전): {symbol} {tf_str}")
+            continue
+
+        try:
+            ts, o, h, l, c, v = row
+            # None 값 타입 체크 및 변환
+            if ts is None or o is None or h is None or l is None or c is None or v is None:
+                logger.warning(f"캔들 데이터에 None 값 포함: {symbol} {tf_str} - {row}")
                 continue
-                
-            try:
-                ts, o, h, l, c, v = row
-                # None 값 타입 체크 및 변환
-                if ts is None or o is None or h is None or l is None or c is None or v is None:
-                    logger.warning(f"캔들 데이터에 None 값 포함: {symbol} {tf_str} - {row}")
-                    continue
-                    
-                ts = int(ts) if ts is not None else 0
-                aligned_ts = align_timestamp(ts, timeframe) // 1000
-                
-                # 볼륨이 0인 캔들 제외 (단, 현재 진행 중인 캔들은 허용)
-                is_current_candle = (aligned_ts + timeframe * 60) > int(time.time())
-                
-                if v == 0 and not is_current_candle:
-                    logger.warning(f"볼륨 0 캔들 제외: {symbol} {tf_str} at {datetime.fromtimestamp(aligned_ts)}")
-                    continue
-                    
-                candles.append({
-                    "timestamp": aligned_ts,
-                    "open": float(o),
-                    "high": float(h),
-                    "low": float(l),
-                    "close": float(c),
-                    "volume": float(v),
-                    "is_current": is_current_candle
-                })
-            except (TypeError, ValueError) as e:
-                logger.warning(f"캔들 데이터 변환 오류: {symbol} {tf_str} - {row} - {e}")
+
+            ts = int(ts) if ts is not None else 0
+            aligned_ts = align_timestamp(ts, timeframe) // 1000
+
+            # 볼륨이 0인 캔들 제외 (단, 현재 진행 중인 캔들은 허용)
+            is_current_candle = (aligned_ts + timeframe * 60) > int(time.time())
+
+            if v == 0 and not is_current_candle:
+                logger.warning(f"볼륨 0 캔들 제외: {symbol} {tf_str} at {datetime.fromtimestamp(aligned_ts)}")
                 continue
-        
-        if candles:
-            logger.info(f"{len(candles)}개 캔들 가져옴: {symbol} {tf_str}")
-            
-            # 캔들이 시간순 정렬되어 있는지 확인하고 정렬
-            candles.sort(key=lambda x: x["timestamp"])
-            
-            # 마지막 완료된 캔들 시간 저장
-            key = f"{symbol}:{tf_str}"
-            
-            completed_candles = [c for c in candles if not c.get("is_current", False)]
-            if completed_candles:
-                last_ts = completed_candles[-1]["timestamp"]
-                old_last_ts = last_candle_timestamps.get(key, 0)
-                
-                if last_ts > old_last_ts:
-                    last_candle_timestamps[key] = last_ts
-                    logger.info(f"마지막 완료된 캔들 타임스탬프 업데이트: {key} - {datetime.fromtimestamp(last_ts)}")
-        
-        return candles
-    
-    except Exception as e:
-        logger.error(f"캔들 데이터 가져오기 오류: {symbol} {tf_str} - {e}", exc_info=True)
-        return []
+
+            candles.append({
+                "timestamp": aligned_ts,
+                "open": float(o),
+                "high": float(h),
+                "low": float(l),
+                "close": float(c),
+                "volume": float(v),
+                "is_current": is_current_candle
+            })
+        except (TypeError, ValueError) as e:
+            logger.warning(f"캔들 데이터 변환 오류: {symbol} {tf_str} - {row} - {e}")
+            continue
+
+    if candles:
+        # 캔들이 시간순 정렬되어 있는지 확인하고 정렬
+        candles.sort(key=lambda x: x["timestamp"])
+
+        # 마지막 완료된 캔들 시간 저장
+        key = f"{symbol}:{tf_str}"
+
+        completed_candles = [c for c in candles if not c.get("is_current", False)]
+        if completed_candles:
+            last_ts = completed_candles[-1]["timestamp"]
+            old_last_ts = last_candle_timestamps.get(key, 0)
+
+            if last_ts > old_last_ts:
+                last_candle_timestamps[key] = last_ts
+                logger.info(f"마지막 완료된 캔들 타임스탬프 업데이트: {key} - {datetime.fromtimestamp(last_ts)}")
+
+    return candles
 
 def check_and_fill_gap(symbol, timeframe):
     """데이터 갭이 있는지 확인하고 채우기"""
@@ -195,7 +285,9 @@ def check_and_fill_gap(symbol, timeframe):
         # 기존 데이터의 마지막 타임스탬프 찾기
         existing_map = {}
         for item in existing_data:
-            parts = item.split(",")
+            # Redis returns bytes, decode to string first
+            item_str = item.decode('utf-8') if isinstance(item, bytes) else item
+            parts = item_str.split(",")
             ts = int(parts[0])
             existing_map[ts] = parts
         
@@ -278,22 +370,32 @@ def fill_gap(symbol, timeframe, from_ts, to_ts):
     except Exception as e:
         logger.error(f"갭 채우기 중 오류: {key} - {e}", exc_info=True)
 
-def update_candle_data(symbol, timeframe, new_candles):
-    """캔들 데이터 업데이트"""
+def update_candle_data(symbol, timeframe, new_candles, warm_up_count=0):
+    """
+    캔들 데이터 업데이트
+
+    Args:
+        symbol: 심볼
+        timeframe: 타임프레임
+        new_candles: 새 캔들 리스트
+        warm_up_count: 지표 계산용 warm-up 캔들 개수 (이 개수만큼은 저장하지 않음)
+    """
     tf_str = TF_MAP.get(timeframe, "1m")
     key = f"candles:{symbol}:{tf_str}"
-    
+
     try:
         # 기존 캔들 데이터 가져오기
         existing = redis_client.lrange(key, 0, -1)
         candle_map = {}
-        
+
         # 기존 데이터 파싱
         for item in existing:
-            parts = item.split(",")
+            # Redis returns bytes, decode to string first
+            item_str = item.decode('utf-8') if isinstance(item, bytes) else item
+            parts = item_str.split(",")
             ts = int(parts[0])
             candle_map[ts] = parts
-        
+
         # 새 캔들 데이터 병합
         for candle in new_candles:
             ts = candle["timestamp"]
@@ -306,14 +408,21 @@ def update_candle_data(symbol, timeframe, new_candles):
                 str(candle["volume"]),
             ]
             candle_map[ts] = cndl_str_list
-        
-        # 정렬 후 저장 (최대 MAX_CANDLE_LEN개만 유지)
+
+        # 정렬
         sorted_ts = sorted(candle_map.keys())
-        if len(sorted_ts) > MAX_CANDLE_LEN:
-            sorted_ts = sorted_ts[-MAX_CANDLE_LEN:]
-        
+
+        # warm_up_count가 지정된 경우, 처음 해당 개수만큼 제외 (지표 계산용으로만 사용)
+        if warm_up_count > 0 and len(sorted_ts) > warm_up_count:
+            logger.info(f"Warm-up 데이터 제외: {symbol} {tf_str} - 처음 {warm_up_count}개 캔들은 지표 계산용으로만 사용")
+            # 나중에 지표 계산 후 제외할 것이므로 여기서는 전체 유지
+
+        # 최대 MAX_CANDLE_LEN개만 유지 (warm_up 제외하기 전)
+        if len(sorted_ts) > MAX_CANDLE_LEN + warm_up_count:
+            sorted_ts = sorted_ts[-(MAX_CANDLE_LEN + warm_up_count):]
+
         final_list = [",".join(candle_map[ts]) for ts in sorted_ts]
-        
+
         # Redis에 저장
         pipe = redis_client.pipeline()
         pipe.delete(key)
@@ -322,37 +431,80 @@ def update_candle_data(symbol, timeframe, new_candles):
         pipe.execute()
         
         # 인디케이터 계산 및 저장
-        if len(sorted_ts) > 30:  # 최소한의 데이터가 있어야 계산 가능
-            # 캔들 객체 리스트 생성
-            candles = []
-            for ts in sorted_ts:
-                parts = candle_map[ts]
-                candles.append({
-                    "timestamp": int(parts[0]),
-                    "open": float(parts[1]),
-                    "high": float(parts[2]),
-                    "low": float(parts[3]),
-                    "close": float(parts[4]),
-                    "volume": float(parts[5])
-                })
-            
-            # 인디케이터 계산
-            candles_with_ind = compute_all_indicators(candles, rsi_period=14, atr_period=14)
-            
-            # 한국 시간 추가
-            for cndl in candles_with_ind:
-                utc_dt = datetime.fromtimestamp(cndl["timestamp"], UTC)
-                seoul_tz = pytz.timezone("Asia/Seoul")
-                dt_seoul = utc_dt.replace(tzinfo=pytz.utc).astimezone(seoul_tz)
-                cndl["human_time"] = utc_dt.strftime("%Y-%m-%d %H:%M:%S")
-                cndl["human_time_kr"] = dt_seoul.strftime("%Y-%m-%d %H:%M:%S")
-            
-            # 인디케이터 포함 캔들 저장
-            save_candles_with_indicators(symbol, tf_str, candles_with_ind)
-            
-            logger.debug(f"캔들 데이터 업데이트 완료: {symbol} {tf_str} - 총 {len(sorted_ts)}개 캔들")
-        else:
-            logger.warning(f"인디케이터 계산에 필요한 충분한 데이터 없음: {symbol} {tf_str}")
+        # 병합 후 데이터가 부족하면 API에서 추가로 가져오기
+        if len(sorted_ts) < MIN_CANDLES_FOR_INDICATORS:
+            logger.info(f"병합 후 데이터 부족, API에서 추가 캔들 로드: {symbol} {tf_str} (현재: {len(sorted_ts)}개, 필요: {MIN_CANDLES_FOR_INDICATORS}개)")
+
+            # API에서 충분한 캔들 가져오기
+            api_candles = fetch_latest_candles(symbol, timeframe, limit=MIN_CANDLES_FOR_INDICATORS)
+
+            if api_candles and len(api_candles) >= MIN_CANDLES_FOR_INDICATORS:
+                # 새로 가져온 캔들 병합
+                for candle in api_candles:
+                    ts = candle["timestamp"]
+                    cndl_str_list = [
+                        str(ts),
+                        str(candle["open"]),
+                        str(candle["high"]),
+                        str(candle["low"]),
+                        str(candle["close"]),
+                        str(candle["volume"]),
+                    ]
+                    candle_map[ts] = cndl_str_list
+
+                # 다시 정렬
+                sorted_ts = sorted(candle_map.keys())
+                if len(sorted_ts) > MAX_CANDLE_LEN:
+                    sorted_ts = sorted_ts[-MAX_CANDLE_LEN:]
+
+                final_list = [",".join(candle_map[ts]) for ts in sorted_ts]
+
+                # Redis에 저장
+                pipe = redis_client.pipeline()
+                pipe.delete(key)
+                for row_str in final_list:
+                    pipe.rpush(key, row_str)
+                pipe.execute()
+
+                logger.info(f"API에서 추가 캔들 로드 완료: {symbol} {tf_str} (총 {len(sorted_ts)}개)")
+            else:
+                logger.warning(f"API에서도 충분한 캔들을 가져올 수 없음: {symbol} {tf_str} (API: {len(api_candles) if api_candles else 0}개)")
+                return
+
+        # 이제 충분한 데이터가 있으므로 지표 계산
+        # 캔들 객체 리스트 생성
+        candles = []
+        for ts in sorted_ts:
+            parts = candle_map[ts]
+            candles.append({
+                "timestamp": int(parts[0]),
+                "open": float(parts[1]),
+                "high": float(parts[2]),
+                "low": float(parts[3]),
+                "close": float(parts[4]),
+                "volume": float(parts[5])
+            })
+
+        # 인디케이터 계산 (전체 데이터로 계산)
+        candles_with_ind = compute_all_indicators(candles, rsi_period=14, atr_period=14)
+
+        # warm_up_count가 지정된 경우, 처음 해당 개수만큼 제외
+        if warm_up_count > 0 and len(candles_with_ind) > warm_up_count:
+            logger.info(f"Warm-up 캔들 제외: {symbol} {tf_str} - 처음 {warm_up_count}개 제외, {len(candles_with_ind) - warm_up_count}개 저장")
+            candles_with_ind = candles_with_ind[warm_up_count:]  # 처음 warm_up_count개 제외
+
+        # 한국 시간 추가
+        for cndl in candles_with_ind:
+            utc_dt = datetime.fromtimestamp(cndl["timestamp"], UTC)
+            seoul_tz = pytz.timezone("Asia/Seoul")
+            dt_seoul = utc_dt.replace(tzinfo=pytz.utc).astimezone(seoul_tz)
+            cndl["human_time"] = utc_dt.strftime("%Y-%m-%d %H:%M:%S")
+            cndl["human_time_kr"] = dt_seoul.strftime("%Y-%m-%d %H:%M:%S")
+
+        # 인디케이터 포함 캔들 저장
+        save_candles_with_indicators(symbol, tf_str, candles_with_ind)
+
+        logger.debug(f"캔들 데이터 업데이트 완료: {symbol} {tf_str} - 총 {len(candles_with_ind)}개 캔들 (warm-up {warm_up_count}개 제외)")
     
     except Exception as e:
         logger.error(f"캔들 데이터 업데이트 중 오류: {symbol} {tf_str} - {e}", exc_info=True)
@@ -374,10 +526,11 @@ def save_candles_with_indicators(symbol, tf_str, candles_with_ind):
             except Exception as e:
                 pass
         
-        # 새 데이터 병합
+        # 새 데이터 병합 (기존 데이터는 덮어쓰지 않음 - warm-up으로 계산된 정확한 데이터 보존)
         for cndl in candles_with_ind:
             ts = cndl["timestamp"]
-            candle_map[ts] = cndl
+            if ts not in candle_map:  # 새로운 timestamp만 추가
+                candle_map[ts] = cndl
         
         # 정렬 후 저장 (최대 MAX_CANDLE_LEN개만 유지)
         sorted_ts = sorted(candle_map.keys())
@@ -403,22 +556,28 @@ def save_candles_with_indicators(symbol, tf_str, candles_with_ind):
 def fetch_initial_data():
     """초기 데이터 로드"""
     logger.info("=== 초기 데이터 로드 시작 ===")
-    
+
     for symbol in SYMBOLS:
         for timeframe in TIMEFRAMES:
             tf_str = TF_MAP.get(timeframe, "1m")
             key = f"{symbol}:{tf_str}"
-            
+
             logger.info(f"초기 데이터 로드: {key}")
-            
-            # 초기 데이터는 최대 3000개까지 가져옴
-            candles = fetch_latest_candles(symbol, timeframe, limit=MAX_CANDLE_LEN)
+
+            # 정확한 지표 계산을 위해 추가 200개를 더 요청 (warm-up 데이터)
+            requested_candles = MAX_CANDLE_LEN + MIN_CANDLES_FOR_INDICATORS  # 3000 + 200 = 3200
+            candles = fetch_latest_candles(symbol, timeframe, limit=requested_candles)
+
             if candles:
-                update_candle_data(symbol, timeframe, candles)
+                # 지표 계산은 전체 데이터로, 저장은 최신 MAX_CANDLE_LEN개만
+                update_candle_data(symbol, timeframe, candles, warm_up_count=MIN_CANDLES_FOR_INDICATORS)
                 last_candle_timestamps[key] = candles[-1]["timestamp"]
+                logger.info(f"초기 데이터 로드 성공: {key} - {len(candles)}개 캔들 (warm-up: {MIN_CANDLES_FOR_INDICATORS}개)")
             else:
                 logger.warning(f"초기 데이터 로드 실패: {key}")
-    
+
+    # 초기 로드 완료 플래그 설정
+    initial_data_loaded.set()
     logger.info("=== 초기 데이터 로드 완료 ===")
 
 
@@ -479,20 +638,43 @@ def update_current_candle_with_indicators(symbol, timeframe, current_candle):
     """현재 진행 중인 캔들에 인디케이터 계산하여 업데이트"""
     tf_str = TF_MAP.get(timeframe, "1m")
     key = f"candles_with_indicators:{symbol}:{tf_str}"
-    
+
     try:
         # 기존 캔들 데이터 가져오기
         candle_key = f"candles:{symbol}:{tf_str}"
         existing_data = redis_client.lrange(candle_key, 0, -1)
-        
-        if not existing_data or len(existing_data) < 30:
-            logger.warning(f"인디케이터 계산에 필요한 충분한 데이터가 없음: {symbol} {tf_str}")
-            return
+        existing_count = len(existing_data) if existing_data else 0
+
+        # Redis에 데이터가 부족하면 API에서 추가로 가져오기
+        if existing_count < MIN_CANDLES_FOR_INDICATORS:
+            logger.info(f"Redis 데이터 부족, API에서 추가 캔들 로드: {symbol} {tf_str} (현재: {existing_count}개, 목표: {MIN_CANDLES_FOR_INDICATORS}개)")
+
+            # API에서 충분한 캔들 가져오기
+            api_candles = fetch_latest_candles(symbol, timeframe, limit=MIN_CANDLES_FOR_INDICATORS)
+
+            if not api_candles or len(api_candles) < MIN_CANDLES_FOR_INDICATORS:
+                logger.warning(f"API에서도 충분한 캔들을 가져올 수 없음: {symbol} {tf_str} (API: {len(api_candles) if api_candles else 0}개)")
+                return
+
+            # API에서 가져온 데이터를 Redis에 저장 (지표는 나중에 계산)
+            update_candle_data(symbol, timeframe, api_candles)
+
+            # Redis에서 다시 가져오기
+            existing_data = redis_client.lrange(candle_key, 0, -1)
+            existing_count = len(existing_data) if existing_data else 0
+
+            if existing_count < MIN_CANDLES_FOR_INDICATORS:
+                logger.warning(f"Redis 업데이트 후에도 데이터 부족: {symbol} {tf_str} (현재: {existing_count}개)")
+                return
+
+            logger.info(f"API에서 캔들 로드 완료: {symbol} {tf_str} ({existing_count}개)")
         
         # 캔들 객체 리스트 생성
         candles = []
         for item in existing_data:
-            parts = item.split(",")
+            # Redis returns bytes, decode to string first
+            item_str = item.decode('utf-8') if isinstance(item, bytes) else item
+            parts = item_str.split(",")
             ts = int(parts[0])
             candles.append({
                 "timestamp": ts,
@@ -589,15 +771,20 @@ def update_current_candle_with_indicators(symbol, timeframe, current_candle):
 def polling_worker():
     """폴링 워커 함수"""
     logger.info("폴링 워커 시작")
-    
+
     try:
+        # 초기 데이터 로드 완료 대기
+        logger.info("초기 데이터 로드 완료 대기 중...")
+        initial_data_loaded.wait()
+        logger.info("초기 데이터 로드 완료 확인, 폴링 시작")
+
         # 초기화
         for symbol in SYMBOLS:
             for timeframe in TIMEFRAMES:
                 tf_str = TF_MAP.get(timeframe, "1m")
                 key = f"{symbol}:{tf_str}"
                 last_check_times[key] = 0
-        
+
         while not shutdown_event.is_set():
             current_time = time.time()
             

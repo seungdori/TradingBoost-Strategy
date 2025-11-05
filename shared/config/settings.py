@@ -69,6 +69,12 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = Field(default="", description="Complete database URL")
 
+    # Error Database (separate pool for error logging)
+    ERROR_DB_URL: str = Field(
+        default="",
+        description="Error logging database URL (separate pool)"
+    )
+
     @property
     def db_url(self) -> str:
         """
@@ -171,6 +177,16 @@ class Settings(BaseSettings):
         description="Redis health check interval in seconds"
     )
 
+    # Celery-specific Redis (optional override)
+    CELERY_BROKER_URL_OVERRIDE: str | None = Field(
+        default=None,
+        description="Celery broker URL (override default Redis)"
+    )
+    CELERY_RESULT_BACKEND_OVERRIDE: str | None = Field(
+        default=None,
+        description="Celery result backend URL (override default Redis)"
+    )
+
     @property
     def redis_url(self) -> str:
         """Construct Redis URL from components"""
@@ -184,7 +200,15 @@ class Settings(BaseSettings):
 
     @property
     def celery_broker_url(self) -> str:
-        """Celery broker URL (Redis DB 1)"""
+        """
+        Celery broker URL.
+
+        Uses CELERY_BROKER_URL_OVERRIDE env var if set, otherwise defaults to Redis DB 1.
+        This allows local development to use localhost Redis for Celery
+        while keeping application data in remote Redis.
+        """
+        if self.CELERY_BROKER_URL_OVERRIDE:
+            return self.CELERY_BROKER_URL_OVERRIDE
         auth = f":{self.REDIS_PASSWORD}@" if self.REDIS_PASSWORD else ""
         return f"redis://{auth}{self.REDIS_HOST}:{self.REDIS_PORT}/1"
 
@@ -195,7 +219,13 @@ class Settings(BaseSettings):
 
     @property
     def CELERY_RESULT_BACKEND(self) -> str:
-        """Celery result backend URL"""
+        """
+        Celery result backend URL.
+
+        Uses CELERY_RESULT_BACKEND_OVERRIDE env var if set, otherwise uses broker URL.
+        """
+        if self.CELERY_RESULT_BACKEND_OVERRIDE:
+            return self.CELERY_RESULT_BACKEND_OVERRIDE
         return self.celery_broker_url
 
     # ============================================================================
@@ -205,6 +235,11 @@ class Settings(BaseSettings):
     OKX_API_KEY: str = ""
     OKX_SECRET_KEY: str = ""
     OKX_PASSPHRASE: str = ""
+
+    # Main account credentials (for multi-account support)
+    MAIN_OKX_KEY: str = Field(default="", description="Main OKX account API key")
+    MAIN_OKX_SECRET_KEY: str = Field(default="", description="Main OKX account secret key")
+    MAIN_OKX_PASSPHRASE: str = Field(default="", description="Main OKX account passphrase")
 
     BINANCE_API_KEY: str = ""
     BINANCE_SECRET_KEY: str = ""
@@ -251,6 +286,23 @@ class Settings(BaseSettings):
     API_RETRY_COUNT: int = 5
     API_RATE_LIMIT: int = 100  # requests per minute
 
+    # Internal API endpoints (for microservice communication)
+    HYPERRSI_API_HOST: str = Field(
+        default="localhost",
+        description="HYPERRSI API host for internal service calls"
+    )
+    HYPERRSI_API_PORT: int = Field(
+        default=8000,
+        ge=1,
+        le=65535,
+        description="HYPERRSI API port"
+    )
+
+    @property
+    def hyperrsi_api_url(self) -> str:
+        """HYPERRSI API base URL for internal service communication"""
+        return f"http://{self.HYPERRSI_API_HOST}:{self.HYPERRSI_API_PORT}/api"
+
     # ============================================================================
     # Order Backend Configuration (Optional)
     # ============================================================================
@@ -262,6 +314,7 @@ class Settings(BaseSettings):
     # ============================================================================
 
     SECRET_KEY: str = ""  # For JWT token signing
+    ENCRYPTION_KEY: Optional[str] = None  # For API key encryption (Fernet)
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
@@ -278,6 +331,22 @@ class Settings(BaseSettings):
 
     ENABLE_METRICS: bool = Field(default=False, description="Enable metrics collection")
     ENABLE_AUDIT_LOG: bool = Field(default=False, description="Enable audit logging")
+
+    # Redis Migration Feature Flags (for safe phased rollout)
+    REDIS_MIGRATION_ENABLED: bool = Field(
+        default=False,
+        description="Enable Redis pattern migration from get_redis_client() to redis_context()"
+    )
+    REDIS_MIGRATION_PERCENTAGE: int = Field(
+        default=0,
+        ge=0,
+        le=100,
+        description="Percentage of users using new Redis pattern (0-100)"
+    )
+    REDIS_MIGRATION_USER_WHITELIST: str = Field(
+        default="",
+        description="Comma-separated user IDs for targeted migration testing"
+    )
 
     # ============================================================================
     # Validation

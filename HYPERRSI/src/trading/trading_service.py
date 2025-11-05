@@ -172,11 +172,11 @@ class TradingService:
             raise RuntimeError("PositionManager not initialized")
         return await self.position_mgr.get_current_position(user_id, symbol, pos_side)
 
-    async def get_contract_size(self, symbol: str) -> float:
+    async def get_contract_size(self, user_id: str, symbol: str) -> float:
         """계약 크기 조회"""
         if self.position_mgr is None:
             raise RuntimeError("PositionManager not initialized")
-        return await self.position_mgr.get_contract_size(symbol)
+        return await self.position_mgr.get_contract_size(user_id, symbol)
 
     async def open_position(
         self,
@@ -377,7 +377,8 @@ class TradingService:
     async def cleanup(self) -> None:
         """리소스 정리"""
         if self.order_manager is None:
-            raise RuntimeError("OrderManager not initialized")
+            logger.debug("OrderManager not initialized, skipping cleanup")
+            return
         await self.order_manager.cleanup()
 
     async def _cancel_order(

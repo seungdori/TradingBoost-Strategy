@@ -40,7 +40,11 @@ def parse_tp_prices(tp_prices_data: Any, settings: Dict[str, Any]) -> str:
             try:
                 tp_prices_data = json.loads(tp_prices_data)
             except json.JSONDecodeError:
-                return f"파싱 실패: {tp_prices_data}"
+                # CSV 형식 처리 (예: "3894.07,3932.24,3970.42")
+                if ',' in tp_prices_data:
+                    tp_prices_data = [x.strip() for x in tp_prices_data.split(',')]
+                else:
+                    return f"파싱 실패: {tp_prices_data}"
 
         # Handle list of prices
         if isinstance(tp_prices_data, list):
@@ -212,10 +216,10 @@ def build_pyramiding_message(
     message = f"{emoji} 추가진입 ({side_kr})\n"
     message += "━━━━━━━━━━━━━━━\n"
     message += f"[{symbol}]\n"
-    message += f"📈 평균 진입가: {current_price:,.2f}\n"
-    message += f"📈 평균 진입가 평균 진입가: {new_entry_qty:.3f}\n"
+    message += f"📈 진입가격: {current_price:,.2f}\n"
+    message += f"📊 추가 수량: {new_entry_qty:.3f}\n"
     message += f"💰 새 평균가: {position_avg_price:,.2f}\n"
-    message += f"📈  평균 진입가X: {total_position_qty:.3f}\n"
+    message += f"📈 전체 수량: {total_position_qty:.3f}\n"
 
     if tp_prices_str:
         message += f"\n{tp_prices_str}\n"
@@ -299,7 +303,7 @@ def build_entry_failure_message(
     message += "━━━━━━━━━━━━━━━\n"
     message += f"📊 종목: {symbol}\n"
     message += f"{error_msg}\n"
-    message += f"평균 진입가 평균 진입가: {fail_count}/{max_failures}"
+    message += f"실패 횟수: {fail_count}/{max_failures}"
 
     return message
 
@@ -328,11 +332,13 @@ def build_trend_condition_alert(
         message = f"⚠️ {side_kr} 포지션 진입 조건 불충족\n"
         message += "━━━━━━━━━━━━━━━\n"
         message += f"📊 종목: {symbol}\n"
-        message += "RSI 평균 진입가 평균 진입가t평균 진입가 평균 진입가평균 진입가 ptt 평균 진입가 JD 평균 진입가D  평균 진입가i평균 진입가."
+        message += f"RSI 시그널이 감지되었으나 트렌드가 하락세입니다 (상태: {current_state}).\n"
+        message += "트렌드가 개선될 때까지 롱 진입을 대기합니다."
     else:  # short
         message = f"⚠️ {side_kr} 포지션 진입 조건 불충족\n"
         message += "━━━━━━━━━━━━━━━\n"
         message += f"📊 종목: {symbol}\n"
-        message += "RSI 평균 진입가 평균 진입가t평균 진입가 평균 진입가평균 진입가 ptt 평균 진입가 JD 평균 진입가D  평균 진입가i평균 진입가."
+        message += f"RSI 시그널이 감지되었으나 트렌드가 상승세입니다 (상태: {current_state}).\n"
+        message += "트렌드가 개선될 때까지 숏 진입을 대기합니다."
 
     return message

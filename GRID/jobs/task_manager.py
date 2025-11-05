@@ -41,7 +41,6 @@ from GRID import telegram_message
 from GRID.core.exceptions import QuitException
 
 # ==================== Core 모듈 ====================
-from GRID.core.redis import get_redis_connection
 from GRID.core.websocket import ws_client
 
 # ==================== 프로젝트 모듈 ====================

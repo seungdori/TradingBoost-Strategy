@@ -3,6 +3,7 @@ Stop Loss Service
 
 스탑로스 주문 관리 관련 비즈니스 로직
 """
+import asyncio
 import json
 from typing import Any, Dict, Optional
 
@@ -26,6 +27,7 @@ from HYPERRSI.src.api.routes.order.validators import (
     validate_symbol_format,
 )
 from HYPERRSI.src.core.logger import error_logger
+from shared.database.redis_patterns import RedisTimeout
 from shared.logging import get_logger
 from shared.utils.type_converters import safe_float
 
@@ -278,7 +280,10 @@ class StopLossService(BaseService):
                 distance = calculate_stop_loss_distance(entry_price, trigger_price, side)
                 sl_data["distance_percent"] = str(distance)
 
-            await redis_client.hset(sl_key, mapping=sl_data)
+            await asyncio.wait_for(
+                redis_client.hset(sl_key, mapping=sl_data),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
 
             logger.info(f"Redis 스탑로스 데이터 저장 완료: {sl_key}")
 
@@ -307,7 +312,10 @@ class StopLossService(BaseService):
         """
         try:
             sl_key = f"user:{user_id}:position:{symbol}:{side}:sl_data"
-            sl_data = await redis_client.hgetall(sl_key)
+            sl_data = await asyncio.wait_for(
+                redis_client.hgetall(sl_key),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
 
             if not sl_data:
                 return None
@@ -339,7 +347,10 @@ class StopLossService(BaseService):
         """
         try:
             sl_key = f"user:{user_id}:position:{symbol}:{side}:sl_data"
-            await redis_client.delete(sl_key)
+            await asyncio.wait_for(
+                redis_client.delete(sl_key),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
 
             logger.info(f"Redis 스탑로스 데이터 삭제 완료: {sl_key}")
 

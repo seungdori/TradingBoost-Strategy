@@ -26,6 +26,7 @@ from HYPERRSI.src.core.logger import error_logger
 from HYPERRSI.src.trading.cancel_trigger_okx import TriggerCancelClient
 from HYPERRSI.telegram_message import send_telegram_message
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_patterns import redis_context, RedisTimeout
 from shared.errors.exceptions import (
     ErrorCode,
     ExchangeUnavailableException,
@@ -66,21 +67,30 @@ async def init_user_position_data(user_id: str, symbol: str, side: str) -> None:
     dual_side_count_key = f"user:{user_id}:{symbol}:dual_side_count"
     initial_size_key = f"user:{user_id}:position:{symbol}:{side}:initial_size"
     current_trade_key = f"user:{user_id}:current_trade:{symbol}:{side}"
-    await get_redis_client().delete(position_state_key)
-    await get_redis_client().delete(dual_side_position_key)
-    await get_redis_client().delete(tp_data_key)
-    await get_redis_client().delete(ts_key)
-    await get_redis_client().delete(dca_count_key)
-    await get_redis_client().delete(dca_levels_key)
-    await get_redis_client().delete(position_key)
-    await get_redis_client().delete(min_size_key)
-    #await redis_client.delete(main_position_direction_key)
-    await get_redis_client().delete(tp_state)
-    await get_redis_client().delete(entry_fail_count_key)
-    await get_redis_client().delete(hedging_direction_key)
-    await get_redis_client().delete(dual_side_count_key)
-    await get_redis_client().delete(current_trade_key)
-    await get_redis_client().delete(initial_size_key)
+
+    # Use context manager with pipeline for batch deletes
+    async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+        pipeline = redis.pipeline()
+        pipeline.delete(position_state_key)
+        pipeline.delete(dual_side_position_key)
+        pipeline.delete(tp_data_key)
+        pipeline.delete(ts_key)
+        pipeline.delete(dca_count_key)
+        pipeline.delete(dca_levels_key)
+        pipeline.delete(position_key)
+        pipeline.delete(min_size_key)
+        #pipeline.delete(main_position_direction_key)
+        pipeline.delete(tp_state)
+        pipeline.delete(entry_fail_count_key)
+        pipeline.delete(hedging_direction_key)
+        pipeline.delete(dual_side_count_key)
+        pipeline.delete(current_trade_key)
+        pipeline.delete(initial_size_key)
+
+        await asyncio.wait_for(
+            pipeline.execute(),
+            timeout=RedisTimeout.PIPELINE
+        )
     
 
 status_mapping = {
@@ -143,11 +153,12 @@ async def get_identifier(user_id: str) -> str:
     Returns:
         str: OKX UID
     """
-    redis_client = get_redis_client()
-    okx_uid = await get_okx_uid_identifier(redis_client, user_id)
-    if not okx_uid:
-        raise HTTPException(status_code=404, detail=f"사용자 ID {user_id}에 대한 OKX UID를 찾을 수 없습니다")
-    return okx_uid
+    # Use context manager for proper connection management and timeout protection
+    async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+        okx_uid = await get_okx_uid_identifier(redis, user_id)
+        if not okx_uid:
+            raise HTTPException(status_code=404, detail=f"사용자 ID {user_id}에 대한 OKX UID를 찾을 수 없습니다")
+        return okx_uid
 
 async def get_user_api_keys(user_id: str) -> Dict[str, str]:
     """
@@ -158,8 +169,14 @@ async def get_user_api_keys(user_id: str) -> Dict[str, str]:
         okx_uid = await get_identifier(user_id)
 
         api_key_format = f"user:{okx_uid}:api:keys"
-        result: Dict[str, Any] = await get_redis_client().hgetall(api_key_format)
-        api_keys = {k: str(v) for k, v in result.items()}
+
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            result: Dict[str, Any] = await asyncio.wait_for(
+                redis.hgetall(api_key_format),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+            api_keys = {k: str(v) for k, v in result.items()}
 
         if not api_keys:
             raise HTTPException(status_code=404, detail="API keys not found in Redis")
@@ -1478,20 +1495,19 @@ async def close_position(
     # user_id를 OKX UID로 변환
     okx_uid = await get_identifier(user_id)
 
-    # Redis 클라이언트 초기화
-    redis_client = get_redis_client()
-
-    # PositionService를 사용하여 포지션 종료 처리
-    async with get_exchange_context(okx_uid) as exchange:
-        return await PositionService.close_position(
-            exchange=exchange,
-            user_id=okx_uid,
-            symbol=symbol,
-            close_type=close_request.close_type,
-            price=close_request.price,
-            close_percent=close_request.close_percent,
-            redis_client=redis_client
-        )
+    # Use context manager for proper connection management and timeout protection
+    async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+        # PositionService를 사용하여 포지션 종료 처리
+        async with get_exchange_context(okx_uid) as exchange:
+            return await PositionService.close_position(
+                exchange=exchange,
+                user_id=okx_uid,
+                symbol=symbol,
+                close_type=close_request.close_type,
+                price=close_request.price,
+                close_percent=close_request.close_percent,
+                redis_client=redis
+            )
 
 
 
@@ -1703,8 +1719,17 @@ async def update_stop_loss_order_redis(
     new_sl_price: float,
 ) -> Dict[str, Any]:
     position_key = f"user:{user_id}:position:{symbol}:{side}"
-    await get_redis_client().hset(position_key, "sl_price", new_sl_price)
-    await get_redis_client().hset(position_key, "get_sl", "false")
+
+    # Use context manager for proper connection management and timeout protection
+    async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+        await asyncio.wait_for(
+            redis.hset(position_key, "sl_price", new_sl_price),
+            timeout=RedisTimeout.FAST_OPERATION
+        )
+        await asyncio.wait_for(
+            redis.hset(position_key, "get_sl", "false"),
+            timeout=RedisTimeout.FAST_OPERATION
+        )
 
     return {
         "success": True,
@@ -2104,191 +2129,193 @@ async def update_stop_loss_order(
     # user_id를 OKX UID로 변환
     okx_uid = await get_identifier(user_id)
 
-    # Redis 클라이언트 초기화
-    redis_client = get_redis_client()
-
-    async with get_exchange_context(okx_uid) as exchange:
-        try:
-            # 1. 현재 포지션 조회
-            positions = await exchange.private_get_account_positions({'instType': 'SWAP'})
-            position = next(
-                (pos for pos in positions.get('data', [])
-                 if pos['instId'] == symbol and float(pos.get('pos', 0)) != 0),
-                None
-            )
-
-            if not position:
-                logger.info(f"No active position found for {symbol}, skipping SL update")
-                await TradingCache.remove_position(okx_uid, symbol, order_side_normalized)
-                return {"success": False, "message": "활성화 된 포지션을 찾을 수 없습니다"}
-
-            # 2. 현재가 확인
-            ticker = await exchange.fetch_ticker(symbol)
-            current_price = ticker['last']
-            position_qty = float(position.get('pos', 0))
-            pos_side = "long" if position.get('posSide') == 'long' else "short"
-
-            # 3. SL 가격 유효성 검사 - invalid한 경우 시장가로 청산
-            side_for_close = "long" if side_normalized == "buy" else "short"
-            should_close_at_market = (
-                (side_normalized == "buy" and new_sl_price >= current_price) or
-                (side_normalized == "sell" and new_sl_price <= current_price)
-            )
-
-            if should_close_at_market:
-                # Invalid SL price - close position at market
-                await update_stop_loss_order_redis(
-                    user_id=okx_uid,
-                    symbol=symbol,
-                    side=side_for_close,
-                    new_sl_price=new_sl_price
+    # Use context manager for proper connection management and timeout protection
+    async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+        async with get_exchange_context(okx_uid) as exchange:
+            try:
+                # 1. 현재 포지션 조회
+                positions = await exchange.private_get_account_positions({'instType': 'SWAP'})
+                position = next(
+                    (pos for pos in positions.get('data', [])
+                     if pos['instId'] == symbol and float(pos.get('pos', 0)) != 0),
+                    None
                 )
-
-                try:
-                    close_request = ClosePositionRequest(
-                        close_type="market",
-                        price=current_price,
-                        close_percent=100,
-                    )
-                    await close_position(
-                        symbol=symbol,
-                        close_request=close_request,
-                        user_id=okx_uid,
-                        side=side_for_close
-                    )
-                    # Position cleanup after successful close
-                    await PositionService.init_position_data(
+    
+                if not position:
+                    logger.info(f"No active position found for {symbol}, skipping SL update")
+                    await TradingCache.remove_position(okx_uid, symbol, order_side_normalized)
+                    return {"success": False, "message": "활성화 된 포지션을 찾을 수 없습니다"}
+    
+                # 2. 현재가 확인
+                ticker = await exchange.fetch_ticker(symbol)
+                current_price = ticker['last']
+                position_qty = float(position.get('pos', 0))
+                pos_side = "long" if position.get('posSide') == 'long' else "short"
+    
+                # 3. SL 가격 유효성 검사 - invalid한 경우 시장가로 청산
+                side_for_close = "long" if side_normalized == "buy" else "short"
+                should_close_at_market = (
+                    (side_normalized == "buy" and new_sl_price >= current_price) or
+                    (side_normalized == "sell" and new_sl_price <= current_price)
+                )
+    
+                if should_close_at_market:
+                    # Invalid SL price - close position at market
+                    await update_stop_loss_order_redis(
                         user_id=okx_uid,
                         symbol=symbol,
                         side=side_for_close,
-                        redis_client=redis_client
+                        new_sl_price=new_sl_price
+                    )
+    
+                    try:
+                        close_request = ClosePositionRequest(
+                            close_type="market",
+                            price=current_price,
+                            close_percent=100,
+                        )
+                        await close_position(
+                            symbol=symbol,
+                            close_request=close_request,
+                            user_id=okx_uid,
+                            side=side_for_close
+                        )
+                        # Position cleanup after successful close
+                        await PositionService.init_position_data(
+                            user_id=okx_uid,
+                            symbol=symbol,
+                            side=side_for_close,
+                            redis_client=redis
+                        )
+                    except Exception as e:
+                        if "활성화된 포지션을 찾을 수 없습니다" not in str(e) and "no_position" not in str(e):
+                            logger.error(f"Failed to close position: {str(e)}")
+                            await send_telegram_message(
+                                f"[{okx_uid}] 주문 생성 중 오류 발생: {str(e)}\n"
+                                f"BreakEven의 변경된 SL이 현재 시장가보다 {'높습니다' if side_normalized == 'buy' else '낮습니다'}.\n"
+                                f"{'롱' if side_normalized == 'buy' else '숏'}포지션을 시장가 종료합니다.",
+                                okx_uid=1709556958,
+                                debug=True
+                            )
+    
+                    return {
+                        "success": True,
+                        "symbol": symbol,
+                        "message": "Invalid SL price - position closed at market"
+                    }
+    
+                # 4. Get existing SL order from Redis
+                old_sl_data = await StopLossService.get_stop_loss_from_redis(
+                    redis_client=redis,
+                    user_id=okx_uid,
+                    symbol=symbol,
+                    side=side_for_close
+                )
+    
+                # 5. Cancel existing algo orders
+                try:
+                    await cancel_algo_orders(
+                        symbol=symbol,
+                        user_id=okx_uid,
+                        side=pos_side,
+                        algo_type=algo_type if algo_type == "trigger" else "conditional"
                     )
                 except Exception as e:
-                    if "활성화된 포지션을 찾을 수 없습니다" not in str(e) and "no_position" not in str(e):
-                        logger.error(f"Failed to close position: {str(e)}")
+                    logger.warning(f"기존 SL algo 주문 취소 중 오류: {str(e)}")
+    
+                # 6. Create new SL order using StopLossService
+                try:
+                    new_order = await StopLossService.create_stop_loss_order(
+                        exchange=exchange,
+                        symbol=symbol,
+                        side=order_side_normalized,
+                        amount=position_qty,
+                        trigger_price=new_sl_price,
+                        order_price=new_sl_price,
+                        pos_side=pos_side,
+                        reduce_only=True
+                    )
+    
+                    # 7. Update Redis with new SL data
+                    await StopLossService.update_stop_loss_redis(
+                        redis_client=redis,
+                        user_id=okx_uid,
+                        symbol=symbol,
+                        side=side_for_close,
+                        trigger_price=new_sl_price,
+                        order_id=new_order.order_id,
+                        entry_price=float(position.get('avgPx', 0))
+                    )
+    
+                    # 8. Update monitor key for order tracking
+                    now = dt.datetime.now()
+                    kr_time = now + dt.timedelta(hours=9)
+                    monitor_key = f"monitor:user:{okx_uid}:{symbol}:order:{new_order.order_id}"
+                    monitor_data = {
+                        "status": "open",
+                        "price": str(new_sl_price),
+                        "position_side": side_for_close,
+                        "contracts_amount": str(contracts_amount),
+                        "order_type": order_type,
+                        "position_qty": str(position_qty),
+                        "ordertime": str(int(now.timestamp())),
+                        "filled_contracts_amount": "0",
+                        "remain_contracts_amount": str(contracts_amount),
+                        "last_updated_time": str(int(now.timestamp())),
+                        "last_updated_time_kr": kr_time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "is_hedge": str(is_hedge).lower()
+                    }
+                    await asyncio.wait_for(
+                        redis.hset(monitor_key, mapping=monitor_data),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
+    
+                    return {
+                        "success": True,
+                        "symbol": symbol,
+                        "new_sl_price": new_sl_price,
+                        "order_id": new_order.order_id
+                    }
+    
+                except Exception as e:
+                    logger.error(f"Failed to create stop loss order: {str(e)}")
+    
+                    # Fallback: Update Redis with SL price only
+                    await update_stop_loss_order_redis(
+                        user_id=okx_uid,
+                        symbol=symbol,
+                        side=side_for_close,
+                        new_sl_price=new_sl_price
+                    )
+    
+                    error_message = str(e)
+                    if "Order timed out" in error_message or "51149" in error_message:
                         await send_telegram_message(
-                            f"[{okx_uid}] 주문 생성 중 오류 발생: {str(e)}\n"
-                            f"BreakEven의 변경된 SL이 현재 시장가보다 {'높습니다' if side_normalized == 'buy' else '낮습니다'}.\n"
-                            f"{'롱' if side_normalized == 'buy' else '숏'}포지션을 시장가 종료합니다.",
+                            f"[{okx_uid}] 스탑로스 주문 생성 중 타임아웃 발생. "
+                            f"시스템이 자동으로 SL 가격을 {new_sl_price}로 설정했지만 실제 주문은 생성되지 않았습니다.",
                             okx_uid=1709556958,
                             debug=True
                         )
-
-                return {
-                    "success": True,
-                    "symbol": symbol,
-                    "message": "Invalid SL price - position closed at market"
-                }
-
-            # 4. Get existing SL order from Redis
-            old_sl_data = await StopLossService.get_stop_loss_from_redis(
-                redis_client=redis_client,
-                user_id=okx_uid,
-                symbol=symbol,
-                side=side_for_close
-            )
-
-            # 5. Cancel existing algo orders
-            try:
-                await cancel_algo_orders(
-                    symbol=symbol,
-                    user_id=okx_uid,
-                    side=pos_side,
-                    algo_type=algo_type if algo_type == "trigger" else "conditional"
-                )
+                    else:
+                        await send_telegram_message(
+                            f"[{okx_uid}] 스탑로스 주문 생성 중 오류 발생: {str(e)}",
+                            okx_uid=1709556958,
+                            debug=True
+                        )
+    
+                    return {
+                        "success": False,
+                        "symbol": symbol,
+                        "new_sl_price": new_sl_price,
+                        "message": f"스탑로스 주문 생성 실패: {str(e)}",
+                        "error": str(e)
+                    }
+    
+            except HTTPException:
+                raise
             except Exception as e:
-                logger.warning(f"기존 SL algo 주문 취소 중 오류: {str(e)}")
-
-            # 6. Create new SL order using StopLossService
-            try:
-                new_order = await StopLossService.create_stop_loss_order(
-                    exchange=exchange,
-                    symbol=symbol,
-                    side=order_side_normalized,
-                    amount=position_qty,
-                    trigger_price=new_sl_price,
-                    order_price=new_sl_price,
-                    pos_side=pos_side,
-                    reduce_only=True
-                )
-
-                # 7. Update Redis with new SL data
-                await StopLossService.update_stop_loss_redis(
-                    redis_client=redis_client,
-                    user_id=okx_uid,
-                    symbol=symbol,
-                    side=side_for_close,
-                    trigger_price=new_sl_price,
-                    order_id=new_order.order_id,
-                    entry_price=float(position.get('avgPx', 0))
-                )
-
-                # 8. Update monitor key for order tracking
-                now = dt.datetime.now()
-                kr_time = now + dt.timedelta(hours=9)
-                monitor_key = f"monitor:user:{okx_uid}:{symbol}:order:{new_order.order_id}"
-                monitor_data = {
-                    "status": "open",
-                    "price": str(new_sl_price),
-                    "position_side": side_for_close,
-                    "contracts_amount": str(contracts_amount),
-                    "order_type": order_type,
-                    "position_qty": str(position_qty),
-                    "ordertime": str(int(now.timestamp())),
-                    "filled_contracts_amount": "0",
-                    "remain_contracts_amount": str(contracts_amount),
-                    "last_updated_time": str(int(now.timestamp())),
-                    "last_updated_time_kr": kr_time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "is_hedge": str(is_hedge).lower()
-                }
-                await get_redis_client().hset(monitor_key, mapping=monitor_data)
-
-                return {
-                    "success": True,
-                    "symbol": symbol,
-                    "new_sl_price": new_sl_price,
-                    "order_id": new_order.order_id
-                }
-
-            except Exception as e:
-                logger.error(f"Failed to create stop loss order: {str(e)}")
-
-                # Fallback: Update Redis with SL price only
-                await update_stop_loss_order_redis(
-                    user_id=okx_uid,
-                    symbol=symbol,
-                    side=side_for_close,
-                    new_sl_price=new_sl_price
-                )
-
-                error_message = str(e)
-                if "Order timed out" in error_message or "51149" in error_message:
-                    await send_telegram_message(
-                        f"[{okx_uid}] 스탑로스 주문 생성 중 타임아웃 발생. "
-                        f"시스템이 자동으로 SL 가격을 {new_sl_price}로 설정했지만 실제 주문은 생성되지 않았습니다.",
-                        okx_uid=1709556958,
-                        debug=True
-                    )
-                else:
-                    await send_telegram_message(
-                        f"[{okx_uid}] 스탑로스 주문 생성 중 오류 발생: {str(e)}",
-                        okx_uid=1709556958,
-                        debug=True
-                    )
-
-                return {
-                    "success": False,
-                    "symbol": symbol,
-                    "new_sl_price": new_sl_price,
-                    "message": f"스탑로스 주문 생성 실패: {str(e)}",
-                    "error": str(e)
-                }
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Failed to update stop loss: {str(e)}", exc_info=True)
-            await handle_exchange_error(e)
+                logger.error(f"Failed to update stop loss: {str(e)}", exc_info=True)
+                await handle_exchange_error(e)
 
 
 @router.delete("/{order_id}",
@@ -2960,25 +2987,38 @@ async def cancel_all_orders(
                     closed_orders_key = f"user:{okx_uid}:closed_orders"
                     open_orders_key = f"user:{okx_uid}:open_orders"
 
-                    async with get_redis_client().pipeline() as pipe:
+                    # Use context manager for proper connection management and timeout protection
+                    async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                        # Get current orders if needed
+                        if order_side_for_filter:
+                            current_orders = await asyncio.wait_for(
+                                redis.lrange(open_orders_key, 0, -1),
+                                timeout=RedisTimeout.FAST_OPERATION
+                            )
+
+                        # Use pipeline for batch operations
+                        pipeline = redis.pipeline()
+
                         # Save cancelled orders
                         for order in open_orders:
-                            await pipe.rpush(closed_orders_key, json.dumps(order))
+                            pipeline.rpush(closed_orders_key, json.dumps(order))
 
                         # Update open orders list
                         if order_side_for_filter:
                             # Remove only specific side orders
-                            current_orders = await get_redis_client().lrange(open_orders_key, 0, -1)
-                            await pipe.delete(open_orders_key)
+                            pipeline.delete(open_orders_key)
                             for order_str in current_orders:
                                 order_data = json.loads(order_str)
                                 if order_data['side'].lower() != order_side_for_filter.lower():
-                                    await pipe.rpush(open_orders_key, order_str)
+                                    pipeline.rpush(open_orders_key, order_str)
                         else:
                             # Remove all orders
-                            await pipe.delete(open_orders_key)
+                            pipeline.delete(open_orders_key)
 
-                        await pipe.execute()
+                        await asyncio.wait_for(
+                            pipeline.execute(),
+                            timeout=RedisTimeout.PIPELINE
+                        )
 
                 except Exception as e:
                     logger.error(f"Failed to cancel regular orders: {str(e)}")

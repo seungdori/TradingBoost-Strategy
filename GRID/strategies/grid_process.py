@@ -17,8 +17,7 @@ from contextlib import contextmanager
 import redis
 from h11 import Data
 
-from shared.database.redis_patterns import redis_context, RedisTTL
-from GRID.core.redis import get_redis_connection
+from shared.database.redis_patterns import redis_context, RedisTTL, scan_keys_pattern
 from GRID.database import redis_database
 from GRID.database.redis_database import (
     get_job_status,
@@ -231,7 +230,8 @@ async def get_running_users(exchange_name, redis=None):
         # Use provided redis connection
         try:
             user_pattern = f'{exchange_name}:user:*'
-            user_keys = await redis.keys(user_pattern)
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            user_keys = await scan_keys_pattern(user_pattern, redis=redis)
             running_users = []
             for user_key in user_keys:
                 user_key = user_key.decode('utf-8') if isinstance(user_key, bytes) else user_key
@@ -250,7 +250,8 @@ async def get_running_users(exchange_name, redis=None):
         async with redis_context() as redis:
             try:
                 user_pattern = f'{exchange_name}:user:*'
-                user_keys = await redis.keys(user_pattern)
+                # Use SCAN instead of KEYS to avoid blocking Redis
+                user_keys = await scan_keys_pattern(user_pattern, redis=redis)
                 running_users = []
                 for user_key in user_keys:
                     user_key = user_key.decode('utf-8') if isinstance(user_key, bytes) else user_key

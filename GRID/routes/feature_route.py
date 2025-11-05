@@ -16,7 +16,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, Request
 import GRID.database.redis_database as redis_database
 import GRID.strategies.grid as grid
 import GRID.strategies.strategy as strategy
-from GRID.core.redis import get_redis_connection
+from shared.database.redis import get_redis
+from shared.database.redis_patterns import scan_keys_pattern
 from GRID.database.redis_database import reset_user_data, save_running_symbols
 from GRID.dtos.feature import (
     CoinDto,
@@ -481,7 +482,8 @@ async def restart_running_bots(request: Request) -> ResponseDto[None]:
                 request_body_str = await get_request_body(redis, redis_key)
                 print(f"Checking for request body in {redis_key}")
                 if not request_body_str:
-                    all_keys = await redis.keys(f"{exchange_id}:request_body:{user_id}:*")
+                    # Use SCAN instead of KEYS to avoid blocking Redis
+                    all_keys = await scan_keys_pattern(f"{exchange_id}:request_body:{user_id}:*", redis=redis)
                     if not all_keys:
                         # 포트 정보가 없는 경우
                         redis_key = f"{exchange_id}:request_body:{user_id}"
@@ -2172,7 +2174,7 @@ async def sell_all_coins(dto: CoinSellAllFeatureDto) -> ResponseDto[Any | None]:
         }
     }
 )
-async def sell_coins(dto: CoinSellFeatureDto, redis: aioredis.Redis = Depends(get_redis_connection)) -> ResponseDto[List[CoinDto] | None]:
+async def sell_coins(dto: CoinSellFeatureDto, redis: aioredis.Redis = Depends(get_redis)) -> ResponseDto[List[CoinDto] | None]:
     try:
         exchange_name = dto.exchange_name
         user_id = dto.user_id

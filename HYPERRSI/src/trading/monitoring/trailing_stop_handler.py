@@ -13,6 +13,8 @@ from HYPERRSI.src.api.dependencies import get_exchange_context
 from HYPERRSI.src.api.routes.order import ClosePositionRequest, close_position
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_migration import get_redis_context
+from shared.database.redis_patterns import RedisTimeout, scan_keys_pattern
 from shared.logging import get_logger, log_order
 
 from .position_validator import check_position_exists
@@ -551,7 +553,8 @@ async def get_active_trailing_stops() -> List[Dict]:
 
     try:
         redis = await get_redis_client()
-        trailing_keys = await redis.keys("trailing:user:*")
+        # Use SCAN instead of KEYS to avoid blocking Redis
+        trailing_keys = await scan_keys_pattern("trailing:user:*", redis=redis)
         trailing_stops = []
         for key in trailing_keys:
             data = await redis.hgetall(key)

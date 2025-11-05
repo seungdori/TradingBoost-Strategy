@@ -16,17 +16,7 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 from shared.config import settings
 
 # Use shared Redis pool
-from GRID.core.redis import get_redis_connection
-
-# Global redis_client for backward compatibility (lazy initialization)
-redis_client = None
-
-async def _ensure_redis():
-    """Ensure redis_client is initialized from shared pool"""
-    global redis_client
-    if redis_client is None:
-        redis_client = await get_redis_connection()
-    return redis_client
+from shared.database.redis_patterns import redis_context, RedisTTL
 class MessageResponse(BaseModel):
     user_id: int
     messages: List[str]
@@ -34,42 +24,36 @@ class MessageResponse(BaseModel):
 
 
 class RedisMessageManager:
-    def __init__(self):
-        self.redis = None  # Will be initialized lazily
-
-    async def _ensure_redis(self):
-        """Ensure Redis client is initialized from shared pool"""
-        if self.redis is None:
-            self.redis = await get_redis_connection()
-        return self.redis
+    """Redis message manager using context manager pattern for proper connection handling"""
 
     async def get_and_clear_user_messages(self, user_id: int) -> list[str]:
+        """Get and clear user messages using redis_context()"""
         key = f"user:{user_id}:messages"
-        redis = await self._ensure_redis()
-        pipe = redis.pipeline()
+        async with redis_context() as redis:
+            pipe = redis.pipeline()
 
-        # 메시지 가져오기와 TTL 확인을 파이프라인에 추가
-        pipe.lrange(key, 0, -1)
-        pipe.ttl(key)
-        pipe.delete(key)
+            # 메시지 가져오기와 TTL 확인을 파이프라인에 추가
+            pipe.lrange(key, 0, -1)
+            pipe.ttl(key)
+            pipe.delete(key)
 
-        # 파이프라인 실행
-        results = await pipe.execute()
-        messages, ttl = results[0], results[1]
+            # 파이프라인 실행
+            results = await pipe.execute()
+            messages, ttl = results[0], results[1]
 
-        # 메시지가 있고 TTL이 유효한 경우
-        if messages and ttl > 0:
-            # 키를 다시 생성하고 TTL 설정
-            await redis.rpush(key, *messages)
-            await redis.expire(key, ttl)
+            # 메시지가 있고 TTL이 유효한 경우
+            if messages and ttl > 0:
+                # 키를 다시 생성하고 TTL 설정
+                await redis.rpush(key, *messages)
+                await redis.expire(key, ttl)
 
-        # Decode messages if they're in bytes
-        decoded_messages: list[str] = [
-            message.decode('utf-8') if isinstance(message, bytes) else message
-            for message in messages
-        ]
+            # Decode messages if they're in bytes
+            decoded_messages: list[str] = [
+                message.decode('utf-8') if isinstance(message, bytes) else message
+                for message in messages
+            ]
 
-        return decoded_messages
+            return decoded_messages
 
 class ConnectionManager:
     def __init__(self):
@@ -78,45 +62,49 @@ class ConnectionManager:
 
 
     async def get_user_messages(self, user_id: int) -> list[str]:
+        """Get user messages using redis_context()"""
         key = f"user:{user_id}:messages"
         try:
-            redis = await _ensure_redis()
-            messages = await redis.lrange(key, 0, -1)
-            # Decode messages if they're in bytes
-            decoded_messages: list[str] = [
-                message.decode('utf-8') if isinstance(message, bytes) else message
-                for message in messages
-            ]
-            logging.info(f" [INFO] Retrieved messages for user {user_id}: {decoded_messages}")
-            return decoded_messages or []
+            async with redis_context() as redis:
+                messages = await redis.lrange(key, 0, -1)
+                # Decode messages if they're in bytes
+                decoded_messages: list[str] = [
+                    message.decode('utf-8') if isinstance(message, bytes) else message
+                    for message in messages
+                ]
+                logging.info(f" [INFO] Retrieved messages for user {user_id}: {decoded_messages}")
+                return decoded_messages or []
         except Exception as e:
             logging.error(f" [ERROR] Failed to get messages for user {user_id}: {str(e)}")
             return []
 
     async def add_connected_user(self, user_id: int) -> None:
+        """Add connected user using redis_context()"""
         try:
-            redis = await _ensure_redis()
-            # Redis에 사용자 추가
-            await redis.sadd(self.redis_key, str(user_id))
-            logging.info(f"👥 [INFO] Added user {user_id} to connected users")
+            async with redis_context() as redis:
+                # Redis에 사용자 추가
+                await redis.sadd(self.redis_key, str(user_id))
+                logging.info(f"👥 [INFO] Added user {user_id} to connected users")
         except Exception as e:
             logging.error(f" [ERROR] Failed to add user {user_id} to connected users: {str(e)}")
 
     async def remove_connected_user(self, user_id: int) -> None:
+        """Remove connected user using redis_context()"""
         try:
-            redis = await _ensure_redis()
-            # Redis에서 사용자 제거
-            await redis.srem(self.redis_key, str(user_id))
-            logging.info(f"👋 [INFO] Removed user {user_id} from connected users")
+            async with redis_context() as redis:
+                # Redis에서 사용자 제거
+                await redis.srem(self.redis_key, str(user_id))
+                logging.info(f"👋 [INFO] Removed user {user_id} from connected users")
         except Exception as e:
             logging.error(f" [ERROR] Failed to remove user {user_id} from connected users: {str(e)}")
 
     async def get_connected_users(self) -> List[int]:
+        """Get all connected users using redis_context()"""
         try:
-            redis = await _ensure_redis()
-            # Redis에서 모든 연결된 사용자 가져오기
-            users = await redis.smembers(self.redis_key)
-            return [int(user_id) for user_id in users] if users else []
+            async with redis_context() as redis:
+                # Redis에서 모든 연결된 사용자 가져오기
+                users = await redis.smembers(self.redis_key)
+                return [int(user_id) for user_id in users] if users else []
         except Exception as e:
             logging.error(f" [ERROR] Failed to get connected users: {str(e)}")
             return []
@@ -136,42 +124,42 @@ class ConnectionManager:
             raise
 
     async def is_user_connected(self, user_id: int) -> bool:
-        """사용자 연결 상태 확인"""
+        """사용자 연결 상태 확인 using redis_context()"""
         try:
-            redis = await _ensure_redis()
-            # 메모리와 Redis 둘 다 확인
-            memory_connected = user_id in self.active_connections
-            redis_connected = await redis.sismember(self.redis_key, str(user_id))
+            async with redis_context() as redis:
+                # 메모리와 Redis 둘 다 확인
+                memory_connected = user_id in self.active_connections
+                redis_connected = await redis.sismember(self.redis_key, str(user_id))
 
-            # 동기화 체크
-            if memory_connected != bool(redis_connected):
-                logging.warning(f" Connection state mismatch for user {user_id}")
-                # 메모리 상태를 우선으로 Redis 상태 동기화
-                if memory_connected:
-                    await redis.sadd(self.redis_key, str(user_id))
-                else:
-                    await redis.srem(self.redis_key, str(user_id))
+                # 동기화 체크
+                if memory_connected != bool(redis_connected):
+                    logging.warning(f" Connection state mismatch for user {user_id}")
+                    # 메모리 상태를 우선으로 Redis 상태 동기화
+                    if memory_connected:
+                        await redis.sadd(self.redis_key, str(user_id))
+                    else:
+                        await redis.srem(self.redis_key, str(user_id))
 
-            return memory_connected
+                return memory_connected
 
         except Exception as e:
             logging.error(f" [ERROR] Failed to check connection status: {str(e)}")
             return False
 
     async def get_connection_status(self, user_id: int) -> dict:
-        """사용자 연결 상태 정보 조회"""
+        """사용자 연결 상태 정보 조회 using redis_context()"""
         try:
-            redis = await _ensure_redis()
-            is_connected = await self.is_user_connected(user_id)
-            active_connections = len(self.active_connections.get(user_id, []))
-            last_seen = await redis.get(f"user:{user_id}:last_seen")
-            
-            return {
-                "user_id": user_id,
-                "is_connected": is_connected,
-                "active_connections": active_connections,
-                "last_seen": last_seen
-            }
+            async with redis_context() as redis:
+                is_connected = await self.is_user_connected(user_id)
+                active_connections = len(self.active_connections.get(user_id, []))
+                last_seen = await redis.get(f"user:{user_id}:last_seen")
+
+                return {
+                    "user_id": user_id,
+                    "is_connected": is_connected,
+                    "active_connections": active_connections,
+                    "last_seen": last_seen
+                }
         except Exception as e:
             logging.error(f" [ERROR] Failed to get connection status: {str(e)}")
             return {
@@ -182,20 +170,21 @@ class ConnectionManager:
             }
 
     async def add_user_message(self, user_id: int, message: str) -> None:
+        """Add user message using redis_context()"""
         key = f"user:{user_id}:messages"
         try:
-            redis = await _ensure_redis()
-            # 메시지 저장 전 로깅
-            logging.info(f" [INFO] Adding message for user {user_id}: {message}")
+            async with redis_context() as redis:
+                # 메시지 저장 전 로깅
+                logging.info(f" [INFO] Adding message for user {user_id}: {message}")
 
-            # 파이프라인으로 작업 묶기
-            pipe = redis.pipeline()
-            await pipe.rpush(key, message)
-            await pipe.expire(key, 3600)  # 1시간 유효
-            await pipe.publish('messages', message)
-            await pipe.execute()
+                # 파이프라인으로 작업 묶기
+                pipe = redis.pipeline()
+                await pipe.rpush(key, message)
+                await pipe.expire(key, 3600)  # 1시간 유효
+                await pipe.publish('messages', message)
+                await pipe.execute()
 
-            logging.info(f" [INFO] Message successfully added for user {user_id}")
+                logging.info(f" [INFO] Message successfully added for user {user_id}")
         except Exception as e:
             logging.error(f" [ERROR] Failed to add message for user {user_id}: {str(e)}")
             raise
@@ -237,7 +226,7 @@ class ConnectionManager:
 
     async def get_user_info(self, user_id: int) -> Optional[Dict[str, Any]]:
         """
-        Redis에서 사용자 정보를 조회하는 메서드
+        Redis에서 사용자 정보를 조회하는 메서드 using redis_context()
 
         Args:
             user_id (int): 조회할 사용자 ID
@@ -246,23 +235,23 @@ class ConnectionManager:
             Optional[Dict[str, Any]]: 사용자 정보 또는 None
         """
         try:
-            redis = await _ensure_redis()
-            # 예시: Redis에서 사용자 정보 조회 로직
-            # 실제 구현에서는 Redis에 저장된 사용자 정보를 확인
-            user_key = f"okx:user:{user_id}"
-            print(f" {user_key}")
-            user_info_raw = await redis.hgetall(user_key)
-            print('',user_info_raw)
+            async with redis_context() as redis:
+                # 예시: Redis에서 사용자 정보 조회 로직
+                # 실제 구현에서는 Redis에 저장된 사용자 정보를 확인
+                user_key = f"okx:user:{user_id}"
+                print(f" {user_key}")
+                user_info_raw = await redis.hgetall(user_key)
+                print('',user_info_raw)
 
-            # Decode bytes to strings if necessary
-            if user_info_raw:
-                user_info: dict[str, Any] = {
-                    k.decode('utf-8') if isinstance(k, bytes) else k:
-                    v.decode('utf-8') if isinstance(v, bytes) else v
-                    for k, v in user_info_raw.items()
-                }
-                return user_info
-            return None
+                # Decode bytes to strings if necessary
+                if user_info_raw:
+                    user_info: dict[str, Any] = {
+                        k.decode('utf-8') if isinstance(k, bytes) else k:
+                        v.decode('utf-8') if isinstance(v, bytes) else v
+                        for k, v in user_info_raw.items()
+                    }
+                    return user_info
+                return None
         except Exception:
             traceback.print_exc()
             return None

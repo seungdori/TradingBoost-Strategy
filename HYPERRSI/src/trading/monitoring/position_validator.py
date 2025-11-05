@@ -12,6 +12,7 @@ from typing import Dict, Tuple
 from HYPERRSI.src.api.dependencies import get_exchange_context
 from HYPERRSI.src.api.routes.order import ClosePositionRequest, close_position
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_patterns import scan_keys_pattern
 from shared.logging import get_logger, log_order
 
 # Lazy imports to avoid circular dependencies - import at usage point
@@ -298,7 +299,8 @@ async def check_and_cleanup_orders(user_id: str, symbol: str, direction: str):
 
         # 1. 해당 방향의 모니터링 중인 모든 주문 가져오기
         pattern = f"monitor:user:{user_id}:{symbol}:order:*"
-        order_keys = await redis.keys(pattern)
+        # Use SCAN instead of KEYS to avoid blocking Redis
+        order_keys = await scan_keys_pattern(pattern, redis=redis)
         orders_to_check = []
         
         for key in order_keys:

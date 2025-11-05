@@ -248,7 +248,7 @@ async def check_margin_block(user_id: str, symbol: str) -> bool:
     """사용자의 특정 심볼에 대한 자금 부족 차단 상태를 확인합니다.
 
     Args:
-        user_id (int): 사용자 ID
+        user_id (str): 사용자 ID
         symbol (str): 심볼
 
     Returns:
@@ -262,9 +262,9 @@ async def check_margin_block(user_id: str, symbol: str) -> bool:
 
 async def set_margin_block(user_id: str, symbol: str, duration_seconds: int = 600) -> None:
     """사용자의 특정 심볼에 대한 자금 부족 차단 상태를 설정합니다.
-    
+
     Args:
-        user_id (int): 사용자 ID
+        user_id (str): 사용자 ID
         symbol (str): 심볼
         duration_seconds (int): 차단 지속 시간 (초)
     """
@@ -280,7 +280,7 @@ async def get_margin_retry_count(user_id: str, symbol: str) -> int:
     """자금 부족으로 인한 재시도 횟수를 가져옵니다.
 
     Args:
-        user_id (int): 사용자 ID
+        user_id (str): 사용자 ID
         symbol (str): 심볼
 
     Returns:
@@ -296,7 +296,7 @@ async def increment_margin_retry_count(user_id: str, symbol: str) -> int:
     """자금 부족으로 인한 재시도 횟수를 증가시킵니다.
 
     Args:
-        user_id (int): 사용자 ID
+        user_id (str): 사용자 ID
         symbol (str): 심볼
 
     Returns:
@@ -312,9 +312,9 @@ async def increment_margin_retry_count(user_id: str, symbol: str) -> int:
 
 async def reset_margin_retry_count(user_id: str, symbol: str) -> None:
     """자금 부족으로 인한 재시도 횟수를 초기화합니다.
-    
+
     Args:
-        user_id (int): 사용자 ID
+        user_id (str): 사용자 ID
         symbol (str): 심볼
     """
 
@@ -337,10 +337,92 @@ async def try_send_order(
     max_retries: int = 15,  # 최대 재시도 횟수를 15회로 변경
     retry_count: int = 0   # 현재 재시도 횟수 (불필요하지만 기존 호환성을 위해 유지)
 ) -> OrderStatus:
+    logger.info(f"🎯 try_send_order 호출: user_id={user_id}, symbol={symbol}, side={side}, size={size}")
+
+    # ===== 🎯 Executor 패턴 통합: 실행 모드에 따라 적절한 executor 선택 =====
+    from HYPERRSI.src.trading.executors.factory import ExecutorFactory
+
+    try:
+        # ExecutorFactory를 통해 user settings + symbol 기반으로 executor 생성
+        executor = await ExecutorFactory.get_executor(user_id, symbol)
+        logger.info(f"✅ [{user_id}][{symbol}] Executor 생성 완료: {executor.__class__.__name__}")
+    except Exception as e:
+        logger.error(f"❌ [{user_id}][{symbol}] Executor 생성 실패: {str(e)}")
+        # Executor 생성 실패 시 기본값으로 API Direct 모드 사용
+        from HYPERRSI.src.api.dependencies import get_user_api_keys
+        from HYPERRSI.src.trading.executors.api_direct_executor import APIDirectExecutor
+        api_keys = await get_user_api_keys(user_id)
+        executor = APIDirectExecutor(user_id=user_id, api_keys=api_keys)
+        logger.warning(f"⚠️ [{user_id}][{symbol}] 기본 API Direct Executor 사용")
+
+    # 트레이딩 상태 체크 - 중지되었으면 주문하지 않음
+    redis = await get_redis_client()
+    trading_status = await redis.get(f"user:{user_id}:trading:status")
+    if isinstance(trading_status, bytes):
+        trading_status = trading_status.decode('utf-8')
+
+    if trading_status != "running":
+        logger.info(f"[{user_id}] 트레이딩이 중지된 상태입니다. 주문을 생성하지 않습니다. (status: {trading_status})")
+        now = datetime.datetime.now()
+        return OrderStatus(
+            order_id="trading_stopped",
+            symbol=symbol,
+            side=side,
+            size=size,
+            filled_size=0.0,
+            status='rejected',
+            avg_fill_price=price or 0.0,
+            create_time=now,
+            update_time=now,
+            order_type=order_type,
+            posSide=direction or "net",
+        )
+
+    # ===== 🔍 디버깅: 실제 계좌 잔고 조회 =====
+    try:
+        # Exchange 객체 준비 (잔고 조회용)
+        need_close_for_balance = False
+        balance_exchange = exchange
+        if balance_exchange is None:
+            api_keys = await get_user_api_keys(user_id)
+            from HYPERRSI.src.trading.services.order_wrapper import OrderWrapper
+            balance_exchange = OrderWrapper(str(user_id), api_keys)
+            need_close_for_balance = True
+
+        # 계좌 잔고 조회
+        balance = await balance_exchange.fetch_balance()
+        usdt_balance = balance.get('USDT', {})
+        free_usdt = safe_float(usdt_balance.get('free', 0))
+        total_usdt = safe_float(usdt_balance.get('total', 0))
+
+        # 현재가 조회
+        current_price = await get_current_price(symbol)
+
+        # 필요한 마진 계산 (대략적인 값)
+        required_margin = (size * current_price) / (leverage or 1.0)
+
+        logger.info(f"💰 [{user_id}] 계좌 잔고 상태:")
+        logger.info(f"   📊 총 USDT: {total_usdt:.2f}")
+        logger.info(f"   💵 사용 가능 USDT: {free_usdt:.2f}")
+        logger.info(f"   📈 {symbol} 현재가: ${current_price:,.2f}")
+        logger.info(f"   🎯 주문 수량: {size} 계약")
+        logger.info(f"   ⚖️  레버리지: {leverage}x")
+        logger.info(f"   💎 필요 마진 (예상): {required_margin:.2f} USDT")
+        logger.info(f"   ✅ 마진 충분 여부: {'예' if free_usdt >= required_margin else '아니오'}")
+
+        # Exchange 닫기
+        if need_close_for_balance and balance_exchange is not None:
+            await balance_exchange.close()
+
+    except Exception as e:
+        logger.warning(f"[{user_id}] 계좌 잔고 조회 실패: {str(e)}")
+
     # 자금 부족 차단 상태 확인
     is_blocked: bool = await check_margin_block(user_id, symbol)
     if is_blocked:
-        block_msg: str = f"⛔️ 자금 부족으로 인해 현재 {symbol} 거래가 차단되어 있습니다."
+        # 재시도 횟수 확인
+        current_retry_count = await get_margin_retry_count(user_id, symbol)
+        block_msg: str = f"⛔️ 자금 부족으로 인해 현재 {symbol} 거래가 차단되어 있습니다. (재시도: {current_retry_count}/{max_retries})"
         await send_telegram_message(block_msg, user_id, debug=True)
         logger.warning(f"[{user_id}] {block_msg}")
         now: datetime.datetime = datetime.datetime.now()
@@ -427,43 +509,57 @@ async def try_send_order(
         # Redis 클라이언트 초기화
         redis = await get_redis_client()
 
-        # 실제 실행
+        # 실제 실행 - 계약 사양 정보 조회 (모든 경우에 필요)
         specs_json: Any = await redis.get("symbol_info:contract_specifications")
         tick_size: float = 0.001
         current_price: float = 0.0
-        
+
+        # 계약 정보가 없으면 account API로 조회
+        if not specs_json:
+            logger.info(f"계약 사양 정보가 없어 새로 조회합니다: {symbol}")
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{API_BASE_URL}/account/contract-specs",
+                    params={
+                        "user_id": str(user_id),
+                        "force_update": True
+                    }
+                )
+                if response.status_code != 200:
+                    raise ValueError("계약 사양 정보 조회 실패")
+
+                specs_json = await redis.get(f"symbol_info:contract_specifications")
+                if not specs_json:
+                    raise ValueError(f"계약 사양 정보를 찾을 수 없습니다: {symbol}")
+
+        # 계약 정보 파싱
+        specs_dict: Dict[str, Any] = json.loads(specs_json) if specs_json else {}
+        contract_info: Optional[Dict[str, Any]] = specs_dict.get(symbol)
+
+        if not contract_info:
+            raise ValueError(f"해당 심볼의 계약 정보가 없습니다: {symbol}")
+
+        # 심볼별 최소 수량 가져오기
+        min_size: float = float(contract_info.get('minSize', 0.01))
+        logger.info(f"[{user_id}] {symbol} 최소 수량: {min_size}")
+
+        # 계약 사양 검증 로그 (디버깅용)
+        logger.info(f"[{user_id}] {symbol} 계약 사양 검증:")
+        logger.info(f"  - contractSize: {contract_info.get('contractSize')}")
+        logger.info(f"  - minSize: {min_size}")
+        logger.info(f"  - tickSize: {contract_info.get('tickSize')}")
+        logger.info(f"  - 요청 수량: {size}")
+        logger.info(f"  - is_contract_size: {is_contract_size}")
+
         contracts_amount: str = ""
         if not is_contract_size: #기본적으로 is_contract_size가 True임. 이건, 금액으로 들어올 때만의 분기.
-            # 계약 정보가 없으면 account API로 조회
-            if not specs_json:
-                logger.info(f"계약 사양 정보가 없어 새로 조회합니다: {symbol}")
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(
-                        f"{API_BASE_URL}/account/contract-specs",
-                        params={
-                            "user_id": str(user_id),
-                            "force_update": True
-                        }
-            )
-                    if response.status_code != 200:
-                        raise ValueError("계약 사양 정보 조회 실패")
-
-                    specs_json = await redis.get(f"symbol_info:contract_specifications")
-                    if not specs_json:
-                        raise ValueError(f"계약 사양 정보를 찾을 수 없습니다: {symbol}")
-            specs_dict: Dict[str, Any] = json.loads(specs_json) if specs_json else {}
-            contract_info: Optional[Dict[str, Any]] = specs_dict.get(symbol)
-
-            if not contract_info:
-                raise ValueError(f"해당 심볼의 계약 정보가 없습니다: {symbol}")
-
+            # 금액으로 전달된 경우 계약 수량으로 변환
             current_price = await get_current_price(symbol)
             contract_size: float = float(contract_info.get('contractSize', 0))
             tick_size = float(contract_info.get('tickSize', 0.001))
             size = round(size / contract_size) * contract_size
             position_qty: float = (size / contract_size)
             contracts_amount_float: float = (size * (leverage or 1.0)) / (contract_size * current_price)
-            min_size: float = float(contract_info.get('minSize', 1))
             #print("contracts: ", contracts)
             contracts_amount_float = max(min_size, safe_float(contracts_amount_float))
             contracts_amount = "{:.8f}".format(contracts_amount_float)  # 소수점 8자리로 형식화
@@ -474,56 +570,94 @@ async def try_send_order(
             #print(f"DEBUG: 이미 계약 수량으로 전달된 경우: {size}")
             raw_amount = float(size)
 
-            # Validate minimum amount BEFORE rounding (OKX BTC minimum is 0.01)
-            MIN_BTC_AMOUNT = 0.01
-            if raw_amount < MIN_BTC_AMOUNT:
+            # Validate minimum amount BEFORE rounding - use symbol-specific minimum
+            if raw_amount < min_size:
                 # Get current price for minimum investment calculation
                 if current_price == 0.0:
                     current_price = await get_current_price(symbol)
+                    logger.info(f"[{user_id}] {symbol} 현재 가격 조회: ${current_price:,.2f}")
 
-                min_investment = MIN_BTC_AMOUNT * current_price / (leverage or 1.0)
-                error_msg = f"주문 수량이 최소 요구량보다 작습니다 (요청: {raw_amount}, 최소: {MIN_BTC_AMOUNT})"
+                min_investment = min_size * current_price / (leverage or 1.0)
+                error_msg = f"주문 수량이 최소 요구량보다 작습니다 (요청: {str(raw_amount)}, 최소: {str(min_size)} {symbol})"
                 logger.error(f"[{user_id}] {error_msg}")
-                await send_telegram_message(
-                    f"⚠️ {error_msg}\n"
-                    f"💡 현재 가격: ${current_price:,.2f}\n"
-                    f"💡 레버리지: {leverage}x\n"
-                    f"💡 필요한 최소 투자금: {min_investment:.2f} USDT",
-                    user_id,
-                    debug=True
+                print(error_msg)
+
+                # 중복 체크용 핵심 메시지 (동적 값 제외 - 5분 간격 제한)
+                from shared.notifications.telegram import should_send_error_notification
+                dedup_key_msg = f"주문 수량이 최소 요구량보다 작습니다 - {symbol}"
+
+                # Redis 중복 체크
+                redis_for_dedup = await get_redis_client()
+                should_send = await should_send_error_notification(
+                    redis_for_dedup,
+                    str(user_id),
+                    dedup_key_msg,
+                    ttl_seconds=300  # 5분 간격
                 )
+
+                if should_send:
+                    # 중복이 아닐 때만 텔레그램 메시지 전송
+                    message_to_send = (
+                        f"⚠️ {error_msg}\n"
+                        f"📊 심볼: {symbol}\n"
+                        f"💡 {symbol} 현재 가격: ${current_price:,.2f}\n"
+                        f"💡 레버리지: {leverage}x\n"
+                        f"💡 필요한 최소 투자금: {min_investment:.2f} USDT"
+                    )
+                    logger.info(f"[{user_id}] 📤 텔레그램 메시지 전송: {message_to_send[:100]}...")
+                    await send_telegram_message(
+                        message_to_send,
+                        user_id,
+                        debug=True
+                    )
+                else:
+                    logger.info(f"[{user_id}] 중복 에러 메시지 전송 건너뜀 (5분 이내): {dedup_key_msg}")
+
+                print(error_msg)
                 raise ValueError(error_msg)
 
-            # OKX precision requirements - round to appropriate precision
-            # BTC requires 0.01 minimum precision (2 decimal places)
-            # Use Decimal for precise rounding
-            amount_decimal = Decimal(str(raw_amount))
+            # OKX precision requirements - format to appropriate precision
+            # NOTE: 이미 market_data_service.py에서 minSize 단위로 처리했으므로
+            # 추가 반올림 없이 정밀도만 맞춤 (이중 반올림 방지)
 
-            # Round down to 2 decimal places for BTC (0.01 precision)
-            # This ensures we don't exceed available balance due to rounding up
-            rounded_amount = float(amount_decimal.quantize(Decimal('0.01'), rounding=ROUND_DOWN))
+            # minSize 기반 정밀도 계산 (예: 0.01 → 2, 0.001 → 3, 1 → 0)
+            if min_size >= 1:
+                decimal_places = 0
+            else:
+                min_size_str = str(min_size)
+                if '.' in min_size_str:
+                    decimal_places = len(min_size_str.split('.')[1])
+                else:
+                    decimal_places = 0
 
-            contracts_amount = "{:.2f}".format(rounded_amount)
+            # 정밀도 포맷팅 (반올림 없음)
+            contracts_amount = f"{raw_amount:.{decimal_places}f}"
 
-        # 포지션 모드 조회 (OKX는 기본적으로 hedge 모드 사용)
-        position_mode: Dict[str, Any] = {'hedged': True, 'marginMode': 'cross'}
+        # 최종 계산 결과 로그
+        logger.info(f"[{user_id}] {symbol} 최종 주문 수량: {contracts_amount}")
+
+        # 포지션 모드 조회 (OKX account config API 사용)
+        position_mode: Dict[str, Any] = {'hedged': False, 'marginMode': 'cross'}  # 기본값: Net Mode
         try:
-            # CCXT OKX에서 fetch_position_mode는 표준 메서드가 아니므로
-            # 포지션 정보에서 확인하거나 기본값 사용
-            positions = await exchange.fetch_positions([symbol])  # type: ignore
-            if positions and len(positions) > 0:
-                pos_info = positions[0].get('info', {})
-                pos_side = pos_info.get('posSide', 'long')
-                mgn_mode = pos_info.get('mgnMode', 'cross')
-                # posSide가 'long' 또는 'short'면 hedge 모드, 'net'이면 one-way 모드
+            # OKX API: GET /api/v5/account/config
+            account_config = await exchange.privateGetAccountConfig()
+
+            # Response structure: {"code":"0","data":[{"posMode":"long_short_mode",...}],"msg":""}
+            if account_config and 'data' in account_config and len(account_config['data']) > 0:
+                pos_mode = account_config['data'][0].get('posMode', 'net_mode')
+                mgn_mode = account_config['data'][0].get('acctLv', '2')  # 1=simple, 2=single-currency, 3=multi-currency, 4=portfolio
+
+                # posMode가 'long_short_mode'면 hedge 모드, 'net_mode'면 one-way 모드
                 position_mode = {
-                    'hedged': pos_side in ('long', 'short'),
-                    'marginMode': mgn_mode
+                    'hedged': pos_mode == 'long_short_mode',
+                    'marginMode': 'isolated' if mgn_mode == '1' else 'cross'
                 }
-                logger.debug(f"Position mode from API: {position_mode}")
+                logger.info(f"[{user_id}] 계정 포지션 모드: pos_mode={pos_mode}, hedged={position_mode['hedged']}, marginMode={position_mode['marginMode']}")
+            else:
+                logger.warning(f"[{user_id}] 포지션 모드 조회 실패, 기본값 사용: Net Mode")
         except Exception as e:
-            logger.debug(f"position_mode 조회 실패 (기본값 사용): {e}")
-            position_mode = {'hedged': True, 'marginMode': 'cross'}
+            logger.warning(f"[{user_id}] position_mode 조회 실패 (기본값 사용: Net Mode): {e}")
+            position_mode = {'hedged': False, 'marginMode': 'cross'}
 
         price_str: Optional[str] = None
         trigger_price_str: Optional[str] = None
@@ -532,7 +666,7 @@ async def try_send_order(
         if trigger_price:
             trigger_price_str = "{:.4f}".format(safe_float(trigger_price))
 
-        is_hedge_mode: bool = bool(position_mode.get('hedged', True)) #테스트용으로 True
+        is_hedge_mode: bool = bool(position_mode.get('hedged', False))  # 기본값: Net Mode
         margin_mode: str = str(position_mode.get('marginMode', 'cross'))
         #sprint(f"is_hedge_mode: {is_hedge_mode}")
         order_params: Dict[str, Any] = {
@@ -627,15 +761,47 @@ async def try_send_order(
             # 주문 생성 전 로깅
             print(f"💛 주문 생성 시도 -  [계약수: {contracts_amount}], 심볼: {symbol}, 방향: {side},, 가격: {price_str}, 타입: {order_type}")
             #logger.info(f"주문 파라미터: {order_params}")
+
+            # 내부 order_type을 CCXT 호환 타입으로 매핑
+            ccxt_order_type = order_type
+            if order_type == 'take_profit':
+                ccxt_order_type = 'limit'  # TP는 limit order로 생성
+            elif order_type == 'stop_loss':
+                ccxt_order_type = 'market'  # SL은 market order로 생성
+
             try:
-                order_result = await exchange.create_order(  # type: ignore
+                # ===== 🚀 Executor 패턴을 통한 주문 실행 =====
+                # Executor가 API Direct 또는 Signal Bot 모드를 자동으로 처리
+                executor_result = await executor.create_order(
                     symbol=symbol,
-                    type=order_type,  # CCXT requires 'type' parameter (market, limit, etc.)
                     side=side,
-                    amount=safe_float(contracts_amount),
+                    size=safe_float(contracts_amount),
+                    leverage=leverage,
+                    order_type=ccxt_order_type,  # CCXT 호환 타입 사용
                     price=safe_float(price_str) if price_str else None,
-                    params=order_params
+                    trigger_price=trigger_price,
+                    **order_params  # 추가 파라미터 전달 (posSide, tdMode 등)
                 )
+
+                # OrderResult를 기존 코드와 호환되는 딕셔너리 형태로 변환
+                order_result = {
+                    'id': executor_result['order_id'],
+                    'ordId': executor_result['order_id'],
+                    'symbol': executor_result['symbol'],
+                    'side': executor_result['side'],
+                    'amount': executor_result['size'],
+                    'price': executor_result.get('price'),
+                    'status': executor_result['status'],
+                    'timestamp': executor_result['timestamp'],
+                    # OKX 호환성을 위한 info 필드 추가
+                    'info': {
+                        'sCode': '0',  # 성공 코드
+                        'sMsg': 'Success',
+                        'ordId': executor_result['order_id'],
+                    }
+                }
+
+                logger.info(f"✅ [{user_id}] 주문 생성 성공 via {executor.__class__.__name__}: {executor_result['order_id']}")
             except Exception as e:
                 traceback.print_exc()
                 error_str: str = str(e)
@@ -644,18 +810,36 @@ async def try_send_order(
                 if "Insufficient USDT margin" in error_str or "Insufficient" in error_str:
                     # Redis에 재시도 횟수 증가
                     current_retry_count = await increment_margin_retry_count(user_id, symbol)
-                    
+
+                    # 🔍 디버깅: 실제 잔고 다시 조회
+                    try:
+                        balance = await exchange.fetch_balance() if exchange else {}
+                        usdt_balance = balance.get('USDT', {})
+                        free_usdt = safe_float(usdt_balance.get('free', 0))
+                        total_usdt = safe_float(usdt_balance.get('total', 0))
+                        used_usdt = safe_float(usdt_balance.get('used', 0))
+
+                        logger.error(f"🔴 [{user_id}] 자금 부족 에러 발생 (재시도: {current_retry_count}/15):")
+                        logger.error(f"   💰 총 USDT: {total_usdt:.2f}")
+                        logger.error(f"   ✅ 사용 가능: {free_usdt:.2f}")
+                        logger.error(f"   🔒 사용 중: {used_usdt:.2f}")
+                        logger.error(f"   📊 주문 시도 수량: {contracts_amount} 계약")
+                        logger.error(f"   📈 심볼: {symbol}")
+                        logger.error(f"   ⚖️  레버리지: {leverage}x")
+                    except Exception as balance_error:
+                        logger.error(f"[{user_id}] 자금 부족 에러 발생 시 잔고 재조회 실패: {str(balance_error)}")
+
                     # 자금 부족 알림을 제한 (처음, 5회, 10회, 15회에만 알림)
                     should_notify: bool = current_retry_count in [1, 5, 10, 15]
 
                     if should_notify:
                         insufficient_msg: str = ""
                         if current_retry_count == 1:
-                            insufficient_msg = f"💰 자금 부족: 계좌에 USDT 마진이 부족합니다.\n{symbol} 주문 재시도 중..."
+                            insufficient_msg = f"💰 자금 부족: 계좌에 USDT 마진이 부족합니다.\n{symbol} 주문 재시도 중...\n사용 가능: {free_usdt:.2f} USDT"
                         elif current_retry_count == 15:
-                            insufficient_msg = f"⚠️ 자금 부족이 15회 지속되어 {symbol} 거래를 10분간 일시 중단합니다."
+                            insufficient_msg = f"⚠️ 자금 부족이 15회 지속되어 {symbol} 거래를 10분간 일시 중단합니다.\n사용 가능: {free_usdt:.2f} USDT"
                         else:
-                            insufficient_msg = f"💰 자금 부족 지속 중 ({current_retry_count}/15회)"
+                            insufficient_msg = f"💰 자금 부족 지속 중 ({current_retry_count}/15회)\n사용 가능: {free_usdt:.2f} USDT"
 
                         await send_telegram_message(insufficient_msg, user_id, debug=True)
                     
@@ -721,7 +905,8 @@ async def try_send_order(
         except Exception as e:
             logger.error(f"주문 실패: {str(e)}")
             traceback.print_exc()
-            raise ValueError(f"주문 생성 실패: {str(e)}")
+            # 원본 예외를 그대로 전달하여 중첩된 에러 메시지 방지
+            raise
             
         if order_result is None:
             raise ValueError("주문 생성 실패: order_result is None")
@@ -756,6 +941,11 @@ async def try_send_order(
                 )
                 return order_status
             else:
+                # Market order의 경우 현재가 가져오기 (entry_price 0.0 방지)
+                if order_type == 'market' and current_price == 0.0:
+                    current_price = await get_current_price(symbol)
+                    logger.info(f"[{user_id}] Market order 체결가 설정: ${current_price:,.2f}")
+
                 order_status = OrderStatus(
                     order_id=order_id,
                     symbol=symbol,
@@ -844,6 +1034,14 @@ async def try_send_order(
         traceback.print_exc()
         raise
     finally:
+        # Executor 리소스 정리
+        try:
+            if executor is not None:
+                await executor.close()
+                logger.debug(f"✅ [{user_id}] Executor 리소스 정리 완료")
+        except Exception as cleanup_error:
+            logger.warning(f"⚠️ [{user_id}] Executor 정리 중 오류: {str(cleanup_error)}")
+
         # 새로 생성한 exchange만 닫기
         if need_close and exchange is not None:
             await exchange.close()

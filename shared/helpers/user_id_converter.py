@@ -6,6 +6,8 @@
 import logging
 from typing import Any, Dict, List, Optional, cast
 
+from shared.database.redis_patterns import scan_keys_pattern
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,15 +59,15 @@ async def get_telegram_id_from_uid(redis_client: Any, okx_uid: str, timescale_se
 
     okx_uid_str = str(okx_uid)
 
-    # --- 1. 주요 방식 (기존 로직: 키 스캔) ---
+    # --- 1. 주요 방식 (SCAN 사용: Redis 블로킹 방지) ---
+    # ✅ SCAN 사용: 프로덕션 안전성 보장, 대량 키 처리 가능
     logger.info(f"Attempting to find Telegram ID for OKX UID {okx_uid_str} using primary method (scan user:*:okx_uid)")
     try:
         pattern = "user:*:okx_uid"
-        keys = await redis_client.keys(pattern)
-        logger.debug(f"Scan found {len(keys)} keys matching pattern '{pattern}'")
-
         valid_telegram_ids: List[Dict[str, Any]] = []
 
+        # SCAN으로 키 수집 (비동기)
+        keys = await scan_keys_pattern(pattern, redis=redis_client)
         for key in keys:
             key_str = key.decode() if isinstance(key, bytes) else str(key)
             stored_uid = await redis_client.get(key)
@@ -105,6 +107,8 @@ async def get_telegram_id_from_uid(redis_client: Any, okx_uid: str, timescale_se
                         })
                 else:
                     logger.warning(f"Key '{key_str}' matched UID but has unexpected format.")
+
+        logger.debug(f"SCAN found {len(valid_telegram_ids)} valid telegram IDs matching OKX UID '{okx_uid_str}'")
 
         if valid_telegram_ids:
             valid_telegram_ids.sort(key=lambda x: cast(int, x["last_activity"]), reverse=True)

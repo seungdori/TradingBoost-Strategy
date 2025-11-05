@@ -30,8 +30,10 @@ from HYPERRSI.src.api.routes import (
 # Infrastructure imports
 from HYPERRSI.src.core.error_handler import log_error
 from shared.config import settings as app_settings
-from shared.database.redis import close_redis, init_redis
+from shared.database.redis import close_redis, get_redis, init_redis
 from shared.database.session import close_db, init_db
+from shared.database.init_error_db import initialize_error_database
+from shared.database.error_db_session import close_error_db
 from shared.docs.openapi import attach_standard_error_examples
 from shared.errors import register_exception_handlers
 from shared.errors.middleware import RequestIDMiddleware
@@ -141,6 +143,55 @@ def handle_signals():
     # Ctrl+C (SIGINT)에만 반응하도록 설정
     loop.add_signal_handler(signal.SIGINT, sigint_handler)
 
+
+async def cleanup_redis_on_startup():
+    """
+    서버 시작 시 Redis에 남아있는 오래된 태스크 상태 초기화
+
+    서버가 비정상 종료되었을 때 Redis에 남은 task_running, lock 키들을
+    정리하여 정상적인 재시작을 보장합니다.
+    """
+    try:
+        redis = await get_redis()
+
+        # task_running 패턴 키 삭제
+        pattern = "user:*:task_running"
+        cursor = 0
+        task_keys = []
+
+        while True:
+            cursor, keys = await redis.scan(cursor, match=pattern, count=100)
+            task_keys.extend(keys)
+            if cursor == 0:
+                break
+
+        if task_keys:
+            await redis.delete(*task_keys)
+            logger.info(f"✅ 서버 시작: {len(task_keys)}개의 task_running 키 삭제")
+
+        # lock 패턴 키 삭제
+        pattern = "lock:user:*"
+        cursor = 0
+        lock_keys = []
+
+        while True:
+            cursor, keys = await redis.scan(cursor, match=pattern, count=100)
+            lock_keys.extend(keys)
+            if cursor == 0:
+                break
+
+        if lock_keys:
+            await redis.delete(*lock_keys)
+            logger.info(f"✅ 서버 시작: {len(lock_keys)}개의 lock 키 삭제")
+
+        if not task_keys and not lock_keys:
+            logger.info("✅ 서버 시작: 정리할 태스크 상태 없음")
+
+    except Exception as e:
+        logger.error(f"❌ Redis 초기화 중 오류: {e}", exc_info=True)
+        # 초기화 실패해도 서버는 계속 시작 (critical하지 않음)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan with new infrastructure integration"""
@@ -160,6 +211,17 @@ async def lifespan(app: FastAPI):
         await init_db()
         await init_redis()
 
+        # Clean up stale Redis task states (from abnormal shutdown)
+        await cleanup_redis_on_startup()
+
+        # Initialize error database (separate pool)
+        try:
+            await initialize_error_database()
+            logger_new.info("Error database initialized (separate pool)")
+        except Exception as e:
+            logger.warning(f"Error database initialization failed (continuing without it): {e}")
+            # Continue even if error DB fails - it's not critical for main operations
+
         logger_new.info("HYPERRSI application startup complete")
         logger.info("Starting application...")
 
@@ -175,7 +237,8 @@ async def lifespan(app: FastAPI):
             # Cleanup infrastructure connections with timeout and shield from cancellation
             cleanup_tasks = [
                 asyncio.create_task(close_db(), name="close_db"),
-                asyncio.create_task(close_redis(), name="close_redis")
+                asyncio.create_task(close_redis(), name="close_redis"),
+                asyncio.create_task(close_error_db(), name="close_error_db")
             ]
 
             # Wait for cleanup with timeout

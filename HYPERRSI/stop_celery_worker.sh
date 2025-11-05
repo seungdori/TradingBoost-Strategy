@@ -5,6 +5,7 @@ SELF_PID=$$
 PARENT_PID=$PPID
 SCRIPT_PATH=$(realpath "$0")
 SCRIPT_NAME=$(basename "$0")
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Celery 프로세스 종료 스크립트 (강화 버전)
 echo "============================================="
@@ -71,7 +72,7 @@ if [ -z "$remaining_pids" ]; then
 
     # 임시 파일 정리
     echo "🧹 Celery 임시 파일 정리 중..."
-    rm -f celerybeat.pid celerybeat-schedule.db 2>/dev/null || true
+    rm -f "$SCRIPT_DIR/celerybeat.pid" "$SCRIPT_DIR/celerybeat-schedule.db" "$SCRIPT_DIR/.celery_pids" 2>/dev/null || true
 
     echo "============================================="
     echo "🏁 Celery 종료 프로세스 완료!"
@@ -144,8 +145,7 @@ fi
 
 # 단계 6: 피드 파일 정리
 echo "🧹 Celery 임시 파일 정리 중..."
-rm -f celerybeat.pid celerybeat-schedule.db 2>/dev/null || true
-rm -f .celery_pids 2>/dev/null || true
+rm -f "$SCRIPT_DIR/celerybeat.pid" "$SCRIPT_DIR/celerybeat-schedule.db" "$SCRIPT_DIR/.celery_pids" 2>/dev/null || true
 
 echo "============================================="
 echo "🏁 Celery 종료 프로세스 완료!"

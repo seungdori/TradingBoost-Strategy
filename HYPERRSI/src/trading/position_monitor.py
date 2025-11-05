@@ -10,6 +10,8 @@ from celery import shared_task
 from HYPERRSI.src.trading.models import Position, PositionState
 from HYPERRSI.src.trading.trading_service import TradingService
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_migration import get_redis_context
+from shared.database.redis_patterns import RedisTimeout
 
   # 비동기 Redis 클라이언트
 
@@ -41,8 +43,11 @@ async def subscribe_order_updates_event(
     - 주기적으로(짧은 딜레이) 현재 주문 상태도 재확인하여 최종 PositionState를 업데이트합니다.
     """
     channel = f"order_updates:{user_id}:{position.symbol}"
-    pubsub = get_redis_client().pubsub()
-    await pubsub.subscribe(channel)
+    # MIGRATED: Using get_redis_context() with SLOW_OPERATION for PubSub
+    # PubSub maintains its own connection, so we get the client and create pubsub from it
+    async with get_redis_context(user_id=user_id, timeout=RedisTimeout.SLOW_OPERATION) as redis:
+        pubsub = redis.pubsub()
+        await pubsub.subscribe(channel)
     logger.info(f"Subscribed to channel: {channel}")
     
     pos_state = PositionState(symbol=position.symbol, side=position.side)

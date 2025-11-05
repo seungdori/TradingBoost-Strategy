@@ -39,7 +39,7 @@ async def check_margin_block(user_id: str, symbol: str) -> bool:
     """사용자의 특정 심볼에 대한 자금 부족 차단 상태를 확인합니다.
 
     Args:
-        user_id (int): 사용자 ID
+        user_id (str): 사용자 ID
         symbol (str): 심볼
 
     Returns:
@@ -383,7 +383,7 @@ async def handle_no_position(
 
             should_check_trend = settings.get('use_trend_logic', True)
             trend_condition = (current_state != 2) if should_check_trend else True
-            print(f"[{user_id}] 숏 진입 조건 - is_overbought: {rsi_signals['is_overbought']}, trend_condition: {trend_condition}, current_state: {current_state}")
+            print(f"[{user_id}] 숏 진입 조건1 - is_overbought: {rsi_signals['is_overbought']}, trend_condition: {trend_condition}, current_state: {current_state}")
             if rsi_signals['is_overbought'] and trend_condition:
                 try:
                     print("2번")

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ from shared.constants.default_settings import (
     SETTINGS_CONSTRAINTS,
 )
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_patterns import redis_context, RedisTimeout
 
 router = APIRouter(prefix="/settings", tags=["User Settings"])
 redis_service = RedisService()
@@ -38,16 +40,39 @@ async def get_timescale_user(identifier: str):
 
 class SettingsUpdateRequest(BaseModel):
     settings: Dict[str, Any] = Field(..., description="사용자 설정 업데이트")
-    
+
     model_config = {
         "json_schema_extra": {
-            "example": {
-                "settings": {
-                    "leverage": 10,
-                    "direction": "롱숏",
-                    "tp1_value": 2.0
+            "examples": [
+                {
+                    "name": "기본 설정 업데이트",
+                    "value": {
+                        "settings": {
+                            "leverage": 10,
+                            "direction": "롱숏",
+                            "tp1_value": 2.0
+                        }
+                    }
+                },
+                {
+                    "name": "Signal Bot 모드 활성화",
+                    "value": {
+                        "settings": {
+                            "execution_mode": "signal_bot",
+                            "signal_bot_token": "your_okx_signal_bot_token_here",
+                            "signal_bot_webhook_url": "https://www.okx.com/priapi/v5/trading/bot/signal"
+                        }
+                    }
+                },
+                {
+                    "name": "API Direct 모드로 전환",
+                    "value": {
+                        "settings": {
+                            "execution_mode": "api_direct"
+                        }
+                    }
                 }
-            }
+            ]
         }
     }
 
@@ -74,8 +99,9 @@ class SettingsResponse(BaseModel):
 def validate_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     """설정값 유효성 검사"""
     validated_settings = {}
-    
+
     for key, value in settings.items():
+        # 숫자 범위 제약 검사
         if key in SETTINGS_CONSTRAINTS:
             constraints = SETTINGS_CONSTRAINTS[key]
             if isinstance(value, (int, float)):
@@ -84,8 +110,62 @@ def validate_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
                         status_code=400,
                         detail=f"{key} 값은 {constraints['min']}에서 {constraints['max']} 사이여야 합니다."
                     )
+
+        # ===== 🎯 Signal Bot 설정 유효성 검사 =====
+        # execution_mode 검증
+        if key == "execution_mode":
+            if value not in ("api_direct", "signal_bot"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"execution_mode는 'api_direct' 또는 'signal_bot'만 허용됩니다. 입력값: {value}"
+                )
+
+        # Signal Bot 모드일 때 필수 필드 검증
+        if key == "execution_mode" and value == "signal_bot":
+            # signal_bot_token 필수
+            if "signal_bot_token" in settings and not settings["signal_bot_token"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Signal Bot 모드를 사용하려면 signal_bot_token이 필요합니다."
+                )
+            # signal_bot_webhook_url 필수
+            if "signal_bot_webhook_url" in settings and not settings["signal_bot_webhook_url"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Signal Bot 모드를 사용하려면 signal_bot_webhook_url이 필요합니다."
+                )
+
+        # symbol_execution_modes 검증
+        if key == "symbol_execution_modes":
+            if not isinstance(value, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail="symbol_execution_modes는 딕셔너리 형태여야 합니다. 예: {'BTC-USDT-SWAP': 'signal_bot'}"
+                )
+
+            # 각 심볼별 실행 모드 값 검증
+            for symbol, mode in value.items():
+                if mode not in ("api_direct", "signal_bot"):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"symbol_execution_modes[{symbol}]의 값은 'api_direct' 또는 'signal_bot'만 허용됩니다. 입력값: {mode}"
+                    )
+
+                # 특정 심볼이 signal_bot 모드를 사용하는 경우 필수 필드 검증
+                if mode == "signal_bot":
+                    if "signal_bot_token" not in settings or not settings.get("signal_bot_token"):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"심볼 {symbol}이 Signal Bot 모드를 사용하려면 signal_bot_token이 필요합니다."
+                        )
+                    if "signal_bot_webhook_url" not in settings or not settings.get("signal_bot_webhook_url"):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"심볼 {symbol}이 Signal Bot 모드를 사용하려면 signal_bot_webhook_url이 필요합니다."
+                        )
+
         validated_settings[key] = value
-    
+
     return validated_settings
 
 
@@ -218,40 +298,53 @@ GET /settings/1709556958
 )
 async def get_settings(user_id: str):
     try:
-        # 사용자 존재 여부 확인
-        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
-        
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 사용자 존재 여부 확인
+            api_keys = await asyncio.wait_for(
+                redis.hgetall(f"user:{user_id}:api:keys"),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
         if not api_keys:
             # 사용자가 없는 경우, TimescaleDB에서 정보 가져오기
             timescale_api_keys = await get_api_keys_from_timescale(user_id)
-            
+
             if timescale_api_keys:
                 # TimescaleDB에서 가져온 API 키로 사용자 생성
                 await ApiKeyService.set_user_api_keys(
-                    str(user_id), 
-                    timescale_api_keys['api_key'], 
-                    timescale_api_keys['api_secret'], 
+                    str(user_id),
+                    timescale_api_keys['api_key'],
+                    timescale_api_keys['api_secret'],
                     timescale_api_keys['passphrase']
                 )
-                
+
                 # 생성 후 API 키 다시 조회
-                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                    api_keys = await asyncio.wait_for(
+                        redis.hgetall(f"user:{user_id}:api:keys"),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
             else:
                 # TimescaleDB에도 사용자 정보가 없는 경우 기본값으로 생성
                 default_api_key = "default_api_key"
                 default_api_secret = "default_api_secret"
                 default_passphrase = "default_passphrase"
-                
+
                 # 새 사용자 생성
                 await ApiKeyService.set_user_api_keys(
-                    str(user_id), 
-                    default_api_key, 
-                    default_api_secret, 
+                    str(user_id),
+                    default_api_key,
+                    default_api_secret,
                     default_passphrase
                 )
-                
+
                 # 생성 후 API 키 다시 조회
-                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                    api_keys = await asyncio.wait_for(
+                        redis.hgetall(f"user:{user_id}:api:keys"),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
             
         # 설정 정보 조회
         settings = await redis_service.get_user_settings(str(user_id))
@@ -295,6 +388,24 @@ async def get_settings(user_id: str):
   - **entry_multiplier** (float, optional): 진입 배율 (0.1-10.0)
   - **tp1_value** (float, optional): 1차 익절 목표 (%)
   - **use_cooldown** (boolean, optional): 쿨다운 사용 여부
+  - **execution_mode** (string, optional): 주문 실행 방식 ("api_direct" | "signal_bot", 기본값: "api_direct")
+  - **signal_bot_token** (string, optional): OKX Signal Bot 토큰 (signal_bot 모드 시 필수)
+  - **signal_bot_webhook_url** (string, optional): OKX Signal Bot Webhook URL (signal_bot 모드 시 필수)
+
+## 주문 실행 모드
+
+### API Direct 모드 (기본값)
+- CCXT를 통한 직접 API 호출
+- Market/Limit/Stop 등 다양한 주문 타입 지원
+- TP/SL 주문 사전 등록
+- 기존 방식과 동일
+
+### Signal Bot 모드
+- OKX Signal Bot Webhook 사용
+- Market 주문만 지원 (즉시 체결)
+- TP/SL은 Python 모니터링으로 처리
+- 주문 취소 불필요
+- 설정 시 signal_bot_token과 signal_bot_webhook_url 필수
 
 ## 동작 방식
 
@@ -302,6 +413,8 @@ async def get_settings(user_id: str):
 2. **기존 설정 로드**: 현재 설정 불러오기 또는 기본값 사용
 3. **설정 병합**: 기존 설정 + 새 설정 병합
 4. **유효성 검증**: 설정 제약 조건 확인
+   - execution_mode는 'api_direct' 또는 'signal_bot'만 허용
+   - signal_bot 모드 시 token과 webhook_url 필수
 5. **저장**: Redis에 업데이트된 설정 저장
 6. **응답 반환**: 업데이트된 전체 설정 반환
 
@@ -311,17 +424,31 @@ async def get_settings(user_id: str):
 - **entry_multiplier**: 0.1-10.0
 - **tp1_value, tp2_value, tp3_value**: 0.1-100.0
 - **sl_value**: 0.1-100.0
+- **execution_mode**: 'api_direct' 또는 'signal_bot'
 
 ## 사용 시나리오
 
 - ⚙️ **전략 조정**: 레버리지, 익절/손절 값 변경
 -  **위험 관리**: 손절 비율 업데이트
 -  **성과 최적화**: 진입 배율 조정
+- 🤖 **실행 모드 전환**: Signal Bot ↔ API Direct 전환
 
 ## 예시 URL
 
 ```
 PUT /settings/518796558012178692
+```
+
+## Signal Bot 설정 예시
+
+```json
+{
+  "settings": {
+    "execution_mode": "signal_bot",
+    "signal_bot_token": "your_token_here",
+    "signal_bot_webhook_url": "https://www.okx.com/priapi/v5/trading/bot/signal"
+  }
+}
 ```
 """,
     responses={
@@ -375,39 +502,53 @@ async def update_settings(
     )
 ):
     try:
-        # 사용자 존재 여부 확인
-        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 사용자 존재 여부 확인
+            api_keys = await asyncio.wait_for(
+                redis.hgetall(f"user:{user_id}:api:keys"),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
         if not api_keys:
             # 사용자가 없는 경우, TimescaleDB에서 정보 가져오기
             timescale_api_keys = await get_api_keys_from_timescale(user_id)
-            
+
             if timescale_api_keys:
                 # TimescaleDB에서 가져온 API 키로 사용자 생성
                 await ApiKeyService.set_user_api_keys(
-                    str(user_id), 
-                    timescale_api_keys['api_key'], 
-                    timescale_api_keys['api_secret'], 
+                    str(user_id),
+                    timescale_api_keys['api_key'],
+                    timescale_api_keys['api_secret'],
                     timescale_api_keys['passphrase']
                 )
-                
+
                 # 생성 후 API 키 다시 조회
-                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                    api_keys = await asyncio.wait_for(
+                        redis.hgetall(f"user:{user_id}:api:keys"),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
             else:
                 # TimescaleDB에도 사용자 정보가 없는 경우 기본값으로 생성
                 default_api_key = "default_api_key"
                 default_api_secret = "default_api_secret"
                 default_passphrase = "default_passphrase"
-                
+
                 # 새 사용자 생성
                 await ApiKeyService.set_user_api_keys(
-                    str(user_id), 
-                    default_api_key, 
-                    default_api_secret, 
+                    str(user_id),
+                    default_api_key,
+                    default_api_secret,
                     default_passphrase
                 )
-                
+
                 # 생성 후 API 키 다시 조회
-                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                    api_keys = await asyncio.wait_for(
+                        redis.hgetall(f"user:{user_id}:api:keys"),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
         
         # 기존 설정 가져오기
         current_settings = await redis_service.get_user_settings(str(user_id))
@@ -518,40 +659,54 @@ POST /settings/518796558012178692/reset
 )
 async def reset_settings(user_id: str):
     try:
-        # 사용자 존재 여부 확인
-        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 사용자 존재 여부 확인
+            api_keys = await asyncio.wait_for(
+                redis.hgetall(f"user:{user_id}:api:keys"),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
         if not api_keys:
             # 사용자가 없는 경우, TimescaleDB에서 정보 가져오기
             timescale_api_keys = await get_api_keys_from_timescale(user_id)
-            
+
             if timescale_api_keys:
                 # Timescale에서 가져온 API 키로 사용자 생성
                 await ApiKeyService.set_user_api_keys(
-                    str(user_id), 
-                    timescale_api_keys['api_key'], 
-                    timescale_api_keys['api_secret'], 
+                    str(user_id),
+                    timescale_api_keys['api_key'],
+                    timescale_api_keys['api_secret'],
                     timescale_api_keys['passphrase']
                 )
-                
+
                 # 생성 후 API 키 다시 조회
-                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                    api_keys = await asyncio.wait_for(
+                        redis.hgetall(f"user:{user_id}:api:keys"),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
             else:
                 # TimescaleDB에도 사용자 정보가 없는 경우 기본값으로 생성
                 default_api_key = "default_api_key"
                 default_api_secret = "default_api_secret"
                 default_passphrase = "default_passphrase"
-                
+
                 # 새 사용자 생성
                 await ApiKeyService.set_user_api_keys(
-                    str(user_id), 
-                    default_api_key, 
-                    default_api_secret, 
+                    str(user_id),
+                    default_api_key,
+                    default_api_secret,
                     default_passphrase
                 )
-                
+
                 # 생성 후 API 키 다시 조회
-                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
-        
+                async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                    api_keys = await asyncio.wait_for(
+                        redis.hgetall(f"user:{user_id}:api:keys"),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
+
         # 기본 설정으로 초기화
         default_settings = DEFAULT_PARAMS_SETTINGS.copy()
         await redis_service.set_user_settings(str(user_id), default_settings)
@@ -608,14 +763,24 @@ class DualSideSettingsResponse(BaseModel):
 
 async def get_dual_side_settings(user_id: str) -> Dict[str, Any]:
     """양방향 매매 설정을 조회합니다."""
-    # Redis에서 dual_side 해시 조회
-    settings_key = f"user:{user_id}:dual_side"
-    settings = await get_redis_client().hgetall(settings_key)
-    
+    # Use context manager for proper connection management and timeout protection
+    async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+        # Redis에서 dual_side 해시 조회
+        settings_key = f"user:{user_id}:dual_side"
+        settings = await asyncio.wait_for(
+            redis.hgetall(settings_key),
+            timeout=RedisTimeout.FAST_OPERATION
+        )
+
     if not settings:
         # 기본 설정
         settings = {k: str(v) if isinstance(v, bool) else str(v) for k, v in DEFAULT_DUAL_SIDE_ENTRY_SETTINGS.items()}
-        await get_redis_client().hset(settings_key, mapping=settings)
+
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            await asyncio.wait_for(
+                redis.hset(settings_key, mapping=settings),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
     
     # 문자열 값을 적절한 타입으로 변환
     parsed_settings = {}
@@ -642,7 +807,13 @@ async def save_dual_side_settings(user_id: str, settings: Dict[str, Any]) -> Non
     settings_key = f"user:{user_id}:dual_side"
     # bool 값을 문자열로 변환
     settings_to_save = {k: str(v).lower() if isinstance(v, bool) else str(v) for k, v in settings.items()}
-    await get_redis_client().hset(settings_key, mapping=settings_to_save)
+
+    # Use context manager for proper connection management and timeout protection
+    async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+        await asyncio.wait_for(
+            redis.hset(settings_key, mapping=settings_to_save),
+            timeout=RedisTimeout.FAST_OPERATION
+        )
 
 
 @router.get("/{user_id}/dual_side",
@@ -658,39 +829,53 @@ async def save_dual_side_settings(user_id: str, settings: Dict[str, Any]) -> Non
     })
 async def get_dual_settings(user_id: str):
     try:
-        # 사용자 존재 여부 확인
-        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 사용자 존재 여부 확인
+            api_keys = await asyncio.wait_for(
+                redis.hgetall(f"user:{user_id}:api:keys"),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
         if not api_keys:
             # 사용자가 없는 경우, TimescaleDB에서 정보 가져오기
             timescale_api_keys = await get_api_keys_from_timescale(user_id)
-            
+
             if timescale_api_keys:
                 # Timescale에서 가져온 API 키로 사용자 생성
                 await ApiKeyService.set_user_api_keys(
-                    str(user_id), 
-                    timescale_api_keys['api_key'], 
-                    timescale_api_keys['api_secret'], 
+                    str(user_id),
+                    timescale_api_keys['api_key'],
+                    timescale_api_keys['api_secret'],
                     timescale_api_keys['passphrase']
                 )
-                
+
                 # 생성 후 API 키 다시 조회
-                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                    api_keys = await asyncio.wait_for(
+                        redis.hgetall(f"user:{user_id}:api:keys"),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
             else:
                 # TimescaleDB에도 사용자 정보가 없는 경우 기본값으로 생성
                 default_api_key = "default_api_key"
                 default_api_secret = "default_api_secret"
                 default_passphrase = "default_passphrase"
-                
+
                 # 새 사용자 생성
                 await ApiKeyService.set_user_api_keys(
-                    str(user_id), 
-                    default_api_key, 
-                    default_api_secret, 
+                    str(user_id),
+                    default_api_key,
+                    default_api_secret,
                     default_passphrase
                 )
-                
+
                 # 생성 후 API 키 다시 조회
-                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                    api_keys = await asyncio.wait_for(
+                        redis.hgetall(f"user:{user_id}:api:keys"),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
             
         # 양방향 매매 설정 조회
         settings = await get_dual_side_settings(str(user_id))
@@ -728,39 +913,53 @@ async def update_dual_settings(
     )
 ):
     try:
-        # 사용자 존재 여부 확인
-        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 사용자 존재 여부 확인
+            api_keys = await asyncio.wait_for(
+                redis.hgetall(f"user:{user_id}:api:keys"),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
         if not api_keys:
             # 사용자가 없는 경우, TimescaleDB에서 정보 가져오기
             timescale_api_keys = await get_api_keys_from_timescale(user_id)
-            
+
             if timescale_api_keys:
                 # Timescale에서 가져온 API 키로 사용자 생성
                 await ApiKeyService.set_user_api_keys(
-                    str(user_id), 
-                    timescale_api_keys['api_key'], 
-                    timescale_api_keys['api_secret'], 
+                    str(user_id),
+                    timescale_api_keys['api_key'],
+                    timescale_api_keys['api_secret'],
                     timescale_api_keys['passphrase']
                 )
-                
+
                 # 생성 후 API 키 다시 조회
-                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                    api_keys = await asyncio.wait_for(
+                        redis.hgetall(f"user:{user_id}:api:keys"),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
             else:
                 # TimescaleDB에도 사용자 정보가 없는 경우 기본값으로 생성
                 default_api_key = "default_api_key"
                 default_api_secret = "default_api_secret"
                 default_passphrase = "default_passphrase"
-                
+
                 # 새 사용자 생성
                 await ApiKeyService.set_user_api_keys(
-                    str(user_id), 
-                    default_api_key, 
-                    default_api_secret, 
+                    str(user_id),
+                    default_api_key,
+                    default_api_secret,
                     default_passphrase
                 )
-                
+
                 # 생성 후 API 키 다시 조회
-                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                    api_keys = await asyncio.wait_for(
+                        redis.hgetall(f"user:{user_id}:api:keys"),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
         
         # 기존 설정 가져오기
         current_settings = await get_dual_side_settings(str(user_id))
@@ -805,39 +1004,53 @@ async def update_dual_settings(
     })
 async def reset_dual_settings(user_id: str):
     try:
-        # 사용자 존재 여부 확인
-        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 사용자 존재 여부 확인
+            api_keys = await asyncio.wait_for(
+                redis.hgetall(f"user:{user_id}:api:keys"),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
         if not api_keys:
             # 사용자가 없는 경우, TimescaleDB에서 정보 가져오기
             timescale_api_keys = await get_api_keys_from_timescale(user_id)
-            
+
             if timescale_api_keys:
                 # Timescale에서 가져온 API 키로 사용자 생성
                 await ApiKeyService.set_user_api_keys(
-                    str(user_id), 
-                    timescale_api_keys['api_key'], 
-                    timescale_api_keys['api_secret'], 
+                    str(user_id),
+                    timescale_api_keys['api_key'],
+                    timescale_api_keys['api_secret'],
                     timescale_api_keys['passphrase']
                 )
-                
+
                 # 생성 후 API 키 다시 조회
-                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                    api_keys = await asyncio.wait_for(
+                        redis.hgetall(f"user:{user_id}:api:keys"),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
             else:
                 # TimescaleDB에도 사용자 정보가 없는 경우 기본값으로 생성
                 default_api_key = "default_api_key"
                 default_api_secret = "default_api_secret"
                 default_passphrase = "default_passphrase"
-                
+
                 # 새 사용자 생성
                 await ApiKeyService.set_user_api_keys(
-                    str(user_id), 
-                    default_api_key, 
-                    default_api_secret, 
+                    str(user_id),
+                    default_api_key,
+                    default_api_secret,
                     default_passphrase
                 )
-                
+
                 # 생성 후 API 키 다시 조회
-                api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+                async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                    api_keys = await asyncio.wait_for(
+                        redis.hgetall(f"user:{user_id}:api:keys"),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
         
         # 기본 설정으로 초기화
         default_settings = {k: v for k, v in DEFAULT_DUAL_SIDE_ENTRY_SETTINGS.items()}
@@ -1124,7 +1337,9 @@ async def debug_api_keys(user_id: str):
     try:
         logger.info(f"===== API 키 디버깅 시작: user_id={user_id} =====")
 
-        redis_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
+        # MIGRATED: Using redis_context for debug endpoint
+        async with redis_context(timeout=RedisTimeout.FAST_OPERATION) as redis:
+            redis_keys = await redis.hgetall(f"user:{user_id}:api:keys")
 
         def mask_key(key: Optional[str]) -> Optional[str]:
             if not key:

@@ -8,6 +8,7 @@ import logging
 from typing import Any, Optional
 
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_patterns import scan_keys_pattern
 
 logger = logging.getLogger(__name__)
 
@@ -75,10 +76,12 @@ async def get_telegram_id_from_okx_uid(okx_uid: str, timescale_service: Any = No
     redis = await get_redis_client()
 
     # --- 1. 주요 방식: Redis 패턴 스캔으로 user:*:okx_uid 키 조회 ---
+    # ✅ SCAN 사용: Redis 블로킹 방지, 프로덕션 안전성 보장
     try:
         pattern = "user:*:okx_uid"
-        keys = await redis.keys(pattern)
 
+        # SCAN으로 키 수집 (비동기)
+        keys = await scan_keys_pattern(pattern, redis=redis)
         for key in keys:
             key_str = key.decode() if isinstance(key, bytes) else str(key)
             stored_uid = await redis.get(key)

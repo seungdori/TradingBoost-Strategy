@@ -250,7 +250,7 @@ class TPSLCalculator:
         거래소 API를 통해 포지션 모드를 조회합니다.
 
         Args:
-            user_id (int): 사용자 ID
+            user_id (str): 사용자 ID
             symbol (str): 심볼 (예: "BTC-USDT-SWAP")
 
         Returns:

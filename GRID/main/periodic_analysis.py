@@ -318,19 +318,20 @@ async def handle_symbol(exchange_instance, symbol, exchange_name, semaphore, exe
 
                     elapsed_time = time.time() - start_time
                     print(f"Calculation completed for {symbol} in {elapsed_time:.2f} seconds")
-                    
-                    # 업데이트 시간 기록 - 파이프라인 사용
+
+                    # 업데이트 시간 기록 - 동기 Redis 사용 (RedisConnectionManager)
                     current_ts = int(time.time() * 1000)
-                    pipe = redis_client.pipeline()
-                    
+                    sync_redis = redis_manager.get_connection()
+                    pipe = sync_redis.pipeline()
+
                     for direction in directions:
                         # 스팟 거래소는 long 방향만 저장
                         if is_spot_exchange and direction != 'long':
                             continue
-                            
+
                         redis_key = f"{exchange_name}:{symbol}:{direction}:last_update"
                         pipe.set(redis_key, current_ts)
-                    
+
                     # 파이프라인 실행 - 한 번에 모든 Redis 작업 수행
                     pipe.execute()
                 except Exception as e:
@@ -681,7 +682,8 @@ async def save_ohlcv_to_redis(ohlcv_df, exchange_name, symbol, timeframe):
             
             # 기존 키 삭제 후 새로운 리스트로 저장
             key = f"{exchange_name}:{symbol}:{timeframe}"
-            redis_client.delete(key)
+            sync_redis = redis_manager.get_connection()
+            sync_redis.delete(key)
             
             # 새 데이터를 리스트로 저장
             result = await set_cache(exchange_name, symbol, combined_df, timeframe)
@@ -892,16 +894,33 @@ async def main():
 async def list_redis_keys(pattern="*"):
     """
     Redis에 저장된 키 목록을 조회합니다.
-    
+
+    ✅ SCAN 사용: Redis 블로킹 방지, 대량 키 처리에 안전
+
     Args:
         pattern: 검색할 키 패턴 (예: "okx:*:1d")
-        
+
     Returns:
         list: 키 목록
     """
     try:
-        keys = redis_client.keys(pattern)
-        return [key.decode('utf-8') for key in keys]
+        sync_redis = redis_manager.get_connection()
+        keys = []
+        cursor = 0
+
+        # SCAN 반복자로 키 수집 (블로킹 방지)
+        while True:
+            cursor, partial_keys = sync_redis.scan(
+                cursor=cursor,
+                match=pattern,
+                count=1000  # 배치 크기: 성능 최적화
+            )
+            keys.extend(partial_keys)
+
+            if cursor == 0:  # 스캔 완료
+                break
+
+        return [key.decode('utf-8') if isinstance(key, bytes) else str(key) for key in keys]
     except Exception as e:
         logging.error(f"Redis 키 조회 중 오류 발생: {str(e)}")
         return []
@@ -909,18 +928,43 @@ async def list_redis_keys(pattern="*"):
 async def delete_redis_keys(pattern):
     """
     특정 패턴의 Redis 키를 삭제합니다.
-    
+
+    ✅ SCAN 사용: Redis 블로킹 방지
+    ✅ 배치 삭제: 메모리 효율성 개선 (100개씩)
+
     Args:
         pattern: 삭제할 키 패턴 (예: "okx:BTC/USDT:*")
-        
+
     Returns:
         int: 삭제된 키 개수
     """
     try:
-        keys = redis_client.keys(pattern)
-        if not keys:
-            return 0
-        return redis_client.delete(*keys)
+        sync_redis = redis_manager.get_connection()
+        cursor = 0
+        deleted_count = 0
+        batch_size = 100  # 배치 삭제 크기
+
+        # SCAN으로 키 수집 및 배치 삭제
+        while True:
+            cursor, partial_keys = sync_redis.scan(
+                cursor=cursor,
+                match=pattern,
+                count=1000
+            )
+
+            if partial_keys:
+                # 배치 단위로 삭제 (메모리 효율성)
+                for i in range(0, len(partial_keys), batch_size):
+                    batch = partial_keys[i:i + batch_size]
+                    deleted_count += sync_redis.delete(*batch)
+
+            if cursor == 0:  # 스캔 완료
+                break
+
+        if deleted_count > 0:
+            logging.info(f"Redis 키 {deleted_count}개 삭제 완료 (패턴: {pattern})")
+
+        return deleted_count
     except Exception as e:
         logging.error(f"Redis 키 삭제 중 오류 발생: {str(e)}")
         return 0
@@ -1076,34 +1120,37 @@ async def save_indicators_to_redis(df, exchange_name, symbol, timeframe):
                 
         # Redis 키 생성 (지표 데이터용)
         key = f"{exchange_name}:{symbol}:{timeframe}:indicators"
-        
+
+        # 동기 Redis 클라이언트 사용
+        sync_redis = redis_manager.get_connection()
+
         # 기존 데이터 삭제
-        redis_client.delete(key)
-        
+        sync_redis.delete(key)
+
         # DataFrame을 레코드 리스트로 변환
         records = indicators_df.to_dict(orient='records')
-        
+
         # 각 레코드를 JSON 문자열로 변환하여 Redis 리스트에 추가
-        pipeline = redis_client.pipeline()
+        pipeline = sync_redis.pipeline()
         for record in records:
             # timestamp를 정수로 저장 (datetime 객체는 직렬화 불가)
             if 'timestamp' in record and isinstance(record['timestamp'], pd.Timestamp):
                 record['timestamp'] = int(record['timestamp'].timestamp() * 1000)
-            
+
             # 레코드를 JSON 문자열로 변환하여 리스트에 추가
             pipeline.rpush(key, json.dumps(record))
-        
+
         # 파이프라인 실행
         pipeline.execute()
-        
+
         # 마지막 업데이트 시간 저장
-        redis_client.set(f"{key}:last_update", int(time.time()))
+        sync_redis.set(f"{key}:last_update", int(time.time()))
         
         # TTL 설정 (타임프레임에 따라 다른 TTL 적용)
         ttl = get_ttl_for_timeframe(timeframe)
         if ttl > 0:
-            redis_client.expire(key, ttl)
-            redis_client.expire(f"{key}:last_update", ttl)
+            sync_redis.expire(key, ttl)
+            sync_redis.expire(f"{key}:last_update", ttl)
         
         logging.info(f"지표 데이터 Redis 저장 완료: {key} (총 {len(records)}개 레코드)")
         return True
@@ -1172,9 +1219,12 @@ async def get_indicators_from_redis(exchange_name, symbol, timeframe):
     try:
         # Redis 키 생성 (지표 데이터용)
         key = f"{exchange_name}:{symbol}:{timeframe}:indicators"
-        
+
+        # 동기 Redis 클라이언트 사용
+        sync_redis = redis_manager.get_connection()
+
         # Redis 리스트의 길이 확인
-        list_length = redis_client.llen(key)
+        list_length = sync_redis.llen(key)
         
         if list_length == 0:
             logging.warning(f"Redis에서 지표 데이터를 찾을 수 없습니다: {key}")

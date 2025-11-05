@@ -9,6 +9,7 @@ if str(project_root) not in sys.path:
 
 import asyncio
 import logging
+import os
 import signal
 from typing import Optional
 
@@ -22,12 +23,62 @@ logging.getLogger("aiogram").setLevel(logging.WARNING)
 
 logger = get_logger(__name__)
 
+# PID 파일 경로
+PID_FILE = Path(__file__).parent / "bot.pid"
+
 # Global variables for signal handling
 bot_instance: Optional[Bot] = None
 shutdown_event = asyncio.Event()
 
+
+def check_and_create_pidfile():
+    """PID 파일을 확인하고 중복 실행 방지"""
+    if PID_FILE.exists():
+        try:
+            with open(PID_FILE, 'r') as f:
+                old_pid = int(f.read().strip())
+
+            # 기존 프로세스가 실행 중인지 확인
+            try:
+                os.kill(old_pid, 0)  # 프로세스 존재 여부만 확인
+                logger.error(f"Bot is already running with PID {old_pid}")
+                logger.error(f"If you're sure it's not running, remove {PID_FILE}")
+                return False
+            except OSError:
+                # 프로세스가 없으면 오래된 PID 파일 제거
+                logger.warning(f"Removing stale PID file (PID {old_pid})")
+                PID_FILE.unlink()
+        except (ValueError, IOError) as e:
+            logger.warning(f"Invalid PID file, removing: {e}")
+            PID_FILE.unlink()
+
+    # 새 PID 파일 생성
+    try:
+        with open(PID_FILE, 'w') as f:
+            f.write(str(os.getpid()))
+        logger.info(f"Created PID file: {PID_FILE} (PID: {os.getpid()})")
+        return True
+    except IOError as e:
+        logger.error(f"Failed to create PID file: {e}")
+        return False
+
+
+def remove_pidfile():
+    """PID 파일 제거"""
+    try:
+        if PID_FILE.exists():
+            PID_FILE.unlink()
+            logger.info(f"Removed PID file: {PID_FILE}")
+    except Exception as e:
+        logger.error(f"Failed to remove PID file: {e}")
+
 async def main():
     global bot_instance
+
+    # PID 파일 확인 및 생성 (중복 실행 방지)
+    if not check_and_create_pidfile():
+        logger.error("Cannot start bot: another instance is already running")
+        return
 
     try:
         logger.info("Starting Telegram bot application...")
@@ -80,6 +131,8 @@ async def main():
             logger.info("Shutting down bot...")
             await shutdown_bot(bot_instance)
             logger.info("Bot shutdown complete")
+        # PID 파일 제거
+        remove_pidfile()
 
 if __name__ == "__main__":
     try:

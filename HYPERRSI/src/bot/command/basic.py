@@ -107,6 +107,26 @@ async def process_uid(message: types.Message, state: FSMContext) -> None:
 
         timescale_status = "TimescaleDB 연동 완료"
         try:
+            # 먼저 기존 telegram_id 연결을 제거 (다른 UID와 연결되어 있을 수 있음)
+            from HYPERRSI.src.services.timescale_service import TimescalePool
+            try:
+                async with TimescalePool.acquire() as conn:
+                    # 이 telegram_id를 사용하는 기존 연결 모두 제거
+                    await conn.execute(
+                        """
+                        UPDATE app_users
+                        SET telegram_id = NULL,
+                            telegram_linked = FALSE,
+                            updated_at = now()
+                        WHERE telegram_id = $1
+                        """,
+                        str(user_id)
+                    )
+                    logger.info(f"기존 telegram_id {user_id} 연결 해제 완료")
+            except Exception as e:
+                logger.warning(f"기존 연결 해제 중 오류 (무시됨): {e}")
+
+            # 새로운 연결 생성
             record = await TimescaleUserService.set_telegram_link(
                 str(okx_uid),
                 str(user_id),
@@ -171,27 +191,41 @@ async def reset_command(message: types.Message) -> None:
     if not message.from_user:
         return
     user_id = message.from_user.id
-    
+
     telegram_uid_key = f"user:{user_id}:okx_uid"
-    
+
     # 등록된 UID 확인
     okx_uid = await redis.get(telegram_uid_key)
-    
+
     if not okx_uid:
         await message.reply(
             "❌ 등록된 UID가 없습니다.\n"
             "/start 명령어로 먼저 UID를 등록해주세요."
         )
         return
-    
+
     # Redis에서 UID 삭제
     await redis.delete(telegram_uid_key)
-    
+
     # TimescaleDB에서 사용자 상태 업데이트
     okx_uid_str = okx_uid.decode() if isinstance(okx_uid, bytes) else str(okx_uid)
     try:
-        success = await TimescaleUserService.unlink_telegram(okx_uid_str)
-        timescale_status = "✅ 텔레그램 연결 해제됨" if success else "⚠️ TimescaleDB에서 사용자 정보를 찾을 수 없습니다."
+        # DB에서 telegram_id를 완전히 제거
+        from HYPERRSI.src.services.timescale_service import TimescalePool
+        async with TimescalePool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE app_users
+                SET telegram_id = NULL,
+                    telegram_linked = FALSE,
+                    updated_at = now()
+                WHERE telegram_id = $1 OR okx_uid = $2
+                """,
+                str(user_id),
+                okx_uid_str
+            )
+        timescale_status = "✅ 텔레그램 연결 해제됨"
+        logger.info(f"사용자 {user_id} / UID {okx_uid_str} 연결 해제 완료")
     except Exception as exc:
         logger.error(f"TimescaleDB 상태 업데이트 오류: {exc}")
         timescale_status = f"❌ 오류: {exc}"

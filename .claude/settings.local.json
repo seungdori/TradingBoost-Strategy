@@ -3,9 +3,12 @@
     "allow": [
       "mcp__ide__getDiagnostics",
       "WebSearch",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Read(//Users/seunghyun/**)",
+      "WebFetch(domain:www.okx.com)"
     ],
     "deny": [],
     "ask": []
-  }
+  },
+  "outputStyle": "korean-dev"
 }

@@ -5,7 +5,7 @@ import logging
 import time
 import traceback
 from datetime import datetime
-from functools import lru_cache
+# REMOVED: from functools import lru_cache (not compatible with async functions)
 from typing import Any, Dict, List, Mapping, Optional, cast
 from zoneinfo import ZoneInfo
 
@@ -16,6 +16,7 @@ from redis.exceptions import RedisError
 from shared.config import settings
 from shared.database.redis import get_redis
 from shared.database.redis_patterns import RedisTTL, redis_context
+from shared.database.redis_helpers import safe_hmset, safe_expire
 from shared.utils import parse_bool, safe_float
 
 #================================================================================================
@@ -50,11 +51,6 @@ class UserKeyCache:
 
 user_key_cache = UserKeyCache()
 
-
-async def get_redis_connection() -> Redis:
-    """Use shared Redis connection pool (backward compatibility wrapper)"""
-    return await get_redis()
-
 # parse_bool is now imported from shared.utils
 #================================================================================================
 # INIT
@@ -73,7 +69,7 @@ async def init_job_table(exchange_name: str) -> None:
         raise
 
 async def initialize_database(exchange_name: str) -> None:
-    """Initialize database with context manager and TTL."""
+    """Initialize database with atomic TTL setting using transactions."""
     try:
         async with redis_context() as redis:
             # Create a hash for default user settings
@@ -89,58 +85,71 @@ async def initialize_database(exchange_name: str) -> None:
                 'grid_num': '20',
                 'stop_task_only': '0',
             }
-            await redis.hset(f'{exchange_name}:default_settings', mapping=cast(Mapping[str | bytes, bytes | float | int | str], default_settings))
-            await redis.expire(f'{exchange_name}:default_settings', RedisTTL.USER_DATA)
 
-            # Create an index to keep track of user IDs
-            await redis.sadd(f'{exchange_name}:user_ids', '0')  # Start with 0 as we'll increment for new users
-            await redis.expire(f'{exchange_name}:user_ids', RedisTTL.USER_DATA)
+            # Use pipeline for atomic TTL setting
+            async with redis.pipeline(transaction=True) as pipe:
+                # Default settings with atomic TTL
+                pipe.hset(f'{exchange_name}:default_settings', mapping=cast(Mapping[str | bytes, bytes | float | int | str], default_settings))
+                pipe.expire(f'{exchange_name}:default_settings', RedisTTL.USER_DATA)
 
-            # Initialize system-wide settings or metadata if needed
-            await redis.set(f'{exchange_name}:last_update', str(int(time.time())), ex=RedisTTL.USER_DATA)
+                # User IDs index with atomic TTL
+                pipe.sadd(f'{exchange_name}:user_ids', '0')
+                pipe.expire(f'{exchange_name}:user_ids', RedisTTL.USER_DATA)
 
-            # Create sets for global blacklist and whitelist if needed
-            await redis.sadd(f'{exchange_name}:global_blacklist', 'EXAMPLE_BLACKLISTED_SYMBOL')
-            await redis.expire(f'{exchange_name}:global_blacklist', RedisTTL.USER_DATA)
-            await redis.sadd(f'{exchange_name}:global_whitelist', 'EXAMPLE_WHITELISTED_SYMBOL')
-            await redis.expire(f'{exchange_name}:global_whitelist', RedisTTL.USER_DATA)
+                # System-wide settings - using SETEX for atomic set+expire
+                pipe.setex(f'{exchange_name}:last_update', RedisTTL.USER_DATA, str(int(time.time())))
 
-            logging.info(f"Redis database for {exchange_name} initialized successfully.")
+                # Global blacklist with atomic TTL
+                pipe.sadd(f'{exchange_name}:global_blacklist', 'EXAMPLE_BLACKLISTED_SYMBOL')
+                pipe.expire(f'{exchange_name}:global_blacklist', RedisTTL.USER_DATA)
+
+                # Global whitelist with atomic TTL
+                pipe.sadd(f'{exchange_name}:global_whitelist', 'EXAMPLE_WHITELISTED_SYMBOL')
+                pipe.expire(f'{exchange_name}:global_whitelist', RedisTTL.USER_DATA)
+
+                await pipe.execute()
+
+            logging.info(f"Redis database for {exchange_name} initialized successfully with atomic TTL.")
     except Exception as e:
         logging.error(f"Error initializing Redis database for {exchange_name}: {e}")
         raise
 async def add_user(exchange_name: str, user_data: dict[str, Any]) -> int:
-    """Add user with context manager and TTL."""
+    """Add user with atomic TTL setting using transactions."""
     try:
         async with redis_context() as redis:
             # Get a new user ID
             user_id = await redis.incr(f'{exchange_name}:next_user_id')
 
-            # Add the new user ID to the set of user IDs
-            user_ids_key = f'{exchange_name}:user_ids'
-            await redis.sadd(user_ids_key, str(user_id))
-            await redis.expire(user_ids_key, RedisTTL.USER_DATA)
-
             # Create a hash for the user with default settings and provided data
             user_key = f'{exchange_name}:user:{user_id}'
             default_settings = await redis.hgetall(f'{exchange_name}:default_settings')
             merged_data = {**default_settings, **user_data}  # Merge default settings with provided data
-            await redis.hset(user_key, mapping=cast(Mapping[str | bytes, bytes | float | int | str], merged_data))
-            await redis.expire(user_key, RedisTTL.USER_DATA)
 
-            # Initialize empty blacklist and whitelist for the user
-            blacklist_key = f'{exchange_name}:blacklist:{user_id}'
-            whitelist_key = f'{exchange_name}:whitelist:{user_id}'
-            await redis.sadd(blacklist_key, 'PLACEHOLDER')
-            await redis.sadd(whitelist_key, 'PLACEHOLDER')
-            await redis.srem(blacklist_key, 'PLACEHOLDER')
-            await redis.srem(whitelist_key, 'PLACEHOLDER')
+            # Use pipeline for atomic operations
+            async with redis.pipeline(transaction=True) as pipe:
+                # Add user ID to set with atomic TTL
+                user_ids_key = f'{exchange_name}:user_ids'
+                pipe.sadd(user_ids_key, str(user_id))
+                pipe.expire(user_ids_key, RedisTTL.USER_DATA)
 
-            # Set TTL on blacklist and whitelist keys
-            await redis.expire(blacklist_key, RedisTTL.USER_DATA)
-            await redis.expire(whitelist_key, RedisTTL.USER_DATA)
+                # Create user hash with atomic TTL
+                pipe.hset(user_key, mapping=cast(Mapping[str | bytes, bytes | float | int | str], merged_data))
+                pipe.expire(user_key, RedisTTL.USER_DATA)
 
-            logging.info(f"User {user_id} added successfully to {exchange_name}")
+                # Initialize empty blacklist and whitelist with atomic TTL
+                blacklist_key = f'{exchange_name}:blacklist:{user_id}'
+                whitelist_key = f'{exchange_name}:whitelist:{user_id}'
+                pipe.sadd(blacklist_key, 'PLACEHOLDER')
+                pipe.srem(blacklist_key, 'PLACEHOLDER')
+                pipe.expire(blacklist_key, RedisTTL.USER_DATA)
+
+                pipe.sadd(whitelist_key, 'PLACEHOLDER')
+                pipe.srem(whitelist_key, 'PLACEHOLDER')
+                pipe.expire(whitelist_key, RedisTTL.USER_DATA)
+
+                await pipe.execute()
+
+            logging.info(f"User {user_id} added successfully to {exchange_name} with atomic TTL")
             return user_id
     except Exception as e:
         logging.error(f"Error adding user to {exchange_name}: {e}")
@@ -242,10 +251,13 @@ async def get_order_placed(redis: Redis, exchange_name: str, user_id: int, symbo
     return value == "1"  # Redis returns str when decode_responses=True
 
 async def set_order_placed(redis: Redis, exchange_name: str, user_id: int, symbol_name: str, level: int, status: bool) -> None:
+    """Set order placed status with atomic TTL."""
     key = f"orders:{exchange_name}:user:{user_id}:symbol:{symbol_name}:order_placed"
-    await redis.hset(key, str(level), 1 if status else 0)
-    # TTL 설정 - 7일 후 자동 삭제 (ORDER_DATA)
-    await redis.expire(key, RedisTTL.ORDER_DATA)
+    # Use pipeline for atomic TTL setting
+    async with redis.pipeline(transaction=True) as pipe:
+        pipe.hset(key, str(level), 1 if status else 0)
+        pipe.expire(key, RedisTTL.ORDER_DATA)
+        await pipe.execute()
 
 # 특정 그리드 레벨의 정보를 업데이트하는 함수
 async def update_grid_level(
@@ -262,11 +274,11 @@ async def update_grid_level(
     async with redis.pipeline(transaction=True) as pipe:
         for field, value in updated_info.items():
             if value is not None:
-                await pipe.hset(grid_key, field, json.dumps(value))
+                pipe.hset(grid_key, field, json.dumps(value))
             else:
-                await pipe.hset(grid_key, field, "")
+                pipe.hset(grid_key, field, "")
         # TTL 설정 - 7일 후 자동 삭제 (ORDER_DATA)
-        await pipe.expire(grid_key, RedisTTL.ORDER_DATA)
+        pipe.expire(grid_key, RedisTTL.ORDER_DATA)
         await pipe.execute()
 
 async def update_active_grid(
@@ -329,7 +341,7 @@ async def update_active_grid(
             count_increment = grid_count if grid_count is not None else 0
 
             # Lua 스크립트 실행
-            await pipe.eval(
+            pipe.eval(
                 lua_script,
                 1,  # KEYS 개수
                 grid_key,  # KEYS[1]
@@ -339,14 +351,14 @@ async def update_active_grid(
 
         # 직접 설정이 필요한 필드들
         if entry_price is not None:
-            await pipe.hset(grid_key, 'entry_price', json.dumps(entry_price))
+            pipe.hset(grid_key, 'entry_price', json.dumps(entry_price))
         if position_size is not None:
-            await pipe.hset(grid_key, 'position_size', json.dumps(position_size))
+            pipe.hset(grid_key, 'position_size', json.dumps(position_size))
         if execution_time is not None:
-            await pipe.hset(grid_key, 'execution_time', json.dumps(execution_time.isoformat()))
+            pipe.hset(grid_key, 'execution_time', json.dumps(execution_time.isoformat()))
 
         # TTL 설정 (Lua 스크립트에서 이미 설정하지만 안전장치)
-        await pipe.expire(grid_key, RedisTTL.ORDER_DATA)
+        pipe.expire(grid_key, RedisTTL.ORDER_DATA)
 
         # 파이프라인 실행
         results = await pipe.execute()
@@ -489,7 +501,7 @@ async def update_take_profit_orders_info(
 
 async def save_user_key(exchange_name: str, user_id: int | str, field: str, value: Any) -> None:
     """
-    Save user key-value pair with TTL (context manager for proper cleanup).
+    Save user key-value pair with atomic TTL setting.
 
     Args:
         exchange_name: Exchange name
@@ -498,7 +510,7 @@ async def save_user_key(exchange_name: str, user_id: int | str, field: str, valu
         value: Value to save
 
     Note:
-        Automatically sets TTL to USER_DATA (30 days) to prevent unbounded growth.
+        Automatically sets TTL to USER_DATA (30 days) atomically to prevent orphaned keys.
     """
     key = f"{exchange_name}:user:{user_id}"
 
@@ -510,14 +522,14 @@ async def save_user_key(exchange_name: str, user_id: int | str, field: str, valu
         else:
             value_str = str(value)
 
-        # Use context manager for proper connection management
+        # Use context manager with atomic TTL setting
         async with redis_context() as redis:
-            await redis.hset(key, field, value_str)
+            async with redis.pipeline(transaction=True) as pipe:
+                pipe.hset(key, field, value_str)
+                pipe.expire(key, RedisTTL.USER_DATA)
+                await pipe.execute()
 
-            # Set TTL on the hash key to prevent unbounded growth
-            await redis.expire(key, RedisTTL.USER_DATA)
-
-        logging.info(f"Saved {field} for user {user_id} in {exchange_name} with TTL {RedisTTL.USER_DATA}s")
+        logging.info(f"Saved {field} for user {user_id} in {exchange_name} with atomic TTL {RedisTTL.USER_DATA}s")
 
         # 캐시 무효화
         user_key_cache.cache.pop(f"{exchange_name}:{user_id}", None)
@@ -525,7 +537,7 @@ async def save_user_key(exchange_name: str, user_id: int | str, field: str, valu
         logging.error(f"Error saving to Redis: {e}")
 
 async def save_job_id(exchange_name: str, user_id: int, job_id: str) -> None:
-    """Save job ID for a user with context manager and TTL."""
+    """Save job ID for a user with atomic TTL setting."""
     try:
         async with redis_context() as redis:
             start_time = datetime.now().isoformat()
@@ -535,12 +547,14 @@ async def save_job_id(exchange_name: str, user_id: int, job_id: str) -> None:
                 'status': 'running',
                 'start_time': start_time
             }
-            await redis.hset(job_key, mapping={k: str(v) for k, v in job_data.items()})
 
-            # Set TTL on job key
-            await redis.expire(job_key, RedisTTL.USER_DATA)
+            # Use pipeline for atomic TTL setting
+            async with redis.pipeline(transaction=True) as pipe:
+                pipe.hset(job_key, mapping={k: str(v) for k, v in job_data.items()})
+                pipe.expire(job_key, RedisTTL.USER_DATA)
+                await pipe.execute()
 
-            logging.info(f"Job ID saved for user {user_id} in {exchange_name}: {job_id}")
+            logging.info(f"Job ID saved for user {user_id} in {exchange_name}: {job_id} with atomic TTL")
     except Exception as e:
         logging.error(f"Error saving job ID: {e}")
         raise
@@ -583,16 +597,14 @@ async def update_job_status(exchange_name: str, user_id: int, status: str, job_i
                 'start_time': start_time
             }
 
-            await asyncio.wait_for(redis.hset(job_key, mapping={k: str(v) for k, v in job_data.items()}), timeout=7.0)
-
-            # Set TTL on job key
-            await redis.expire(job_key, RedisTTL.USER_DATA)
+            # Use safe_hmset with atomic TTL setting
+            await safe_hmset(redis, job_key, {k: str(v) for k, v in job_data.items()}, ttl=RedisTTL.USER_DATA)
 
             # Update user's running status
             await redis.hset(user_key, 'is_running', '1' if status == 'running' else '0')
 
             # Set TTL on user key
-            await redis.expire(user_key, RedisTTL.USER_DATA)
+            await safe_expire(redis, user_key, RedisTTL.USER_DATA)
 
             logging.info(f"Job status updated successfully: user_id={user_id}, job_id={job_id}, status={status}")
 
@@ -1086,7 +1098,8 @@ async def save_running_symbols(exchange_name: str, user_id: int) -> None:
         #================================================================================================
 # GET
 #================================================================================================
-@lru_cache(maxsize=100)
+# FIXED: Removed @lru_cache decorator as it doesn't work with async functions
+# Manual caching via user_key_cache.get() below is the correct approach
 async def get_user_key(exchange_name: str, user_id: str | int) -> dict[str, Any] | None:
     """Get user key data with context manager."""
     cached_data = user_key_cache.get(exchange_name, user_id)
@@ -1540,7 +1553,8 @@ async def get_user_keys(exchange_name: str) -> dict[str, dict[str, Any]]:
 def invalidate_cache(exchange_name: str, user_id: int | str) -> None:
     key = f"{exchange_name}:{user_id}"
     user_key_cache.cache.pop(key, None)
-    get_user_key.cache_clear()  # lru_cache 클리어
+    # FIXED: Removed get_user_key.cache_clear() since @lru_cache was removed
+    # Manual cache (user_key_cache) is cleared above
 
 # Redis connection closing is managed by shared.database.redis
 # Use shared.database.redis.close_redis() instead

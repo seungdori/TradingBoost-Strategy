@@ -164,11 +164,30 @@ async def handle_no_position(
         # ============================================================================
         # Long Entry Logic
         # ============================================================================
+        print(f"[{user_id}] 롱 진입 체크 시작 - direction: {settings['direction']}", flush=True)
         if settings['direction'] in [DIRECTION_LONG_SHORT, DIRECTION_LONG]:
+            print(f"[{user_id}] 롱 direction 조건 통과", flush=True)
+            # Check if position is locked
+            is_locked, locked_direction, remaining = await check_any_direction_locked(
+                user_id=user_id,
+                symbol=symbol,
+                timeframe=timeframe
+            )
+            print(f"[{user_id}] 잠금 체크 완료 - is_locked: {is_locked}", flush=True)
+
+            if is_locked:
+                logger.info(
+                    f"[{user_id}] Position is locked for {symbol} with timeframe {timeframe_str}. "
+                    f"Remaining time: {remaining}s"
+                )
+                return
+
             # Check trend condition for long entry
             should_enter, reason = await should_enter_with_trend(settings, current_state, "long")
+            print(f"[{user_id}] 롱 진입 조건2 - is_oversold: {rsi_signals['is_oversold']}, should_enter: {should_enter}, reason: {reason}, current_state: {current_state}", flush=True)
 
             if rsi_signals['is_oversold'] and should_enter:
+                print(f"[{user_id}] 롱 진입 시도!", flush=True)
                 entry_success = await _execute_long_entry(
                     user_id=user_id,
                     symbol=symbol,
@@ -191,6 +210,8 @@ async def handle_no_position(
             elif rsi_signals['is_oversold'] and not should_enter:
                 # Trend condition not met - send alert
                 await _send_trend_alert(user_id, symbol, timeframe, "long", redis)
+            else:
+                print(f"[{user_id}] 롱 진입 조건3 - is_oversold: {rsi_signals['is_oversold']}, should_enter: {should_enter}, reason: {reason}, current_state: {current_state}", flush=True)
 
         # ============================================================================
         # Short Entry Logic
@@ -215,7 +236,7 @@ async def handle_no_position(
 
             # Check trend condition for short entry
             should_enter, reason = await should_enter_with_trend(settings, current_state, "short")
-            print(f"[{user_id}] 숏 진입 조건 - is_overbought: {rsi_signals['is_overbought']}, should_enter: {should_enter}, reason: {reason}, current_state: {current_state}", flush=True)
+            print(f"[{user_id}] 숏 진입 조건2 - is_overbought: {rsi_signals['is_overbought']}, should_enter: {should_enter}, reason: {reason}, current_state: {current_state}", flush=True)
 
             if rsi_signals['is_overbought'] and should_enter:
                 print(f"[{user_id}] 숏 진입 시도!", flush=True)
@@ -241,6 +262,8 @@ async def handle_no_position(
             elif rsi_signals['is_overbought'] and not should_enter:
                 # Trend condition not met - send alert
                 await _send_trend_alert(user_id, symbol, timeframe, "short", redis)
+            else:
+                print(f"[{user_id}] 숏 진입 조건3 - is_overbought: {rsi_signals['is_overbought']}, should_enter: {should_enter}, reason: {reason}, current_state: {current_state}", flush=True)
 
         # Check if trading should be stopped due to failures
         if fail_count >= 3:
@@ -417,6 +440,7 @@ async def _execute_long_entry(
             error_msg = map_exchange_error(e)
             await send_telegram_message(
                 f"[{user_id}]⚠️ 롱 포지션 주문 실패\n"
+                f"📊 심볼: {symbol}\n"
                 f"\n"
                 f"{error_msg}",
                 1709556958,
@@ -547,6 +571,7 @@ async def _execute_short_entry(
             error_logger.error("숏 포지션 진입 실패", exc_info=True)
             await send_telegram_message(
                 f"[{user_id}]⚠️ 숏 포지션 주문 실패\n"
+                f"📊 심볼: {symbol}\n"
                 f"\n"
                 f"{error_msg}",
                 user_id,

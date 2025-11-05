@@ -28,7 +28,6 @@ from ccxt.async_support import ExchangeError, NetworkError
 from GRID import telegram_message
 
 # ==================== Core 모듈 ====================
-from GRID.core.redis import get_redis_connection
 from shared.database.redis_patterns import redis_context, RedisTTL
 
 # ==================== 프로젝트 모듈 ====================

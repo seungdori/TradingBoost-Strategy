@@ -20,6 +20,9 @@ REDIS_KEY_GRID_STATUS = "user:{user_id}:grid_trading:status"
 REDIS_KEY_GRID_JOB_ID = "user:{user_id}:grid_trading:job_id"
 REDIS_KEY_GRID_INFO = "user:{user_id}:grid_trading:info"
 
+# GRID API URL (환경 변수에서 가져오기)
+GRID_API_URL = os.getenv('GRID_API_URL', 'http://localhost:8012')
+
 # Redis 연결 정보 가져오기
 def get_redis_url():    
     redis_host = os.getenv('REDIS_HOST', 'localhost')
@@ -121,7 +124,7 @@ def run_grid_trading(self, exchange_name, enter_strategy, enter_symbol_count,
             try:
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     response = await client.post(
-                        "http://localhost:8012/api/grid/start",
+                        f"{GRID_API_URL}/api/grid/start",
                         json={
                             "exchange_name": exchange_name,
                             "enter_strategy": enter_strategy,

@@ -129,8 +129,8 @@ beat_schedule = {
 # Celery 애플리케이션 설정
 celery_app = Celery(
     "trading_bot",
-    broker=settings.REDIS_URL,
-    backend=settings.REDIS_URL,
+    broker=settings.CELERY_BROKER_URL,  # 로컬 Redis 사용 (태스크 queue)
+    backend=settings.CELERY_RESULT_BACKEND,  # 로컬 Redis 사용 (결과 저장)
     include=[
         'HYPERRSI.src.tasks.trading_tasks',  # 트레이딩 태스크
         'HYPERRSI.src.tasks.grid_trading_tasks',  # Grid 트레이딩 태스크 추가

@@ -5,7 +5,6 @@ HYPERRSI Telegram 메시지 모듈 (하위 호환성 래퍼)
 새로운 코드에서는 shared.notifications.telegram을 직접 사용하세요.
 """
 import logging
-import os
 
 # shared 모듈에서 모든 기능 import
 from shared.notifications.telegram import (
@@ -19,11 +18,15 @@ from shared.notifications.telegram import get_telegram_id as _get_telegram_id
 from shared.notifications.telegram import process_telegram_messages as _process_telegram_messages
 from shared.notifications.telegram import send_telegram_message as _send_telegram_message
 
+# shared.config에서 설정 가져오기 (.env 파일 자동 로드됨)
+from shared.config import get_settings
+
 logger = logging.getLogger(__name__)
 
-# 환경 변수
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ORDER_BACKEND = os.getenv("ORDER_BACKEND")
+# 환경 변수 (shared.config를 통해 .env 파일 로드)
+settings = get_settings()
+TELEGRAM_BOT_TOKEN = settings.TELEGRAM_BOT_TOKEN
+ORDER_BACKEND = settings.ORDER_BACKEND
 
 
 # ============================================================================
@@ -51,7 +54,28 @@ async def get_telegram_id(identifier: str) -> int:
 
     Note: shared.notifications.telegram.get_telegram_id를 사용하세요.
     """
-    return await _get_telegram_id(identifier, await _get_redis_client(), ORDER_BACKEND)
+    # DB session을 async context manager로 가져오기
+    try:
+        from shared.database.session import DatabaseConfig
+
+        session_factory = DatabaseConfig.get_session_factory()
+        async with session_factory() as db_session:
+            result = await _get_telegram_id(
+                identifier,
+                await _get_redis_client(),
+                ORDER_BACKEND,
+                db_session
+            )
+            return result
+    except Exception as e:
+        logger.debug(f"DB session 사용 실패, db_session=None으로 fallback: {e}")
+        # Fallback: DB 없이 시도
+        return await _get_telegram_id(
+            identifier,
+            await _get_redis_client(),
+            ORDER_BACKEND,
+            None
+        )
 
 
 async def enqueue_telegram_message(message, okx_uid=str(587662504768345929), debug=False):
@@ -80,8 +104,17 @@ async def send_telegram_message_direct(message, okx_uid=str(587662504768345929),
 
     Note: shared.notifications.telegram.send_telegram_message(use_queue=False)를 사용하세요.
     """
+    # OKX UID를 Telegram ID로 변환 (로컬 래퍼 함수 사용)
+    telegram_id = await get_telegram_id(okx_uid)
+
     return await _send_telegram_message(
-        message, okx_uid, await _get_redis_client(), TELEGRAM_BOT_TOKEN, ORDER_BACKEND, debug, use_queue=False
+        message=message,
+        telegram_id=telegram_id,
+        bot_token=TELEGRAM_BOT_TOKEN,
+        user_id=okx_uid,
+        debug=debug,
+        use_queue=False,
+        redis_client=None  # use_queue=False이므로 redis_client 불필요
     )
 
 
@@ -91,8 +124,18 @@ async def send_telegram_message(message, okx_uid=str(587662504768345929), debug=
 
     Note: shared.notifications.telegram.send_telegram_message를 사용하세요.
     """
+    # OKX UID를 Telegram ID로 변환 (로컬 래퍼 함수 사용)
+    telegram_id = await get_telegram_id(okx_uid)
+    redis_client = await _get_redis_client()
+
     return await _send_telegram_message(
-        message, okx_uid, await _get_redis_client(), TELEGRAM_BOT_TOKEN, ORDER_BACKEND, debug, use_queue=True
+        message=message,
+        telegram_id=telegram_id,
+        bot_token=TELEGRAM_BOT_TOKEN,
+        user_id=okx_uid,
+        debug=debug,
+        use_queue=True,
+        redis_client=redis_client
     )
 
 

@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     ADMIN_OKX_SECRET_KEY: str = ""
     ADMIN_OKX_PASSPHRASE: str = ""
 
+    # Security 설정
+    ENCRYPTION_KEY: str | None = os.environ.get("ENCRYPTION_KEY", None)
+
     # Redis 설정
     REDIS_HOST: str = os.environ.get("REDIS_HOST", "localhost")
     REDIS_PORT: int = int(os.environ.get("REDIS_PORT", "6379"))
@@ -39,6 +42,11 @@ class Settings(BaseSettings):
     REDIS_URL: str = f"redis://{REDIS_HOST}:{REDIS_PORT}"
     REDIS_MAX_CONNECTIONS: int = int(os.environ.get("REDIS_MAX_CONNECTIONS", "200"))
     REDIS_HEALTH_CHECK_INTERVAL: int = 15
+
+    # Redis Migration Feature Flags (for safe phased rollout)
+    REDIS_MIGRATION_ENABLED: bool = False
+    REDIS_MIGRATION_PERCENTAGE: int = 0
+    REDIS_MIGRATION_USER_WHITELIST: str = ""  # Comma-separated user IDs
 
     def init_redis_url(self):
         if not self.REDIS_URL:

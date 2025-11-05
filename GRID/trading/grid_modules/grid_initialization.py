@@ -14,7 +14,6 @@ from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
 
-from GRID.core.redis import get_redis_connection
 from GRID.database.redis_database import (
     get_user,
     initialize_active_grid,

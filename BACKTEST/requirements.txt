@@ -1,0 +1,25 @@
+# BACKTEST Service Dependencies
+# 이 파일은 백테스팅 시스템의 추가 의존성만 포함합니다.
+# 기본 의존성은 프로젝트 루트의 pyproject.toml에서 관리됩니다.
+
+# 데이터 처리 (백테스팅 필수)
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# 시계열 데이터베이스 (TimescaleDB)
+# asyncpg는 pyproject.toml에 이미 포함되어 있음
+
+# 데이터 시각화 (선택적)
+matplotlib>=3.7.0
+plotly>=5.14.0
+
+# 성능 최적화 (선택적)
+numba>=0.57.0  # JIT 컴파일러 for numerical functions
+
+# 통계 분석 (선택적)
+statsmodels>=0.14.0
+scikit-learn>=1.3.0
+
+# 프로그레스 바 (선택적)
+tqdm>=4.65.0

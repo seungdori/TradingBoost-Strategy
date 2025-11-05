@@ -11,6 +11,7 @@ from starlette.websockets import WebSocketState
 
 from HYPERRSI.src.services.timescale_service import TimescaleUserService
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_patterns import redis_context, RedisTimeout
 from shared.helpers.user_id_resolver import get_telegram_id_from_okx_uid
 from shared.logging import get_logger
 
@@ -633,16 +634,24 @@ async def get_telegram_logs(
     
     print(f"log_set_key: {log_set_key}")
     try:
-        # Sorted Set에서 점수(타임스탬프) 기준 역순으로 로그 데이터 조회
-        # ZREVRANGE 사용 (start=offset, end=offset + limit - 1)
-        log_data = await get_redis_client().zrevrange(
-            log_set_key,
-            start=offset,
-            end=offset + limit - 1
-        )
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # Sorted Set에서 점수(타임스탬프) 기준 역순으로 로그 데이터 조회
+            # ZREVRANGE 사용 (start=offset, end=offset + limit - 1)
+            log_data = await asyncio.wait_for(
+                redis.zrevrange(
+                    log_set_key,
+                    start=offset,
+                    end=offset + limit - 1
+                ),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
 
-        # 전체 로그 개수 조회
-        total_logs = await get_redis_client().zcard(log_set_key)
+            # 전체 로그 개수 조회
+            total_logs = await asyncio.wait_for(
+                redis.zcard(log_set_key),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
 
         if not log_data:
             return TelegramLogResponse(logs=[], total=0)
@@ -1009,17 +1018,25 @@ async def get_telegram_logs_by_okx_uid(
     """지정된 OKX UID의 텔레그램 메시지 로그를 시간 역순으로 조회합니다."""
     
     log_set_key = f"telegram:logs:by_okx_uid:{okx_uid}"
-    
-    try:
-        # Sorted Set에서 점수(타임스탬프) 기준 역순으로 로그 데이터 조회
-        log_data = await get_redis_client().zrevrange(
-            log_set_key,
-            start=offset,
-            end=offset + limit - 1
-        )
 
-        # 전체 로그 개수 조회
-        total_logs = await get_redis_client().zcard(log_set_key)
+    try:
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # Sorted Set에서 점수(타임스탬프) 기준 역순으로 로그 데이터 조회
+            log_data = await asyncio.wait_for(
+                redis.zrevrange(
+                    log_set_key,
+                    start=offset,
+                    end=offset + limit - 1
+                ),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
+            # 전체 로그 개수 조회
+            total_logs = await asyncio.wait_for(
+                redis.zcard(log_set_key),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
 
         if not log_data:
             return TelegramLogResponse(logs=[], total=0)
@@ -1354,11 +1371,16 @@ async def get_telegram_stats(okx_uid: str = Path(..., description="통계를 조
     """지정된 OKX UID의 텔레그램 메시지 통계를 조회합니다."""
     
     stats_key = f"telegram:stats:{okx_uid}"
-    
+
     try:
-        # 모든 통계 가져오기
-        stats = await get_redis_client().hgetall(stats_key)
-        
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 모든 통계 가져오기
+            stats = await asyncio.wait_for(
+                redis.hgetall(stats_key),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
         # 기본값 설정
         total = int(stats.get("total", 0))
         success = int(stats.get("success", 0))

@@ -21,9 +21,9 @@ import logging
 # Core
 from GRID.core.exceptions import AddAnotherException, QuitException
 from GRID.core.redis import (
-    get_redis_connection,
+    get_redis_connection,  # Deprecated - use redis_context() instead
+    redis_context,  # Recommended
     get_redis_data,
-    redis_client,
     set_redis_data,
 )
 from GRID.core.websocket import log_exception, send_heartbeat, ws_client
@@ -203,7 +203,9 @@ logger = logging.getLogger(__name__)
 __all__ = [
     # Core
     'QuitException', 'AddAnotherException',
-    'get_redis_connection', 'redis_client', 'set_redis_data', 'get_redis_data',
+    'get_redis_connection',  # Deprecated - use redis_context() instead
+    'redis_context',  # Recommended
+    'set_redis_data', 'get_redis_data',
     'log_exception', 'send_heartbeat', 'ws_client',
     
     # Utils

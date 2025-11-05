@@ -166,44 +166,82 @@ def database_health() -> JSONResponse:
         )
 
 
-@router.get("/redis", summary="Redis pool health check")
+@router.get("/redis", summary="Comprehensive Redis health check")
 async def redis_health() -> JSONResponse:
     """
-    Redis connection pool health check.
+    Comprehensive Redis connection pool health check.
 
-    Checks Redis connectivity, measures latency, and provides
-    pool configuration details.
+    Checks Redis connectivity, measures latency, provides pool stats,
+    and circuit breaker state in a single response.
 
     Returns:
-        dict: Redis pool health status with latency metrics
+        dict: Complete Redis health status with all metrics
 
     Example Response:
         {
             "status": "healthy",
             "message": "Redis responding normally",
             "latency_ms": 1.23,
+            "pool_stats": {
+                "status": "healthy",
+                "message": "Pool utilization normal: 15.5%",
+                "metrics": {
+                    "max_connections": 200,
+                    "in_use": 31,
+                    "available": 169,
+                    "utilization_pct": 15.5,
+                    "warning_threshold_pct": 80.0,
+                    "critical_threshold_pct": 90.0
+                },
+                "recommendations": []
+            },
+            "circuit_breaker": {
+                "state": "CLOSED",
+                "failure_count": 0,
+                "last_failure_time": 0.0,
+                "is_open": false
+            },
             "metrics": {
                 "max_connections": 200,
-                "connection_kwargs": {
-                    "db": 0,
-                    "decode_responses": true,
-                    "socket_timeout": null,
-                    "socket_connect_timeout": 5
-                }
+                "connection_kwargs": {...}
             },
-            "timestamp": "2025-10-05T10:30:45.123456"
+            "timestamp": "2025-10-23T10:30:45.123456"
         }
     """
     try:
+        # Get basic health check with latency
         health_data = await RedisConnectionPool.health_check()
 
-        # Return appropriate status code based on health
-        if health_data["status"] == "healthy":
-            return JSONResponse(status_code=status.HTTP_200_OK, content=health_data)
-        elif health_data["status"] == "degraded":
-            return JSONResponse(status_code=status.HTTP_200_OK, content=health_data)
+        # Get detailed pool statistics
+        monitor = RedisConnectionPool.get_monitor()
+        pool_stats = monitor.get_pool_stats()
+
+        # Get circuit breaker state
+        breaker = get_circuit_breaker()
+        circuit_breaker_state = breaker.get_state()
+
+        # Combine all information
+        comprehensive_health = {
+            "status": health_data["status"],
+            "message": health_data["message"],
+            "latency_ms": health_data.get("latency_ms"),
+            "pool_stats": pool_stats,
+            "circuit_breaker": circuit_breaker_state,
+            "metrics": health_data.get("metrics", {}),
+            "timestamp": health_data["timestamp"]
+        }
+
+        # Determine overall status based on all components
+        if pool_stats["status"] == "critical" or health_data["status"] == "unhealthy":
+            overall_status = "unhealthy"
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        elif pool_stats["status"] == "warning" or health_data["status"] == "degraded":
+            comprehensive_health["status"] = "degraded"
+            status_code = status.HTTP_200_OK
         else:
-            return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=health_data)
+            status_code = status.HTTP_200_OK
+
+        return JSONResponse(status_code=status_code, content=comprehensive_health)
 
     except Exception as e:
         logger.error(
@@ -358,5 +396,68 @@ async def redis_circuit_breaker() -> JSONResponse:
             content={
                 "error": str(e),
                 "error_type": type(e).__name__
+            }
+        )
+
+
+@router.get("/redis/pool/stats", summary="Redis pool utilization statistics")
+async def redis_pool_stats() -> JSONResponse:
+    """
+    Get Redis connection pool utilization statistics with alerts.
+
+    Provides detailed information about current pool usage including:
+    - Current utilization percentage
+    - Available vs in-use connections
+    - Status alerts (healthy/warning/critical)
+    - Recommendations for optimization
+
+    Returns:
+        dict: Pool utilization statistics with status
+
+    Example Response:
+        {
+            "status": "healthy",
+            "message": "Pool utilization normal: 15.5%",
+            "metrics": {
+                "max_connections": 200,
+                "in_use": 31,
+                "available": 169,
+                "utilization_pct": 15.5,
+                "warning_threshold_pct": 80.0,
+                "critical_threshold_pct": 90.0
+            },
+            "recommendations": [],
+            "timestamp": "2025-10-23T10:30:45.123456"
+        }
+
+    Status Codes:
+        - 200: Pool operating normally (healthy or warning)
+        - 503: Critical utilization (>90%)
+    """
+    try:
+        monitor = RedisConnectionPool.get_monitor()
+        stats = monitor.get_pool_stats()
+
+        # Return 503 if critical, 200 otherwise
+        if stats["status"] == "critical":
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content=stats
+            )
+        else:
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content=stats
+            )
+
+    except Exception as e:
+        logger.error(f"Error getting pool stats: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "status": "error",
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "timestamp": datetime.utcnow().isoformat()
             }
         )

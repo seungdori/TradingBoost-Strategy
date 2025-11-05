@@ -14,6 +14,8 @@ from HYPERRSI.src.core.error_handler import ErrorCategory, handle_critical_error
 from HYPERRSI.src.services.timescale_service import TimescaleUserService
 from HYPERRSI.src.trading.trading_service import TradingService, get_okx_client
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_patterns import scan_keys_pattern, redis_context, RedisTimeout
+from shared.database.redis_helpers import safe_ping
 from shared.helpers.user_id_resolver import get_okx_uid_from_telegram, get_telegram_id_from_okx_uid
 from shared.logging import get_logger
 
@@ -214,14 +216,11 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
         telegram_id = None
         
 
-        # Redis 연결 확인
+        # Redis 연결 확인 (standardized helper with timeout protection)
         try:
-            ping_result = await asyncio.wait_for(get_redis_client().ping(), timeout=2.0)
-            if not ping_result:
+            redis_client = await get_redis_client()
+            if not await safe_ping(redis_client):
                 raise HTTPException(status_code=500, detail="Redis 연결 실패")
-        except asyncio.TimeoutError:
-            logger.error("Redis ping timeout (2s)")
-            raise HTTPException(status_code=500, detail="Redis 연결 시간 초과")
         except Exception as redis_error:
             logger.error(f"Redis 연결 오류: {str(redis_error)}")
             await handle_critical_error(
@@ -342,7 +341,10 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
         # 실행 중인 상태에서 restart=False이면 오류 반환 (기존 로직 복원)
         if is_running and not restart:
             logger.warning(f"[{okx_uid}] 이미 실행 중인 트레이딩이 있고 restart=False임. 시작 거부.")
-            raise HTTPException(status_code=400, detail="이미 트레이딩 태스크가 실행 중입니다.")
+            raise HTTPException(
+                status_code=409,
+                detail="이미 트레이딩 태스크가 실행 중입니다. restart=true로 재시작하거나 먼저 중지해주세요."
+            )
 
         # 태스크 ID 파악 (재시작 시에만 필요)
         task_id = None
@@ -432,9 +434,11 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
             timeframe = request.timeframe
 
             # Celery 태스크 실행 (okx_uid 전달)
+            # 🔧 FIX: API를 통한 시작은 항상 restart=True로 전달
+            # Race condition 방지: Task가 Redis 상태 확인을 건너뛰고 즉시 실행
             task = celery_app.send_task(
                 'trading_tasks.execute_trading_cycle',
-                args=[okx_uid, symbol, timeframe, restart]
+                args=[okx_uid, symbol, timeframe, True]  # 항상 True로 전달
             )
             logger.info(f"[{okx_uid}] 새 트레이딩 태스크 시작: {task.id} (symbol: {symbol}, timeframe: {timeframe})")
 
@@ -502,88 +506,118 @@ async def start_all_users():
                 okx_uid="system"
             )
             raise HTTPException(status_code=500, detail="Redis 연결 실패")
-            
+
         # 패턴 변경: user:*:trading:status
-        status_keys = await get_redis_client().keys("user:*:trading:status")
-        restarted_users = []
-        errors = []
-        
-        logger.debug(f"총 {len(status_keys)}개의 트레이딩 상태 키 발견")
-        
-        for key in status_keys:
-            okx_uid = None # 루프 시작 시 초기화
-            status = await get_redis_client().get(key)
-            
-            # 바이트 문자열을 디코딩
-            if isinstance(status, bytes):
-                status = status.decode('utf-8')
-                
-            # status가 'running'인 경우만 재시작 처리
-            if status == "running":
-                try:
-                    # key 구조: user:{okx_uid}:trading:status
-                    parts = key.split(":")
-                    if len(parts) >= 2 and parts[0] == 'user':
-                        okx_uid = parts[1]
-                    else:
-                        logger.warning(f"잘못된 키 형식 발견: {key}")
-                        continue
-                    
-                    logger.info(f"사용자 {okx_uid} 재시작 시도 중")
-                    
-                    task_id_key = f"user:{okx_uid}:task_id"
-                    current_task_id = await get_redis_client().get(task_id_key)
-                    
-                    # 기존 태스크가 존재하면 종료
-                    if current_task_id:
-                        logger.info(f"기존 태스크 종료: {current_task_id} (okx_uid: {okx_uid})")
-                        celery_app.control.revoke(current_task_id, terminate=True)
-                        await get_redis_client().delete(task_id_key)
-                        # 상태는 임시로 'restarting'으로 설정
-                        await get_redis_client().set(key, "restarting")
-                        
-                        # 태스크가 완전히 종료될 때까지 짧은 지연 추가
-                        await asyncio.sleep(1)
-                    
+        # Use SCAN instead of KEYS to avoid blocking Redis
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            status_keys = await scan_keys_pattern("user:*:trading:status", redis=redis)
+            restarted_users = []
+            errors = []
+
+            logger.debug(f"총 {len(status_keys)}개의 트레이딩 상태 키 발견")
+
+            for key in status_keys:
+                okx_uid = None # 루프 시작 시 초기화
+                status = await asyncio.wait_for(
+                    redis.get(key),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
+
+                # 바이트 문자열을 디코딩
+                if isinstance(status, bytes):
+                    status = status.decode('utf-8')
+
+                # status가 'running'인 경우만 재시작 처리
+                if status == "running":
                     try:
-                        preference_key = f"user:{okx_uid}:preferences"
-                        symbol = await get_redis_client().hget(preference_key, "symbol")
-                        timeframe = await get_redis_client().hget(preference_key, "timeframe")
-                        # restart 옵션을 True로 해서 새 태스크 실행 (okx_uid 전달)
-                        task = celery_app.send_task(
-                            'trading_tasks.execute_trading_cycle',
-                            args=[okx_uid, symbol, timeframe, True]
+                        # key 구조: user:{okx_uid}:trading:status
+                        parts = key.split(":")
+                        if len(parts) >= 2 and parts[0] == 'user':
+                            okx_uid = parts[1]
+                        else:
+                            logger.warning(f"잘못된 키 형식 발견: {key}")
+                            continue
+                    
+                        logger.info(f"사용자 {okx_uid} 재시작 시도 중")
+
+                        task_id_key = f"user:{okx_uid}:task_id"
+                        current_task_id = await asyncio.wait_for(
+                            redis.get(task_id_key),
+                            timeout=RedisTimeout.FAST_OPERATION
                         )
-                        
-                        logger.info(f"[{okx_uid}] 새 트레이딩 태스크 시작: {task.id} (symbol: {symbol}, timeframe: {timeframe})")
-                        
-                        # Redis에 새 태스크 정보 업데이트
-                        await get_redis_client().set(key, "running") # 상태 키 사용
-                        await get_redis_client().set(task_id_key, task.id) # 태스크 ID 키 사용
-                        
-                        restarted_users.append({"okx_uid": okx_uid, "task_id": task.id}) # user_id -> okx_uid
-                    except Exception as task_error:
-                        logger.error(f"태스크 시작 오류 (okx_uid: {okx_uid}): {str(task_error)}", exc_info=True)
+
+                        # 기존 태스크가 존재하면 종료
+                        if current_task_id:
+                            logger.info(f"기존 태스크 종료: {current_task_id} (okx_uid: {okx_uid})")
+                            celery_app.control.revoke(current_task_id, terminate=True)
+                            await asyncio.wait_for(
+                                redis.delete(task_id_key),
+                                timeout=RedisTimeout.FAST_OPERATION
+                            )
+                            # 상태는 임시로 'restarting'으로 설정
+                            await asyncio.wait_for(
+                                redis.set(key, "restarting"),
+                                timeout=RedisTimeout.FAST_OPERATION
+                            )
+
+                            # 태스크가 완전히 종료될 때까지 짧은 지연 추가
+                            await asyncio.sleep(1)
+
+                        try:
+                            preference_key = f"user:{okx_uid}:preferences"
+                            symbol = await asyncio.wait_for(
+                                redis.hget(preference_key, "symbol"),
+                                timeout=RedisTimeout.FAST_OPERATION
+                            )
+                            timeframe = await asyncio.wait_for(
+                                redis.hget(preference_key, "timeframe"),
+                                timeout=RedisTimeout.FAST_OPERATION
+                            )
+                            # restart 옵션을 True로 해서 새 태스크 실행 (okx_uid 전달)
+                            task = celery_app.send_task(
+                                'trading_tasks.execute_trading_cycle',
+                                args=[okx_uid, symbol, timeframe, True]
+                            )
+
+                            logger.info(f"[{okx_uid}] 새 트레이딩 태스크 시작: {task.id} (symbol: {symbol}, timeframe: {timeframe})")
+
+                            # Redis에 새 태스크 정보 업데이트
+                            await asyncio.wait_for(
+                                redis.set(key, "running"),
+                                timeout=RedisTimeout.FAST_OPERATION
+                            ) # 상태 키 사용
+                            await asyncio.wait_for(
+                                redis.set(task_id_key, task.id),
+                                timeout=RedisTimeout.FAST_OPERATION
+                            ) # 태스크 ID 키 사용
+
+                            restarted_users.append({"okx_uid": okx_uid, "task_id": task.id}) # user_id -> okx_uid
+                        except Exception as task_error:
+                            logger.error(f"태스크 시작 오류 (okx_uid: {okx_uid}): {str(task_error)}", exc_info=True)
+                            await handle_critical_error(
+                                error=task_error,
+                                category=ErrorCategory.CELERY_TASK,
+                                context={"endpoint": "start_all_users", "okx_uid": okx_uid, "symbol": symbol, "timeframe": timeframe},
+                                okx_uid=okx_uid
+                            )
+                            errors.append({"okx_uid": okx_uid, "error": f"태스크 시작 실패: {str(task_error)}"}) # user_id -> okx_uid
+                            # 상태를 'error'로 설정
+                            await asyncio.wait_for(
+                                redis.set(key, "error"),
+                                timeout=RedisTimeout.FAST_OPERATION
+                            ) # 상태 키 사용
+
+                    except Exception as user_err:
+                        error_id = okx_uid if okx_uid else key # okx_uid 추출 실패 시 키 자체를 ID로 사용
+                        logger.error(f"사용자 {error_id} 재시작 중 에러: {str(user_err)}", exc_info=True)
                         await handle_critical_error(
-                            error=task_error,
-                            category=ErrorCategory.CELERY_TASK,
-                            context={"endpoint": "start_all_users", "okx_uid": okx_uid, "symbol": symbol, "timeframe": timeframe},
-                            okx_uid=okx_uid
+                            error=user_err,
+                            category=ErrorCategory.MASS_OPERATION,
+                            context={"endpoint": "start_all_users", "error_id": error_id, "operation": "restart"},
+                            okx_uid=okx_uid if okx_uid else "system"
                         )
-                        errors.append({"okx_uid": okx_uid, "error": f"태스크 시작 실패: {str(task_error)}"}) # user_id -> okx_uid
-                        # 상태를 'error'로 설정
-                        await get_redis_client().set(key, "error") # 상태 키 사용
-                        
-                except Exception as user_err:
-                    error_id = okx_uid if okx_uid else key # okx_uid 추출 실패 시 키 자체를 ID로 사용
-                    logger.error(f"사용자 {error_id} 재시작 중 에러: {str(user_err)}", exc_info=True)
-                    await handle_critical_error(
-                        error=user_err,
-                        category=ErrorCategory.MASS_OPERATION,
-                        context={"endpoint": "start_all_users", "error_id": error_id, "operation": "restart"},
-                        okx_uid=okx_uid if okx_uid else "system"
-                    )
-                    errors.append({"identifier": error_id, "error": str(user_err)})
+                        errors.append({"identifier": error_id, "error": str(user_err)})
                     
         logger.info(f"재시작 완료: {len(restarted_users)}개 성공, {len(errors)}개 실패")
                     
@@ -1109,32 +1143,38 @@ async def get_all_running_users():
     현재 'running' 상태인 모든 OKX UID를 조회
     """
     try:
-        if not await get_redis_client().ping():
-            raise HTTPException(status_code=500, detail="Redis 연결 실패")
-        
-        status_keys = await get_redis_client().keys("user:*:trading:status") # 패턴 변경
-        running_users = []
-        
-        for key in status_keys:
-            status = await get_redis_client().get(key)
-            
-            # 바이트 문자열을 디코딩
-            if isinstance(status, bytes):
-                status = status.decode('utf-8')
-                
-            if status == "running":
-                # key 구조: user:{okx_uid}:trading:status
-                parts = key.split(":")
-                if len(parts) >= 2 and parts[0] == 'user':
-                    okx_uid = parts[1]
-                    running_users.append(okx_uid) # user_id -> okx_uid
-                else:
-                    logger.warning(f"잘못된 키 형식 발견: {key}")
-        
-        return {
-            "status": "success",
-            "running_users": running_users
-        }
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            if not await safe_ping(redis):
+                raise HTTPException(status_code=500, detail="Redis 연결 실패")
+
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            status_keys = await scan_keys_pattern("user:*:trading:status", redis=redis)
+            running_users = []
+
+            for key in status_keys:
+                status = await asyncio.wait_for(
+                    redis.get(key),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
+
+                # 바이트 문자열을 디코딩
+                if isinstance(status, bytes):
+                    status = status.decode('utf-8')
+
+                if status == "running":
+                    # key 구조: user:{okx_uid}:trading:status
+                    parts = key.split(":")
+                    if len(parts) >= 2 and parts[0] == 'user':
+                        okx_uid = parts[1]
+                        running_users.append(okx_uid) # user_id -> okx_uid
+                    else:
+                        logger.warning(f"잘못된 키 형식 발견: {key}")
+
+            return {
+                "status": "success",
+                "running_users": running_users
+            }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"running_users 조회 실패: {str(e)}")
 
@@ -1149,140 +1189,164 @@ async def stop_all_running_users():
     stop_trading 로직을 반복해서 수행 (OKX UID 기준).
     """
     try:
-        if not await get_redis_client().ping():
-            raise HTTPException(status_code=500, detail="Redis 연결 실패")
-        
-        status_keys = await get_redis_client().keys("user:*:trading:status") # 패턴 변경
-        stopped_users = []
-        errors = []
-        
-        logger.info(f"총 {len(status_keys)}개의 트레이딩 상태 키 발견")
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            if not await safe_ping(redis):
+                raise HTTPException(status_code=500, detail="Redis 연결 실패")
 
-        for key in status_keys:
-            okx_uid = None # 루프 시작 시 초기화
-            status = await get_redis_client().get(key)
-            
-            # 바이트 문자열을 디코딩
-            if isinstance(status, bytes):
-                status = status.decode('utf-8')
-                
-            if status == "running":
-                parts = key.split(":")
-                if len(parts) >= 2 and parts[0] == 'user':
-                    okx_uid = parts[1]
-                else:
-                    logger.warning(f"잘못된 키 형식 발견: {key}")
-                    continue
-                
-                logger.info(f"사용자 {okx_uid} 중지 시도 중")
-                
-                try:
-                    # 종료 신호 설정 (okx_uid 사용)
-                    await get_redis_client().set(f"user:{okx_uid}:stop_signal", "true")
-                    await get_redis_client().set(f"user:{okx_uid}:trading:status", "stopped")
-                    # await send_telegram_message(f"[{okx_uid}] User의 상태를 Stopped로 강제 변경.6", okx_uid, debug=True)
-                    logger.info(f"사용자 {okx_uid}에게 종료 신호를 설정했습니다.")
-                    
-                    # TradingService 초기화 및 활성 주문 취소 (okx_uid 사용 가정)
-                    trading_service = None
-                    symbol = None # 심볼 초기화
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            status_keys = await scan_keys_pattern("user:*:trading:status", redis=redis)
+            stopped_users = []
+            errors = []
+
+            logger.info(f"총 {len(status_keys)}개의 트레이딩 상태 키 발견")
+
+            for key in status_keys:
+                okx_uid = None # 루프 시작 시 초기화
+                status = await asyncio.wait_for(
+                    redis.get(key),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
+
+                # 바이트 문자열을 디코딩
+                if isinstance(status, bytes):
+                    status = status.decode('utf-8')
+
+                if status == "running":
+                    parts = key.split(":")
+                    if len(parts) >= 2 and parts[0] == 'user':
+                        okx_uid = parts[1]
+                    else:
+                        logger.warning(f"잘못된 키 형식 발견: {key}")
+                        continue
+
+                    logger.info(f"사용자 {okx_uid} 중지 시도 중")
+
                     try:
-                        trading_service = TradingService(user_id=okx_uid)
-                        if not trading_service.client:
-                            trading_service.client = await get_okx_client(user_id=okx_uid)
-                        
-                        symbol = await get_redis_client().hget(f"user:{okx_uid}:preferences", "symbol")
-                        if symbol:
-                            logger.info(f"사용자 {okx_uid}의 열린 주문 취소 시도 (심볼: {symbol})")
-                            try:
-                                await trading_service.cancel_all_open_orders(trading_service.client, symbol, okx_uid)
-                                logger.info(f"모든 열린 주문이 취소되었습니다. okx_uid: {okx_uid}, symbol: {symbol}")
-                            except Exception as cancel_err:
-                                logger.error(f"주문 취소 중 오류 발생 (user_id: {okx_uid}): {str(cancel_err)}", exc_info=True)
-                    except Exception as service_err:
-                        logger.error(f"TradingService 초기화 중 오류 발생 (user_id: {okx_uid}): {str(service_err)}", exc_info=True)
-                    
-                    # Celery task 취소 (okx_uid 사용)
-                    task_id_key = f"user:{okx_uid}:task_id"
-                    task_id = await get_redis_client().get(task_id_key)
-                    if task_id:
+                        # 종료 신호 설정 (okx_uid 사용)
+                        await asyncio.wait_for(
+                            redis.set(f"user:{okx_uid}:stop_signal", "true"),
+                            timeout=RedisTimeout.FAST_OPERATION
+                        )
+                        await asyncio.wait_for(
+                            redis.set(f"user:{okx_uid}:trading:status", "stopped"),
+                            timeout=RedisTimeout.FAST_OPERATION
+                        )
+                        # await send_telegram_message(f"[{okx_uid}] User의 상태를 Stopped로 강제 변경.6", okx_uid, debug=True)
+                        logger.info(f"사용자 {okx_uid}에게 종료 신호를 설정했습니다.")
+
+                        # TradingService 초기화 및 활성 주문 취소 (okx_uid 사용 가정)
+                        trading_service = None
+                        symbol = None # 심볼 초기화
                         try:
-                            logger.info(f"Celery 태스크 취소 시도 (task_id: {task_id}, okx_uid: {okx_uid})")
-                            celery_app.control.revoke(task_id, terminate=True, signal='SIGTERM')
-                            logger.info(f"Celery 태스크 취소 명령 전송 완료 (task_id: {task_id})")
-                        except Exception as revoke_err:
-                            logger.error(f"태스크 취소 중 오류 발생 (task_id: {task_id}): {str(revoke_err)}", exc_info=True)
-                    
-                    # Redis 상태 초기화 (okx_uid 사용)
-                    try:
-                        logger.info(f"사용자 {okx_uid}의 Redis 상태 초기화 중")
-                        await get_redis_client().set(f"user:{okx_uid}:trading:status", "stopped") # 이미 위에서 설정함
-                        #await send_telegram_message(f"[{okx_uid}] User의 상태를 Stopped로 강제 변경.8", okx_uid, debug=True)
-                        
-                        # 관련 키 삭제 (키 형식 변경)
-                        keys_to_delete = [
-                            f"user:{okx_uid}:symbol",
-                            f"user:{okx_uid}:timeframe",
-                            f"user:{okx_uid}:task_id",
-                            f"user:{okx_uid}:stop_signal",
-                            f"user:{okx_uid}:trading:status"
-                        ]
-                        
-                        if symbol: # 심볼 정보가 있을 때만 포지션 키 삭제
-                            position_keys = [
-                                f"user:{okx_uid}:position:{symbol}:main_direction_direction",
-                                f"user:{okx_uid}:position:{symbol}:position_state",
-                                f"user:{okx_uid}:position:{symbol}:long",
-                                f"user:{okx_uid}:position:{symbol}:short",
-                                f"user:{okx_uid}:position:{symbol}:long_dca_levels",
-                                f"user:{okx_uid}:position:{symbol}:short_dca_levels"
+                            trading_service = TradingService(user_id=okx_uid)
+                            if not trading_service.client:
+                                trading_service.client = await get_okx_client(user_id=okx_uid)
+
+                            symbol = await asyncio.wait_for(
+                                redis.hget(f"user:{okx_uid}:preferences", "symbol"),
+                                timeout=RedisTimeout.FAST_OPERATION
+                            )
+                            if symbol:
+                                logger.info(f"사용자 {okx_uid}의 열린 주문 취소 시도 (심볼: {symbol})")
+                                try:
+                                    await trading_service.cancel_all_open_orders(trading_service.client, symbol, okx_uid)
+                                    logger.info(f"모든 열린 주문이 취소되었습니다. okx_uid: {okx_uid}, symbol: {symbol}")
+                                except Exception as cancel_err:
+                                    logger.error(f"주문 취소 중 오류 발생 (user_id: {okx_uid}): {str(cancel_err)}", exc_info=True)
+                        except Exception as service_err:
+                            logger.error(f"TradingService 초기화 중 오류 발생 (user_id: {okx_uid}): {str(service_err)}", exc_info=True)
+
+                        # Celery task 취소 (okx_uid 사용)
+                        task_id_key = f"user:{okx_uid}:task_id"
+                        task_id = await asyncio.wait_for(
+                            redis.get(task_id_key),
+                            timeout=RedisTimeout.FAST_OPERATION
+                        )
+                        if task_id:
+                            try:
+                                logger.info(f"Celery 태스크 취소 시도 (task_id: {task_id}, okx_uid: {okx_uid})")
+                                celery_app.control.revoke(task_id, terminate=True, signal='SIGTERM')
+                                logger.info(f"Celery 태스크 취소 명령 전송 완료 (task_id: {task_id})")
+                            except Exception as revoke_err:
+                                logger.error(f"태스크 취소 중 오류 발생 (task_id: {task_id}): {str(revoke_err)}", exc_info=True)
+
+                        # Redis 상태 초기화 (okx_uid 사용)
+                        try:
+                            logger.info(f"사용자 {okx_uid}의 Redis 상태 초기화 중")
+                            await asyncio.wait_for(
+                                redis.set(f"user:{okx_uid}:trading:status", "stopped"),
+                                timeout=RedisTimeout.FAST_OPERATION
+                            ) # 이미 위에서 설정함
+                            #await send_telegram_message(f"[{okx_uid}] User의 상태를 Stopped로 강제 변경.8", okx_uid, debug=True)
+
+                            # 관련 키 삭제 (키 형식 변경)
+                            keys_to_delete = [
+                                f"user:{okx_uid}:symbol",
+                                f"user:{okx_uid}:timeframe",
+                                f"user:{okx_uid}:task_id",
+                                f"user:{okx_uid}:stop_signal",
+                                f"user:{okx_uid}:trading:status"
                             ]
-                            keys_to_delete.extend(position_keys)
-                        
-                        for key_to_del in keys_to_delete: # 변수명 변경 (key 중복 방지)
-                            try:
-                                await get_redis_client().delete(key_to_del)
-                            except Exception as del_err:
-                                logger.warning(f"키 삭제 중 오류 발생 (key: {key_to_del}): {str(del_err)}")
-                        
-                        logger.debug(f"사용자 {okx_uid}의 Redis 상태 초기화 완료1")
-                    except Exception as redis_err:
-                        logger.error(f"Redis 상태 초기화 중 오류 발생 (user_id: {okx_uid}): {str(redis_err)}", exc_info=True)
-                    
-                    # TradingService cleanup
-                    if trading_service:
-                        try:
-                            await trading_service.cleanup()
-                            logger.info(f"TradingService cleanup 완료 (user_id: {okx_uid})")
-                        except Exception as cleanup_err:
-                            logger.error(f"TradingService cleanup 중 오류 발생 (user_id: {okx_uid}): {str(cleanup_err)}", exc_info=True)
-                    
-                    stopped_users.append(okx_uid) # user_id -> okx_uid
-                    logger.info(f"사용자 {okx_uid} 중지 신호 전송 완료")
-                    
-                    # 다음 사용자 처리 전 짧은 지연 추가
-                    await asyncio.sleep(0.5)
-                    
-                except Exception as user_err:
-                    errors.append({"okx_uid": okx_uid, "error": str(user_err)}) # user_id -> okx_uid
-                    logger.error(f"{okx_uid} 중지 실패: {str(user_err)}", exc_info=True)
-                    await handle_critical_error(
-                        error=user_err,
-                        category=ErrorCategory.MASS_OPERATION,
-                        context={"endpoint": "stop_all_running_users", "okx_uid": okx_uid, "operation": "stop"},
-                        okx_uid=okx_uid
-                    )
 
-        logger.info(f"중지 완료: {len(stopped_users)}개 성공, {len(errors)}개 실패")
-        
-        response = {
-            "status": "success",
-            "message": "running 상태인 모든 사용자에 대해 중지 신호를 전송했습니다. 잠시 후 모두 중지됩니다.",
-            "stopped_users": stopped_users
-        }
-        if errors:
-            response["errors"] = errors
-        return response
+                            if symbol: # 심볼 정보가 있을 때만 포지션 키 삭제
+                                position_keys = [
+                                    f"user:{okx_uid}:position:{symbol}:main_direction_direction",
+                                    f"user:{okx_uid}:position:{symbol}:position_state",
+                                    f"user:{okx_uid}:position:{symbol}:long",
+                                    f"user:{okx_uid}:position:{symbol}:short",
+                                    f"user:{okx_uid}:position:{symbol}:long_dca_levels",
+                                    f"user:{okx_uid}:position:{symbol}:short_dca_levels"
+                                ]
+                                keys_to_delete.extend(position_keys)
+
+                            for key_to_del in keys_to_delete: # 변수명 변경 (key 중복 방지)
+                                try:
+                                    await asyncio.wait_for(
+                                        redis.delete(key_to_del),
+                                        timeout=RedisTimeout.FAST_OPERATION
+                                    )
+                                except Exception as del_err:
+                                    logger.warning(f"키 삭제 중 오류 발생 (key: {key_to_del}): {str(del_err)}")
+
+                            logger.debug(f"사용자 {okx_uid}의 Redis 상태 초기화 완료1")
+                        except Exception as redis_err:
+                            logger.error(f"Redis 상태 초기화 중 오류 발생 (user_id: {okx_uid}): {str(redis_err)}", exc_info=True)
+
+                        # TradingService cleanup
+                        if trading_service:
+                            try:
+                                await trading_service.cleanup()
+                                logger.info(f"TradingService cleanup 완료 (user_id: {okx_uid})")
+                            except Exception as cleanup_err:
+                                logger.error(f"TradingService cleanup 중 오류 발생 (user_id: {okx_uid}): {str(cleanup_err)}", exc_info=True)
+
+                        stopped_users.append(okx_uid) # user_id -> okx_uid
+                        logger.info(f"사용자 {okx_uid} 중지 신호 전송 완료")
+
+                        # 다음 사용자 처리 전 짧은 지연 추가
+                        await asyncio.sleep(0.5)
+
+                    except Exception as user_err:
+                        errors.append({"okx_uid": okx_uid, "error": str(user_err)}) # user_id -> okx_uid
+                        logger.error(f"{okx_uid} 중지 실패: {str(user_err)}", exc_info=True)
+                        await handle_critical_error(
+                            error=user_err,
+                            category=ErrorCategory.MASS_OPERATION,
+                            context={"endpoint": "stop_all_running_users", "okx_uid": okx_uid, "operation": "stop"},
+                            okx_uid=okx_uid
+                        )
+
+            logger.info(f"중지 완료: {len(stopped_users)}개 성공, {len(errors)}개 실패")
+
+            response = {
+                "status": "success",
+                "message": "running 상태인 모든 사용자에 대해 중지 신호를 전송했습니다. 잠시 후 모두 중지됩니다.",
+                "stopped_users": stopped_users
+            }
+            if errors:
+                response["errors"] = errors
+            return response
 
     except Exception as e:
         logger.error(f"stop_all_running_users 실패: {str(e)}", exc_info=True)
@@ -1305,86 +1369,119 @@ async def restart_all_running_users():
     기존 태스크는 revoke 후, 새 태스크를 생성 (OKX UID 기준).
     """
     try:
-        if not await get_redis_client().ping():
-            raise HTTPException(status_code=500, detail="Redis 연결 실패")
-            
-        status_keys = await get_redis_client().keys("user:*:trading:status") # 패턴 변경
-        restarted_users = []
-        errors = []
-        
-        for key in status_keys:
-            okx_uid = None # 루프 시작 시 초기화
-            status = await get_redis_client().get(key)
-            
-            # 바이트 문자열을 디코딩
-            if isinstance(status, bytes):
-                status = status.decode('utf-8')
-                
-            if status == "running":
-                parts = key.split(":")
-                if len(parts) >= 2 and parts[0] == 'user':
-                    okx_uid = parts[1]
-                else:
-                    logger.warning(f"잘못된 키 형식 발견: {key}")
-                    continue
-                try:
-                    # 사용자 preference 정보 가져오기 (okx_uid 사용)
-                    preference_key = f"user:{okx_uid}:preferences"
-                    symbol = await get_redis_client().hget(preference_key, "symbol")
-                    timeframe = await get_redis_client().hget(preference_key, "timeframe")
-                    
-                    task_id_key = f"user:{okx_uid}:task_id"
-                    current_task_id = await get_redis_client().get(task_id_key)
-                    
-                    if current_task_id:
-                        logger.info(f"기존 태스크 종료: {current_task_id} (okx_uid: {okx_uid})")
-                        celery_app.control.revoke(current_task_id, terminate=True)
-                        await get_redis_client().delete(task_id_key)
-                        await get_redis_client().set(key, "restarting") # 상태 키 사용
-                        await asyncio.sleep(0.5)
-                    
-                    # 기존 방식으로 태스크 실행 (okx_uid 전달)
-                    task = celery_app.send_task(
-                        'trading_tasks.execute_trading_cycle',  # 새 태스크 함수 이름
-                        args=[okx_uid, symbol, timeframe , True]  # restart=True
-                    )
-                    # Redis 상태 업데이트 (okx_uid 사용)
-                    await get_redis_client().set(key, "running") # 상태 키 사용
-                    await get_redis_client().set(task_id_key, task.id) # 태스크 ID 키 사용
-                    
-                    # preference 정보 확인 및 업데이트 (okx_uid 사용)
-                    if symbol and timeframe:
-                        await get_redis_client().hset(
-                            preference_key,
-                            mapping={"symbol": symbol, "timeframe": timeframe}
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            if not await safe_ping(redis):
+                raise HTTPException(status_code=500, detail="Redis 연결 실패")
+
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            status_keys = await scan_keys_pattern("user:*:trading:status", redis=redis)
+            restarted_users = []
+            errors = []
+
+            for key in status_keys:
+                okx_uid = None # 루프 시작 시 초기화
+                status = await asyncio.wait_for(
+                    redis.get(key),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
+
+                # 바이트 문자열을 디코딩
+                if isinstance(status, bytes):
+                    status = status.decode('utf-8')
+
+                if status == "running":
+                    parts = key.split(":")
+                    if len(parts) >= 2 and parts[0] == 'user':
+                        okx_uid = parts[1]
+                    else:
+                        logger.warning(f"잘못된 키 형식 발견: {key}")
+                        continue
+                    try:
+                        # 사용자 preference 정보 가져오기 (okx_uid 사용)
+                        preference_key = f"user:{okx_uid}:preferences"
+                        symbol = await asyncio.wait_for(
+                            redis.hget(preference_key, "symbol"),
+                            timeout=RedisTimeout.FAST_OPERATION
                         )
-                    
-                    restarted_users.append({
-                        "okx_uid": okx_uid, # user_id -> okx_uid
-                        "task_id": task.id,
-                        "symbol": symbol,
-                        "timeframe": timeframe
-                    })
-                    
-                    
-                    logger.info(f"사용자 {okx_uid} 재시작 성공 (태스크: {task.id})")
-                    
-                except Exception as user_err:
-                    logger.error(f"okx_uid {okx_uid} 재시작 중 에러: {str(user_err)}", exc_info=True)
-                    errors.append({"okx_uid": okx_uid, "error": str(user_err)}) # user_id -> okx_uid
-                    # 오류 발생 시 상태를 'error'로 설정 (okx_uid 사용)
-                    await get_redis_client().set(key, "error") # 상태 키 사용
-        
-        response = {
-            "status": "success",
-            "message": "running 상태인 모든 사용자에 대해 재시작(restart=True) 명령을 보냈습니다.",
-            "restarted_users": restarted_users
-        }
-        
-        if errors:
-            response["errors"] = errors
-            
-        return response
+                        timeframe = await asyncio.wait_for(
+                            redis.hget(preference_key, "timeframe"),
+                            timeout=RedisTimeout.FAST_OPERATION
+                        )
+
+                        task_id_key = f"user:{okx_uid}:task_id"
+                        current_task_id = await asyncio.wait_for(
+                            redis.get(task_id_key),
+                            timeout=RedisTimeout.FAST_OPERATION
+                        )
+
+                        if current_task_id:
+                            logger.info(f"기존 태스크 종료: {current_task_id} (okx_uid: {okx_uid})")
+                            celery_app.control.revoke(current_task_id, terminate=True)
+                            await asyncio.wait_for(
+                                redis.delete(task_id_key),
+                                timeout=RedisTimeout.FAST_OPERATION
+                            )
+                            await asyncio.wait_for(
+                                redis.set(key, "restarting"),
+                                timeout=RedisTimeout.FAST_OPERATION
+                            ) # 상태 키 사용
+                            await asyncio.sleep(0.5)
+
+                        # 기존 방식으로 태스크 실행 (okx_uid 전달)
+                        task = celery_app.send_task(
+                            'trading_tasks.execute_trading_cycle',  # 새 태스크 함수 이름
+                            args=[okx_uid, symbol, timeframe , True]  # restart=True
+                        )
+                        # Redis 상태 업데이트 (okx_uid 사용)
+                        await asyncio.wait_for(
+                            redis.set(key, "running"),
+                            timeout=RedisTimeout.FAST_OPERATION
+                        ) # 상태 키 사용
+                        await asyncio.wait_for(
+                            redis.set(task_id_key, task.id),
+                            timeout=RedisTimeout.FAST_OPERATION
+                        ) # 태스크 ID 키 사용
+
+                        # preference 정보 확인 및 업데이트 (okx_uid 사용)
+                        if symbol and timeframe:
+                            await asyncio.wait_for(
+                                redis.hset(
+                                    preference_key,
+                                    mapping={"symbol": symbol, "timeframe": timeframe}
+                                ),
+                                timeout=RedisTimeout.FAST_OPERATION
+                            )
+
+                        restarted_users.append({
+                            "okx_uid": okx_uid, # user_id -> okx_uid
+                            "task_id": task.id,
+                            "symbol": symbol,
+                            "timeframe": timeframe
+                        })
+
+
+                        logger.info(f"사용자 {okx_uid} 재시작 성공 (태스크: {task.id})")
+
+                    except Exception as user_err:
+                        logger.error(f"okx_uid {okx_uid} 재시작 중 에러: {str(user_err)}", exc_info=True)
+                        errors.append({"okx_uid": okx_uid, "error": str(user_err)}) # user_id -> okx_uid
+                        # 오류 발생 시 상태를 'error'로 설정 (okx_uid 사용)
+                        await asyncio.wait_for(
+                            redis.set(key, "error"),
+                            timeout=RedisTimeout.FAST_OPERATION
+                        ) # 상태 키 사용
+
+            response = {
+                "status": "success",
+                "message": "running 상태인 모든 사용자에 대해 재시작(restart=True) 명령을 보냈습니다.",
+                "restarted_users": restarted_users
+            }
+
+            if errors:
+                response["errors"] = errors
+
+            return response
         
     except Exception as e:
         logger.error(f"restart_all_running_users 실패: {str(e)}", exc_info=True)

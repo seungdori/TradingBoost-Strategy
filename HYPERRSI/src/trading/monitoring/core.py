@@ -187,10 +187,10 @@ async def monitor_orders_loop():
                 logger.info(f"활성 트레일링 스탑 수: {len(active_trailings)}")
                 for ts_data in active_trailings:
                     try:
-                        user_id = int(ts_data.get("user_id", "0"))
+                        user_id = str(ts_data.get("user_id", "0"))
                         symbol = ts_data.get("symbol", "")
                         direction = ts_data.get("direction", "")
-                        
+
                         if not (user_id and symbol and direction) or user_id not in running_users:
                             continue
                         

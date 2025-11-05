@@ -138,22 +138,24 @@ def get_user_order_logger(user_id: str | int) -> logging.Logger:
     사용자별로 분리된 로그 파일을 생성합니다.
 
     Args:
-        user_id: 사용자 ID
+        user_id: 사용자 ID (정수 또는 UUID 문자열)
 
     Returns:
         logging.Logger: 사용자 전용 로거 인스턴스
     """
     try:
-        # 파라미터 안전성 검증
-        user_id_int: int
+        # 파라미터 안전성 검증 - UUID 또는 정수 모두 지원
+        user_id_str: str
         try:
+            # 정수로 변환 시도
             user_id_int = int(user_id)
+            user_id_str = str(user_id_int)
         except (ValueError, TypeError):
-            error_logger.warning(f"유효하지 않은 user_id={user_id}, 기본값 0으로 설정합니다.")
-            user_id_int = 0  # 기본값 설정
-        
+            # UUID 또는 다른 문자열 형식인 경우 그대로 사용
+            user_id_str = str(user_id)
+
         # 사용자 전용 로거 생성
-        logger_name = f'order_logger_user_{user_id_int}'
+        logger_name = f'order_logger_user_{user_id_str}'
         user_logger = logging.getLogger(logger_name)
         user_logger.setLevel(logging.INFO)
 
@@ -168,12 +170,12 @@ def get_user_order_logger(user_id: str | int) -> logging.Logger:
 
             # 파일 핸들러 설정
             user_file_handler = RotatingFileHandler(
-                filename=f'{log_dir}/user_{user_id_int}_orders.log',
+                filename=f'{log_dir}/user_{user_id_str}_orders.log',
                 maxBytes=5*1024*1024,  # 5MB
                 backupCount=10,
                 encoding='utf-8'
             )
-            
+
             # JSON 형식 포맷터
             class OrderJSONFormatter(logging.Formatter):
                 def format(self, record: logging.LogRecord) -> str:
@@ -182,7 +184,7 @@ def get_user_order_logger(user_id: str | int) -> logging.Logger:
                             'timestamp': datetime.now().isoformat(),
                             'level': record.levelname,
                             'message': record.getMessage(),
-                            'user_id': user_id_int  # 항상 user_id 포함
+                            'user_id': user_id_str  # 항상 user_id 포함
                         }
                         
                         # 추가 정보가 있는 경우 로그 데이터에 추가
@@ -203,7 +205,7 @@ def get_user_order_logger(user_id: str | int) -> logging.Logger:
                             'timestamp': datetime.now().isoformat(),
                             'level': 'ERROR',
                             'message': f'로그 포맷팅 실패: {str(e)}',
-                            'user_id': user_id_int
+                            'user_id': user_id_str
                         }, ensure_ascii=False)
             
             user_file_handler.setFormatter(OrderJSONFormatter())
@@ -457,7 +459,7 @@ def alert_log(
     봇의 시작, 종료, 오류 등의 중요 알림 메시지를 로깅합니다.
 
     Args:
-        user_id: 사용자 ID
+        user_id: 사용자 ID (정수 또는 UUID 문자열)
         symbol: 거래 심볼 (예: BTC-USDT)
         message: 알림 메시지
         level: 로그 레벨 ('INFO', 'WARNING', 'ERROR', 'CRITICAL')
@@ -465,31 +467,32 @@ def alert_log(
         **additional_data: 추가로 저장할 데이터
     """
     try:
-        # 파라미터 안전성 검증 및 기본값 설정
-        user_id_int: int
+        # 파라미터 안전성 검증 - UUID 또는 정수 모두 지원
+        user_id_str: str
         try:
             user_id_int = int(user_id)
+            user_id_str = str(user_id_int)
         except (ValueError, TypeError):
-            user_id_int = 0  # 기본값 설정
-            additional_data['original_user_id'] = str(user_id)  # 원래 값 보존
-        
+            # UUID 또는 다른 문자열 형식인 경우 그대로 사용
+            user_id_str = str(user_id)
+
         if not symbol or not isinstance(symbol, str):
             symbol = 'UNKNOWN'
             additional_data['original_symbol'] = str(symbol)  # 원래 값 보존
-            
+
         if not message or not isinstance(message, str):
             message = str(message) if message is not None else '메시지 없음'
-            
+
         # 로그 레벨 설정 (잘못된 레벨은 INFO로 기본 설정)
         try:
             log_level = getattr(logging, level.upper())
         except (AttributeError, TypeError):
             log_level = logging.INFO
             level = 'INFO'
-        
+
         # 알림 데이터 준비
         alert_data = {
-            'user_id': user_id_int,
+            'user_id': user_id_str,
             'symbol': symbol,
             'message': message,
             'alert_type': 'system_alert'
@@ -532,7 +535,7 @@ def alert_log(
         # 사용자별 로그 디렉토리 및 파일
         log_dir = Path(LOG_DIR).parent / 'alerts' / 'users'
         os.makedirs(log_dir, exist_ok=True)
-        user_log_file = log_dir / f'user_{user_id_int}_alerts.log'
+        user_log_file = log_dir / f'user_{user_id_str}_alerts.log'
         
         # 사용자별 로그 파일에 JSON 형식으로 직접 기록
         try:
@@ -587,9 +590,9 @@ def log_order(
 ) -> None:
     """
     트레이딩 주문 정보를 로깅합니다.
-    
+
     Args:
-        user_id: 사용자 ID
+        user_id: 사용자 ID (정수 또는 UUID 문자열)
         symbol: 거래 심볼 (예: BTC-USDT)
         action_type: 액션 타입 (entry, exit, dca, sl, tp 등)
         position_side: 포지션 방향 (long, short)
@@ -599,13 +602,14 @@ def log_order(
         **additional_data: 추가 데이터
     """
     try:
-        # 파라미터 안전성 검증 및 기본값 설정
-        user_id_int: int
+        # 파라미터 안전성 검증 - UUID 또는 정수 모두 지원
+        user_id_str: str
         try:
             user_id_int = int(user_id)
+            user_id_str = str(user_id_int)
         except (ValueError, TypeError):
-            user_id_int = 0  # 기본값 설정
-            additional_data['original_user_id'] = str(user_id)  # 원래 값 보존
+            # UUID 또는 다른 문자열 형식인 경우 그대로 사용
+            user_id_str = str(user_id)
         
         if not symbol or not isinstance(symbol, str):
             symbol = 'UNKNOWN'
@@ -635,9 +639,9 @@ def log_order(
         except (ValueError, TypeError):
             additional_data['original_level'] = str(level)
             level = None
-        
+
         log_data = {
-            'user_id': user_id_int,
+            'user_id': user_id_str,
             'symbol': symbol,
             'action_type': action_type,
             'position_side': position_side,
@@ -682,7 +686,7 @@ def log_order(
         
         # 사용자별 로그 파일에도 기록
         try:
-            user_logger = get_user_order_logger(user_id_int)
+            user_logger = get_user_order_logger(user_id_str)
             user_logger.handle(record)
         except Exception as e:
             error_logger.error(f"사용자별 주문 로거 처리 실패: {str(e)}")
@@ -691,7 +695,7 @@ def log_order(
             try:
                 log_dir = Path(LOG_DIR).parent / 'orders' / 'users'
                 os.makedirs(log_dir, exist_ok=True)
-                log_file = log_dir / f'user_{user_id_int}_orders_fallback.log'
+                log_file = log_dir / f'user_{user_id_str}_orders_fallback.log'
                 
                 with open(log_file, 'a', encoding='utf-8') as f:
                     log_data['timestamp'] = datetime.now().isoformat()
@@ -714,7 +718,7 @@ def get_order_logs_by_user_id(user_id: str, limit: int = 100, offset: int = 0) -
     특정 사용자 ID에 해당하는 주문 로그를 조회합니다.
 
     Args:
-        user_id: 조회할 사용자 ID
+        user_id: 조회할 사용자 ID (정수 또는 UUID 문자열)
         limit: 반환할 최대 로그 수 (기본값: 100)
         offset: 건너뛸 로그 수 (기본값: 0)
 
@@ -722,15 +726,23 @@ def get_order_logs_by_user_id(user_id: str, limit: int = 100, offset: int = 0) -
         list: 사용자의 주문 로그 목록
     """
     try:
-        # 파라미터 안전성 검증
-        user_id_int: int
+        # 파라미터 안전성 검증 - UUID 또는 정수 모두 지원
+        user_id_str: str
         try:
             user_id_int = int(user_id)
+            user_id_str = str(user_id_int)
             limit = max(1, min(int(limit), 1000))  # 1~1000 사이로 제한
             offset = max(0, int(offset))
         except (ValueError, TypeError):
-            error_logger.error(f"잘못된 파라미터: user_id={user_id}, limit={limit}, offset={offset}")
-            return []  # 안전한 기본값 반환
+            # UUID 또는 다른 문자열 형식인 경우
+            user_id_str = str(user_id)
+            try:
+                limit = max(1, min(int(limit), 1000))
+                offset = max(0, int(offset))
+            except (ValueError, TypeError):
+                # limit, offset이 잘못된 경우에만 에러 로그
+                error_logger.error(f"잘못된 파라미터: limit={limit}, offset={offset}")
+                return []
         
         log_dir = Path(LOG_DIR).parent / 'orders'
         log_file = log_dir / 'trading_orders.log'
@@ -747,8 +759,8 @@ def get_order_logs_by_user_id(user_id: str, limit: int = 100, offset: int = 0) -
                 for line_num, line in enumerate(f, 1):
                     try:
                         log_entry = json.loads(line)
-                        # user_id가 일치하는 로그만 필터링
-                        if 'user_id' in log_entry and log_entry['user_id'] == user_id_int:
+                        # user_id가 일치하는 로그만 필터링 (문자열 또는 정수 비교)
+                        if 'user_id' in log_entry and str(log_entry['user_id']) == user_id_str:
                             if skipped < offset:
                                 skipped += 1
                                 continue
@@ -774,7 +786,7 @@ def get_order_logs_by_user_id(user_id: str, limit: int = 100, offset: int = 0) -
                         for line in f:
                             try:
                                 log_entry = json.loads(line)
-                                if 'user_id' in log_entry and log_entry['user_id'] == user_id_int:
+                                if 'user_id' in log_entry and str(log_entry['user_id']) == user_id_str:
                                     if skipped < offset:
                                         skipped += 1
                                         continue
@@ -801,7 +813,7 @@ def get_order_logs_by_date_range(start_date: datetime, end_date: datetime, user_
     Args:
         start_date: 시작 날짜 (datetime 객체)
         end_date: 종료 날짜 (datetime 객체)
-        user_id: 조회할 사용자 ID (선택적)
+        user_id: 조회할 사용자 ID (정수 또는 UUID 문자열, 선택적)
         limit: 반환할 최대 로그 수 (기본값: 100)
         offset: 건너뛸 로그 수 (기본값: 0)
 
@@ -813,14 +825,19 @@ def get_order_logs_by_date_range(start_date: datetime, end_date: datetime, user_
         if start_date > end_date:
             start_date, end_date = end_date, start_date  # 자동 교정
 
-        user_id_int: int | None = None
+        user_id_str: str | None = None
         try:
             limit = max(1, min(int(limit), 1000))  # 1~1000 사이로 제한
             offset = max(0, int(offset))
             if user_id is not None:
-                user_id_int = int(user_id)
+                try:
+                    user_id_int = int(user_id)
+                    user_id_str = str(user_id_int)
+                except (ValueError, TypeError):
+                    # UUID 또는 다른 문자열 형식인 경우
+                    user_id_str = str(user_id)
         except (ValueError, TypeError):
-            error_logger.error(f"잘못된 파라미터: limit={limit}, offset={offset}, user_id={user_id}")
+            error_logger.error(f"잘못된 파라미터: limit={limit}, offset={offset}")
             return []  # 안전한 기본값 반환
             
         log_dir = Path(LOG_DIR).parent / 'orders'
@@ -850,8 +867,8 @@ def get_order_logs_by_date_range(start_date: datetime, end_date: datetime, user_
                             # 날짜 범위 체크
                             if start_date <= log_time <= end_date:
                                 # 사용자 ID 필터링 (지정된 경우)
-                                if user_id_int is not None:
-                                    if 'user_id' in log_entry and log_entry['user_id'] == user_id_int:
+                                if user_id_str is not None:
+                                    if 'user_id' in log_entry and str(log_entry['user_id']) == user_id_str:
                                         if skipped < offset:
                                             skipped += 1
                                             continue
@@ -888,7 +905,7 @@ def get_user_order_logs_from_file(user_id: str, limit: int = 100, offset: int = 
     이 함수는 사용자별 로그 파일이 존재할 때 더 효율적입니다.
 
     Args:
-        user_id: 조회할 사용자 ID
+        user_id: 조회할 사용자 ID (정수 또는 UUID 문자열)
         limit: 반환할 최대 로그 수 (기본값: 100)
         offset: 건너뛸 로그 수 (기본값: 0)
 
@@ -896,23 +913,30 @@ def get_user_order_logs_from_file(user_id: str, limit: int = 100, offset: int = 
         list: 사용자의 주문 로그 목록
     """
     try:
-        # 파라미터 안전성 검증
-        user_id_int: int
+        # 파라미터 안전성 검증 - UUID 또는 정수 모두 지원
+        user_id_str: str
         try:
             user_id_int = int(user_id)
+            user_id_str = str(user_id_int)
             limit = max(1, min(int(limit), 1000))  # 1~1000 사이로 제한
             offset = max(0, int(offset))
         except (ValueError, TypeError):
-            error_logger.error(f"잘못된 파라미터: user_id={user_id}, limit={limit}, offset={offset}")
-            return []  # 안전한 기본값 반환
-            
+            # UUID 또는 다른 문자열 형식인 경우
+            user_id_str = str(user_id)
+            try:
+                limit = max(1, min(int(limit), 1000))
+                offset = max(0, int(offset))
+            except (ValueError, TypeError):
+                error_logger.error(f"잘못된 파라미터: limit={limit}, offset={offset}")
+                return []
+
         log_dir = Path(LOG_DIR).parent / 'orders' / 'users'
-        log_file = log_dir / f'user_{user_id_int}_orders.log'
+        log_file = log_dir / f'user_{user_id_str}_orders.log'
 
         # 사용자별 로그 파일이 없으면 전체 로그에서 필터링
         if not log_file.exists():
-            print(f"{user_id_int}의 로그 파일이 없어서 user_id를 기준으로 로그 파일을 가져옵니다.")
-            return get_order_logs_by_user_id(str(user_id_int), limit, offset)
+            print(f"{user_id_str}의 로그 파일이 없어서 user_id를 기준으로 로그 파일을 가져옵니다.")
+            return get_order_logs_by_user_id(user_id_str, limit, offset)
         
         user_logs = []
         count = 0
@@ -927,9 +951,9 @@ def get_user_order_logs_from_file(user_id: str, limit: int = 100, offset: int = 
                         if skipped < offset:
                             skipped += 1
                             continue
-                        
-                        # 로그 엔트리 유효성 확인
-                        if 'user_id' not in log_entry or log_entry['user_id'] != user_id_int:
+
+                        # 로그 엔트리 유효성 확인 (문자열 비교)
+                        if 'user_id' not in log_entry or str(log_entry['user_id']) != user_id_str:
                             continue  # 잘못된 사용자 ID인 경우 스킵
                         
                         user_logs.append(log_entry)
@@ -947,7 +971,7 @@ def get_user_order_logs_from_file(user_id: str, limit: int = 100, offset: int = 
             error_logger.error(f"로그 파일 {log_file} 읽기 실패: {str(e)}")
             # 사용자 로그 파일 읽기 실패시 전체 로그에서 필터링 시도
             try:
-                return get_order_logs_by_user_id(str(user_id_int), limit, offset)
+                return get_order_logs_by_user_id(user_id_str, limit, offset)
             except Exception:
                 error_logger.error(f"대체 메서드 get_order_logs_by_user_id 호출 실패")
                 return []

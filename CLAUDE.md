@@ -18,6 +18,7 @@ This is a monorepo with three top-level packages that must be imported using abs
 TradingBoost-Strategy/
 ├── HYPERRSI/          # RSI + trend-based strategy (port 8000)
 ├── GRID/              # Price grid-based strategy (port 8012)
+├── BACKTEST/          # Backtesting system (port 8013)
 └── shared/            # Common modules (config, exchange APIs, utilities)
 ```
 
@@ -73,6 +74,17 @@ from shared.database.redis import init_redis
 from src.api.routes import trading
 ```
 
+**BACKTEST Strategy**:
+```python
+# ✅ Correct - absolute imports with BACKTEST prefix
+from BACKTEST.engine import BacktestEngine
+from BACKTEST.data import TimescaleProvider
+from shared.config import get_settings
+
+# ❌ Wrong - relative imports
+from engine import BacktestEngine
+```
+
 **Shared Modules** (infrastructure):
 ```python
 # ✅ Correct - absolute imports with shared prefix
@@ -117,6 +129,21 @@ python main.py --port 8012
 - Workers are automatically started/stopped with the main process
 - Default: 2 workers (configurable in main.py)
 
+### BACKTEST Strategy
+
+```bash
+cd BACKTEST
+python main.py
+```
+
+**Database Requirements**:
+- TimescaleDB (PostgreSQL extension) for candle history storage
+- Run migrations before first use:
+  ```bash
+  psql -h localhost -U your_user -d tradingboost -f migrations/backtest/001_create_candle_history.sql
+  psql -h localhost -U your_user -d tradingboost -f migrations/backtest/002_create_backtest_tables.sql
+  ```
+
 ## Environment Configuration
 
 Both strategies use shared environment variables from `.env` in the project root:
@@ -130,12 +157,17 @@ cp HYPERRSI/.env.example .env
 # - TELEGRAM_BOT_TOKEN, OWNER_ID
 # - REDIS_HOST, REDIS_PORT (default: localhost:6379)
 # - DATABASE_URL (optional for PostgreSQL)
+
+# TimescaleDB (for BACKTEST service)
+# - TIMESCALE_HOST, TIMESCALE_PORT (default: 5432)
+# - TIMESCALE_DATABASE, TIMESCALE_USER, TIMESCALE_PASSWORD
 ```
 
 **Configuration Loading**:
 - Shared config: `shared/config.py` (Settings class with pydantic-settings)
 - Access via: `from shared.config import get_settings; settings = get_settings()`
-- Both HYPERRSI and GRID extend this base configuration
+- HYPERRSI, GRID, and BACKTEST all extend this base configuration
+- BACKTEST additional config: `BACKTEST/config.py` (BacktestConfig class)
 
 ## Architecture Patterns
 
@@ -170,6 +202,16 @@ The `shared/` directory provides common functionality:
 - **websocket/**: Real-time price feeds
 - **routes/**: FastAPI endpoints
 - **monitoring/**: Order monitoring and tracking
+
+**BACKTEST** (layered architecture):
+- **api/**: FastAPI routes and schemas
+- **engine/**: Backtesting engine core (BacktestEngine, PositionManager, BalanceTracker)
+- **strategies/**: Strategy implementations (HYPERRSI ported from live trading)
+- **data/**: Data providers (TimescaleDB, Redis, OKX API)
+- **analysis/**: Performance metrics and reporting
+- **optimization/**: Parameter optimization (Grid Search)
+- **models/**: Data models (Backtest, Trade, Position, Result)
+- **tests/**: Unit and integration tests
 
 ### Process Management
 

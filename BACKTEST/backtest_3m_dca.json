@@ -1,0 +1,28 @@
+{
+  "symbol": "BTCUSDT",
+  "timeframe": "15m",
+  "start_date": "2025-08-01T00:00:00Z",
+  "end_date": "2025-10-31T23:59:59Z",
+  "strategy_name": "hyperrsi",
+  "strategy_params": {
+    "entry_option": "rsi_trend",
+    "rsi_oversold": 30,
+    "rsi_overbought": 70,
+    "leverage": 10,
+    "investment": 100,
+    "stop_loss_percent": 2.0,
+    "take_profit_percent": 4.0,
+    "pyramiding_enabled": true,
+    "pyramiding_limit": 3,
+    "entry_multiplier": 1.0,
+    "pyramiding_entry_type": "\ud37c\uc13c\ud2b8 \uae30\uc900",
+    "pyramiding_value": 0.5,
+    "entry_criterion": "\ud3c9\uade0 \ub2e8\uac00",
+    "use_check_DCA_with_price": true,
+    "use_rsi_with_pyramiding": false,
+    "use_trend_logic": false
+  },
+  "initial_balance": 10000.0,
+  "fee_rate": 0.0005,
+  "slippage_percent": 0.05
+}

@@ -13,8 +13,11 @@ import telegram
 from telegram.ext.filters import TEXT
 
 from HYPERRSI.src.services.timescale_service import TimescaleUserService
-from shared.database.redis_helper import get_redis_client
+from shared.database.redis_helper import get_redis_client  # Legacy - deprecated
+from shared.database.redis_patterns import redis_context, RedisTimeout
+from shared.database.redis_migration import get_redis_context
 from shared.helpers.user_id_converter import get_telegram_id_from_uid
+from shared.notifications.telegram import should_send_error_notification
 
 # Dynamic redis_client access
 
@@ -49,28 +52,29 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> str | None:
         str | None: OKX UID or None if not found
     """
     try:
-        redis = await get_redis_client()
-        # Redis에서 OKX UID 조회
-        okx_uid = await redis.get(f"user:{telegram_id}:okx_uid")
-        if okx_uid:
-            # bytes 타입인 경우에만 decode 수행
-            if isinstance(okx_uid, bytes):
-                return okx_uid.decode('utf-8')
-            return str(okx_uid) if okx_uid else None
+        # Operations: GET + potential SET (cache result) - all within one context
+        async with get_redis_context(user_id=str(telegram_id), timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # Redis에서 OKX UID 조회
+            okx_uid = await redis.get(f"user:{telegram_id}:okx_uid")
+            if okx_uid:
+                # bytes 타입인 경우에만 decode 수행
+                if isinstance(okx_uid, bytes):
+                    return okx_uid.decode('utf-8')
+                return str(okx_uid) if okx_uid else None
 
-        # Redis에 없으면 API 호출
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{API_BASE_URL}/user/telegram/{telegram_id}/okx")
-            if response.status_code == 200:
-                data = response.json()
-                okx_uid = data.get("okx_uid")
-                if okx_uid:
-                    # Redis에 저장
-                    await redis.set(f"user:{telegram_id}:okx_uid", okx_uid)
-                    return str(okx_uid)
+            # Redis에 없으면 API 호출
+            async with httpx.AsyncClient() as client:
+                response = await client.get(f"{API_BASE_URL}/user/telegram/{telegram_id}/okx")
+                if response.status_code == 200:
+                    data = response.json()
+                    okx_uid = data.get("okx_uid")
+                    if okx_uid:
+                        # Redis에 저장 (within same context)
+                        await redis.set(f"user:{telegram_id}:okx_uid", okx_uid)
+                        return str(okx_uid)
 
-        logger.error(f"텔레그램 ID {telegram_id}에 대한 OKX UID를 찾을 수 없습니다.")
-        return None
+            logger.error(f"텔레그램 ID {telegram_id}에 대한 OKX UID를 찾을 수 없습니다.")
+            return None
     except Exception as e:
         logger.error(f"텔레그램 ID {telegram_id}를 OKX UID로 변환 중 오류 발생: {str(e)}")
         return None
@@ -126,9 +130,7 @@ async def log_telegram_event(
     또한 Redis Pub/Sub 채널을 통해 실시간으로 발행됩니다.
     """
     try:
-        redis = await get_redis_client()
-
-        # okx_uid가 제공되었지만 user_id가 없으면 조회
+        # okx_uid가 제공되었지만 user_id가 없으면 조회 (uses legacy pattern temporarily)
         if okx_uid and not user_id:
             user_id_result = await get_telegram_id_from_uid(get_redis_client(), okx_uid, TimescaleUserService)
             user_id = str(user_id_result) if user_id_result else None
@@ -161,40 +163,46 @@ async def log_telegram_event(
         log_score = time.time() # Sorted Set의 score로 사용될 타임스탬프
         log_data = json.dumps(log_entry)
 
-        # 1. telegram_id 기준 로그 저장 (기존 방식 - 호환성 유지)
-        log_set_key = LOG_SET_KEY.format(user_id=user_id)
-        await redis.zadd(log_set_key, {log_data: log_score})
+        # Operations: ZADD (x2) + SADD + PUBLISH (x2) + HINCRBY (x3) - all within one context
+        async with get_redis_context(user_id=str(user_id or okx_uid), timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 1. telegram_id 기준 로그 저장 (기존 방식 - 호환성 유지)
+            log_set_key = LOG_SET_KEY.format(user_id=user_id)
+            await redis.zadd(log_set_key, {log_data: log_score})
 
-        # 2. okx_uid 기준 로그 저장 (새로운 방식)
-        if okx_uid:
-            okx_log_set_key = f"telegram:logs:by_okx_uid:{okx_uid}"
-            await redis.zadd(okx_log_set_key, {log_data: log_score})
+            # 2. okx_uid 기준 로그 저장 (새로운 방식)
+            if okx_uid:
+                okx_log_set_key = f"telegram:logs:by_okx_uid:{okx_uid}"
+                await redis.zadd(okx_log_set_key, {log_data: log_score})
 
-        # 3. 통합 인덱스에도 추가 (날짜별 인덱스)
-        date_key = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
-        index_key = f"telegram:logs:index:date:{date_key}"
-        log_id = f"{okx_uid or 'unknown'}_{int(log_score * 1000000)}"
-        await redis.sadd(index_key, log_id)
+            # 3. 통합 인덱스에도 추가 (날짜별 인덱스)
+            date_key = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+            index_key = f"telegram:logs:index:date:{date_key}"
+            log_id = f"{okx_uid or 'unknown'}_{int(log_score * 1000000)}"
+            await redis.sadd(index_key, log_id)
 
-        # 4. Redis Pub/Sub 채널에 로그 발행 (두 채널 모두)
-        # telegram_id 기준 채널 (기존)
-        log_channel = LOG_CHANNEL_KEY.format(user_id=user_id)
-        await redis.publish(log_channel, log_data)
+            # 4. Redis Pub/Sub 채널에 로그 발행 (두 채널 모두)
+            # telegram_id 기준 채널 (기존)
+            log_channel = LOG_CHANNEL_KEY.format(user_id=user_id)
+            await redis.publish(log_channel, log_data)
 
-        # okx_uid 기준 채널 (새로운)
-        if okx_uid:
-            okx_log_channel = f"telegram:log_channel:by_okx_uid:{okx_uid}"
-            await redis.publish(okx_log_channel, log_data)
+            # okx_uid 기준 채널 (새로운)
+            if okx_uid:
+                okx_log_channel = f"telegram:log_channel:by_okx_uid:{okx_uid}"
+                await redis.publish(okx_log_channel, log_data)
 
-        # 5. 통계 업데이트
-        if okx_uid:
-            stats_key = f"telegram:stats:{okx_uid}"
-            await redis.hincrby(stats_key, "total", 1)
-            await redis.hincrby(stats_key, status, 1)
-            await redis.hincrby(stats_key, f"category:{category}", 1)
+            # 5. 통계 업데이트 (within same context)
+            if okx_uid:
+                stats_key = f"telegram:stats:{okx_uid}"
+                await redis.hincrby(stats_key, "total", 1)
+                await redis.hincrby(stats_key, status, 1)
+                await redis.hincrby(stats_key, f"category:{category}", 1)
 
         logger.info(f"Logged event - telegram_id: {user_id}, okx_uid: {okx_uid}, event_type: {event_type}, status: {status}, category: {category}, strategy: {strategy_type}")
 
+    except asyncio.CancelledError:
+        # Graceful shutdown 중 작업 취소는 정상 동작 - 재발생시켜 상위로 전파
+        logger.debug(f"Telegram event logging cancelled for user {user_id} (shutdown)")
+        raise
     except Exception as e:
         logger.error(f"Failed to log telegram event for user {user_id}: {e}")
         traceback.print_exc()
@@ -240,41 +248,45 @@ async def enqueue_telegram_message(message_data):
     처리 상태는 telegram:processing_flag:{okx_uid} 키로 확인할 수 있습니다.
     """
     try:
-        redis = await get_redis_client()
         okx_uid = message_data["okx_uid"]
         logger.info(f"[enqueue_telegram_message] 메시지 큐에 추가 시도 - okx_uid: {okx_uid}")
         queue_key = MESSAGE_QUEUE_KEY.format(okx_uid=okx_uid)
-        
+
         # 메시지 내용 기반 카테고리 결정
         content = message_data.get("message", "")
         message_data["category"] = determine_message_category(content)
-        
+
         # 전략 타입 설정 (없으면 기본값 사용)
         if "strategy_type" not in message_data:
             message_data["strategy_type"] = "HyperRSI"
-        
+
         # 타임스탬프 추가
         message_data["timestamp"] = time.time()
-        
-        # 레디스 큐에 메시지 추가 (JSON 문자열로 변환)
-        await redis.rpush(queue_key, json.dumps(message_data))
-        
-        # 메시지 처리 플래그 확인 및 설정
-        processing_flag = MESSAGE_PROCESSING_FLAG.format(okx_uid=okx_uid)
-        is_processing = await redis.get(processing_flag)
-        
-        # 처리 중이 아니면 메시지 처리 시작
-        if not is_processing:
-            await redis.set(processing_flag, "1", ex=300)  # 5분 타임아웃 설정
-            task = asyncio.create_task(process_telegram_messages(okx_uid))
-            # 태스크 예외를 로깅하기 위한 콜백 추가
-            def task_exception_handler(t):
-                try:
-                    t.result()
-                except Exception as e:
-                    logger.error(f"Background task exception in process_telegram_messages for okx_uid {okx_uid}: {e}")
-                    traceback.print_exc()
-            task.add_done_callback(task_exception_handler)
+
+        # Operations: RPUSH + GET + potential SET - all within one context
+        async with get_redis_context(user_id=str(okx_uid), timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 레디스 큐에 메시지 추가 (JSON 문자열로 변환)
+            await redis.rpush(queue_key, json.dumps(message_data))
+
+            # 메시지 처리 플래그 확인 및 설정
+            processing_flag = MESSAGE_PROCESSING_FLAG.format(okx_uid=okx_uid)
+            is_processing = await redis.get(processing_flag)
+
+            # 처리 중이 아니면 메시지 처리 시작
+            if not is_processing:
+                await redis.set(processing_flag, "1", ex=300)  # 5분 타임아웃 설정
+                task = asyncio.create_task(process_telegram_messages(okx_uid))
+                # 태스크 예외를 로깅하기 위한 콜백 추가
+                def task_exception_handler(t):
+                    try:
+                        t.result()
+                    except asyncio.CancelledError:
+                        # Graceful shutdown 중 Task 취소는 정상 동작
+                        logger.debug(f"Telegram message processing task cancelled for okx_uid {okx_uid} (shutdown)")
+                    except Exception as e:
+                        logger.error(f"Background task exception in process_telegram_messages for okx_uid {okx_uid}: {e}")
+                        traceback.print_exc()
+                task.add_done_callback(task_exception_handler)
 
         return True
     except Exception as e:
@@ -285,61 +297,73 @@ async def enqueue_telegram_message(message_data):
 # 큐에서 메시지를 가져와 순차적으로 전송하는 함수
 async def process_telegram_messages(okx_uid):
     """레디스 큐에서 메시지를 가져와 순차적으로 텔레그램으로 전송합니다"""
-    redis = await get_redis_client()
     queue_key = MESSAGE_QUEUE_KEY.format(okx_uid=okx_uid)
     processing_flag = MESSAGE_PROCESSING_FLAG.format(okx_uid=okx_uid)
 
-    try:
-        while True:
-            # 큐에서 메시지 가져오기 (블로킹 방식, 1초 타임아웃)
-            message_data = await redis.blpop(queue_key, 1)
+    # Long-running function: Operations include BLPOP (loop) + DELETE - all within one context
+    async with get_redis_context(user_id=str(okx_uid), timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+        try:
+            while True:
+                # 큐에서 메시지 가져오기 (블로킹 방식, 1초 타임아웃)
+                message_data = await redis.blpop(queue_key, 1)
 
-            # 큐가 비어있으면 처리 종료
-            if not message_data:
+                # 큐가 비어있으면 처리 종료
+                if not message_data:
+                    await redis.delete(processing_flag)
+                    break
+
+                # 메시지 데이터 파싱
+                _, message_json = message_data
+                message_obj = json.loads(message_json)
+
+                # 메시지 타입에 따라 적절한 함수 호출
+                message_type = message_obj.get("event_type", "text")
+                category = message_obj.get("category", "general")
+
+                if message_type == "text":
+                    # 일반 텍스트 메시지
+                    await send_telegram_message_direct(
+                        message=message_obj["message"],
+                        okx_uid=message_obj["okx_uid"],
+                        debug=message_obj.get("debug", False),
+                        category=category, # 카테고리 전달
+                        error=message_obj.get("error", False)
+                    )
+                elif message_type == "markup":
+                    # 마크업이 있는 메시지
+                    await send_telegram_message_with_markup_direct(
+                        okx_uid=message_obj["okx_uid"],
+                        text=message_obj["message"],
+                        reply_markup=message_obj.get("reply_markup"),
+                        category=category # 카테고리 전달
+                    )
+                elif message_type == "edit":
+                    # 메시지 수정
+                    await edit_telegram_message_text_direct(
+                        okx_uid=message_obj["okx_uid"],
+                        message_id=message_obj["message_id"],
+                        text=message_obj["message"],
+                        reply_markup=message_obj.get("reply_markup"),
+                        category=category # 카테고리 전달
+                    )
+
+                # 속도 제한을 위한 짧은 대기
+                await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            # Graceful shutdown 중 Task 취소 - processing flag 정리 후 재발생
+            logger.debug(f"Message processing cancelled for okx_uid {okx_uid} (shutdown)")
+            try:
                 await redis.delete(processing_flag)
-                break
-                
-            # 메시지 데이터 파싱
-            _, message_json = message_data
-            message_obj = json.loads(message_json)
-            
-            # 메시지 타입에 따라 적절한 함수 호출
-            message_type = message_obj.get("event_type", "text")
-            category = message_obj.get("category", "general")
-  
-            if message_type == "text":
-                # 일반 텍스트 메시지
-                await send_telegram_message_direct(
-                    message=message_obj["message"],
-                    okx_uid=message_obj["okx_uid"],
-                    debug=message_obj.get("debug", False),
-                    category=category, # 카테고리 전달
-                    error=message_obj.get("error", False)
-                )
-            elif message_type == "markup":
-                # 마크업이 있는 메시지
-                await send_telegram_message_with_markup_direct(
-                    okx_uid=message_obj["okx_uid"],
-                    text=message_obj["message"],
-                    reply_markup=message_obj.get("reply_markup"),
-                    category=category # 카테고리 전달
-                )
-            elif message_type == "edit":
-                # 메시지 수정
-                await edit_telegram_message_text_direct(
-                    okx_uid=message_obj["okx_uid"],
-                    message_id=message_obj["message_id"],
-                    text=message_obj["message"],
-                    reply_markup=message_obj.get("reply_markup"),
-                    category=category # 카테고리 전달
-                )
-            
-            # 속도 제한을 위한 짧은 대기
-            await asyncio.sleep(0.1)
-    except Exception as e:
-        logger.error(f"메시지 처리 중 오류 발생: {str(e)}")
-        traceback.print_exc()
-        await redis.delete(processing_flag)
+            except Exception:
+                pass  # Shutdown 중이므로 Redis 작업 실패 무시
+            raise
+        except Exception as e:
+            logger.error(f"메시지 처리 중 오류 발생: {str(e)}")
+            traceback.print_exc()
+            try:
+                await redis.delete(processing_flag)
+            except Exception:
+                pass  # 정리 작업 실패 무시
 
 # 직접 텔레그램으로 메시지를 보내는 함수들 (내부용)
 
@@ -420,6 +444,28 @@ async def send_telegram_message_direct(message, okx_uid, debug=False, category="
     final_message = message
 
     try:
+        # 에러 메시지 중복 제거 체크 (error=True 또는 debug=True일 때)
+        if error or debug:
+            # Redis client 가져오기
+            redis_client = get_redis_client()
+
+            # 중복 체크 (5분 = 300초 기본값)
+            # DEBUG 메시지도 동일한 로직 적용 (원본 메시지 기준)
+            should_send = await should_send_error_notification(
+                redis_client,
+                str(og_okx_uid),
+                message,  # 원본 메시지로 체크 (접두사 붙이기 전)
+                ttl_seconds=300
+            )
+
+            if not should_send:
+                # 중복된 에러 - 로그만 남기고 알림은 보내지 않음
+                logger.info(f"[send_direct] Duplicate error/debug notification suppressed for {og_okx_uid}: {message[:50]}...")
+                status = "suppressed"  # 로그에 기록할 상태
+                error_msg = "Duplicate notification suppressed"
+                # finally 블록에서 로그 기록하고 종료
+                return
+
         if error and ERROR_TELEGRAM_ID:
             telegram_id_to_send = ERROR_TELEGRAM_ID
             final_message = f"🚨 [ERROR : {og_okx_uid}] {message}"
@@ -596,6 +642,25 @@ async def send_telegram_message(message, okx_uid, debug=False, error=False, imme
             okx_uid = converted_okx_uid
         else:
             logger.warning(f"[send_telegram_message] 텔레그램 ID {okx_uid}를 OKX UID로 변환 실패, 그대로 사용")
+
+    # 트레이딩 상태 확인 (error 또는 debug 메시지가 아닌 경우만)
+    # error 메시지는 항상 전송되어야 함
+    if not error and not debug:
+        try:
+            # Operations: Single GET - fast operation
+            async with get_redis_context(user_id=str(okx_uid), timeout=RedisTimeout.FAST_OPERATION) as redis:
+                trading_status = await redis.get(f"user:{okx_uid}:trading:status")
+                if trading_status:
+                    if isinstance(trading_status, bytes):
+                        trading_status = trading_status.decode('utf-8')
+
+                    if trading_status == "stopped":
+                        logger.info(f"[send_telegram_message] 트레이딩이 중지된 상태입니다. 메시지 전송을 건너뜁니다. okx_uid: {okx_uid}")
+                        return False
+        except Exception as e:
+            logger.error(f"[send_telegram_message] 트레이딩 상태 확인 중 오류: {str(e)}")
+            # 상태 확인 실패 시 메시지는 전송 (안전을 위해)
+            pass
 
     # immediate=True이면 큐를 우회하고 직접 전송
     if immediate:

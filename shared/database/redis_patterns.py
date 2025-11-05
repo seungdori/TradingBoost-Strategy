@@ -6,8 +6,10 @@ All patterns follow async/await conventions and proper resource management.
 
 Author: Redis Architecture Improvement Initiative
 Created: 2025-10-19
+Updated: 2025-10-22 - Added timeout protection
 """
 
+import asyncio
 import json
 import time
 import hashlib
@@ -18,9 +20,22 @@ from redis.asyncio import Redis as AsyncRedis
 from redis.exceptions import RedisError, ConnectionError, TimeoutError, WatchError
 
 from shared.logging import get_logger
-from shared.database.redis import get_redis
+from shared.database.redis import get_redis, get_circuit_breaker
 
 logger = get_logger(__name__)
+
+# =============================================================================
+# Timeout Configuration
+# =============================================================================
+
+class RedisTimeout:
+    """Centralized timeout constants for Redis operations"""
+    # Operation timeouts
+    FAST_OPERATION = 2.0  # GET, SET, EXISTS (2 seconds)
+    NORMAL_OPERATION = 5.0  # HGETALL, MGET, SCAN (5 seconds)
+    SLOW_OPERATION = 10.0  # Complex queries, large data transfers (10 seconds)
+    PIPELINE = 15.0  # Pipeline operations (15 seconds)
+    HEALTH_CHECK = 3.0  # Health check timeout (3 seconds)
 
 # =============================================================================
 # TTL Constants - Centralized expiration times
@@ -49,35 +64,129 @@ class RedisTTL:
 
 
 # =============================================================================
+# Timeout Decorator - Protection against hanging operations
+# =============================================================================
+
+def with_timeout(timeout: float = RedisTimeout.NORMAL_OPERATION):
+    """
+    Decorator to add timeout protection to Redis operations.
+
+    Args:
+        timeout: Maximum time to wait in seconds
+
+    Usage:
+        @with_timeout(timeout=5.0)
+        async def my_redis_operation(redis):
+            return await redis.get("key")
+
+    Raises:
+        asyncio.TimeoutError: If operation exceeds timeout
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            try:
+                return await asyncio.wait_for(
+                    func(*args, **kwargs),
+                    timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Redis operation {func.__name__} timed out after {timeout}s",
+                    extra={"function": func.__name__, "timeout": timeout}
+                )
+                raise
+        return wrapper
+    return decorator
+
+
+# =============================================================================
 # Context Manager Pattern - Recommended for all service/utility functions
 # =============================================================================
 
 @asynccontextmanager
-async def redis_context() -> AsyncIterator[AsyncRedis]:
+async def redis_context(
+    timeout: Optional[float] = None,
+    use_circuit_breaker: bool = True
+) -> AsyncIterator[AsyncRedis]:
     """
-    Context manager for Redis operations with proper cleanup.
+    Context manager for Redis operations with proper cleanup, timeout and circuit breaker protection.
+
+    Args:
+        timeout: Optional timeout for Redis acquisition (default: no timeout on acquisition)
+        use_circuit_breaker: Enable circuit breaker protection (default: True)
 
     Usage:
+        # Basic usage
         async with redis_context() as redis:
             await redis.set("key", "value")
 
-    This ensures connections are properly returned to the pool.
+        # With timeout on individual operations (recommended)
+        async with redis_context() as redis:
+            await asyncio.wait_for(redis.get("key"), timeout=5.0)
+
+        # Disable circuit breaker for critical operations
+        async with redis_context(use_circuit_breaker=False) as redis:
+            await redis.set("critical_key", "value")
+
+    This ensures connections are properly returned to the pool and protects
+    against hanging operations and cascading failures.
+
+    Note: For individual operation timeout, use asyncio.wait_for() or with_timeout decorator
     """
-    redis = await get_redis()
+    # Circuit breaker check
+    if use_circuit_breaker:
+        breaker = get_circuit_breaker()
+        if breaker.is_open():
+            logger.warning("Circuit breaker is OPEN - Redis unavailable")
+            raise ConnectionError("Circuit breaker is open - Redis service unavailable")
+
+    try:
+        if timeout:
+            redis = await asyncio.wait_for(get_redis(), timeout=timeout)
+        else:
+            redis = await get_redis()
+    except asyncio.TimeoutError:
+        if use_circuit_breaker:
+            get_circuit_breaker().record_failure()
+        logger.error(f"Redis connection acquisition timed out after {timeout}s")
+        raise
+
     try:
         yield redis
+
+        # Record success if circuit breaker is enabled
+        if use_circuit_breaker:
+            get_circuit_breaker().record_success()
+
     except ConnectionError as e:
+        if use_circuit_breaker:
+            get_circuit_breaker().record_failure()
         logger.error("Redis connection failed", exc_info=True)
         raise
     except TimeoutError as e:
+        if use_circuit_breaker:
+            get_circuit_breaker().record_failure()
         logger.warning("Redis operation timed out", exc_info=True)
         raise
+    except asyncio.TimeoutError as e:
+        if use_circuit_breaker:
+            get_circuit_breaker().record_failure()
+        logger.warning("Redis operation timed out (asyncio)", exc_info=True)
+        raise
     except RedisError as e:
+        if use_circuit_breaker:
+            get_circuit_breaker().record_failure()
         logger.error("Redis operation failed", exc_info=True)
         raise
     finally:
         # aclose() returns connection to pool (redis-py 5.0+)
-        await redis.aclose()
+        try:
+            await asyncio.wait_for(redis.aclose(), timeout=2.0)
+        except asyncio.TimeoutError:
+            logger.warning("Redis connection close timed out after 2s")
+        except Exception as e:
+            logger.error(f"Error closing Redis connection: {e}")
 
 
 # =============================================================================
@@ -177,10 +286,11 @@ async def safe_redis_operation(
     default: Any = None,
     log_errors: bool = True,
     raise_on_error: bool = False,
+    timeout: Optional[float] = RedisTimeout.NORMAL_OPERATION,
     **kwargs
 ) -> Any:
     """
-    Safely execute a Redis operation with comprehensive error handling.
+    Safely execute a Redis operation with comprehensive error handling and timeout protection.
 
     Args:
         operation: Redis operation to execute (async function)
@@ -188,6 +298,7 @@ async def safe_redis_operation(
         default: Default value to return on error
         log_errors: Whether to log errors
         raise_on_error: Whether to raise exceptions or return default
+        timeout: Operation timeout in seconds (default: 5.0, None to disable)
         **kwargs: Keyword arguments for the operation
 
     Returns:
@@ -198,11 +309,21 @@ async def safe_redis_operation(
             redis.get,
             "key",
             default="",
+            timeout=5.0,
             log_errors=True
         )
     """
     try:
-        return await operation(*args, **kwargs)
+        if timeout is not None:
+            return await asyncio.wait_for(operation(*args, **kwargs), timeout=timeout)
+        else:
+            return await operation(*args, **kwargs)
+    except asyncio.TimeoutError as e:
+        if log_errors:
+            logger.warning(f"Redis operation timed out after {timeout}s", exc_info=True)
+        if raise_on_error:
+            raise
+        return default
     except ConnectionError as e:
         if log_errors:
             logger.error("Redis connection failed", exc_info=True)
@@ -533,11 +654,25 @@ async def redis_health_check(redis: Optional[AsyncRedis] = None) -> Dict[str, An
 """
 === USAGE EXAMPLES ===
 
-1. CONTEXT MANAGER (Recommended for services/utilities):
+1. CONTEXT MANAGER WITH TIMEOUT (Recommended for services/utilities):
 
     async def my_service_function(user_id: str):
+        # Option 1: Timeout on individual operations (recommended)
         async with redis_context() as redis:
-            user_data = await redis.hgetall(f"user:{user_id}")
+            user_data = await asyncio.wait_for(
+                redis.hgetall(f"user:{user_id}"),
+                timeout=5.0
+            )
+            return user_data
+
+        # Option 2: Using safe_redis_operation
+        async with redis_context() as redis:
+            user_data = await safe_redis_operation(
+                redis.hgetall,
+                f"user:{user_id}",
+                timeout=5.0,
+                default={}
+            )
             return user_data
 
 2. FASTAPI DEPENDENCY INJECTION (Recommended for API routes):

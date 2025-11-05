@@ -1,3 +1,4 @@
+import asyncio
 import time
 from typing import Optional
 
@@ -14,6 +15,7 @@ from HYPERRSI.src.utils.uid_manager import (
 )
 from shared.constants.default_settings import DEFAULT_TRADING_SETTINGS
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_patterns import scan_keys_pattern, redis_context, RedisTimeout
 from shared.helpers.user_id_resolver import get_okx_uid_from_telegram, store_user_id_mapping
 
 
@@ -34,7 +36,7 @@ class UserRegistrationRequest(BaseModel):
     model_config = {
         "json_schema_extra": {
             "example": {
-                "user_id": 123456789,
+                "user_id": "123456789",
                 "api_key": "your-api-key",
                 "api_secret": "your-api-secret",
                 "passphrase": "your-passphrase"
@@ -227,79 +229,105 @@ async def register_user(
     db: Session = Depends(get_db)
 ):
     try:
-        # 이미 등록된 사용자인지 확인
-        existing_keys = await get_redis_client().hgetall(f"user:{request.user_id}:api:keys")
-        if existing_keys:
-            raise HTTPException(
-                status_code=400,
-                detail="이미 등록된 사용자입니다."
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 이미 등록된 사용자인지 확인
+            existing_keys = await asyncio.wait_for(
+                redis.hgetall(f"user:{request.user_id}:api:keys"),
+                timeout=RedisTimeout.FAST_OPERATION
             )
-            
-        # Redis에 API 키 정보 저장
-        await get_redis_client().hmset(f"user:{request.user_id}:api:keys", {
-            'api_key': request.api_key,
-            'api_secret': request.api_secret,
-            'passphrase': request.passphrase
-        })
-        
-        # TimescaleDB에 API 정보 저장 (필요 시 확장 가능)
-        
-        
-        
-        # OKX UID 가져오기 및 저장 시도
-        okx_uid = None
-        try:
-            is_invitee, uid = get_uid_from_api_keys(request.api_key, request.api_secret, request.passphrase)
-            if uid:
-                # OKX UID를 Redis에 저장
-                await store_user_id_mapping(request.user_id, uid)
-                okx_uid = uid
-                print(f"사용자 {request.user_id}의 OKX UID {uid} 저장 완료")
-        except Exception as e:
-            # OKX UID 가져오기 실패해도 사용자 등록은 계속 진행
-            print(f"OKX UID 가져오기 실패: {str(e)}")
-            
-        
-        
-        # 기본 트레이딩 설정 저장
-        await get_redis_client().hmset(
-            f"user:{request.user_id}:preferences", 
-            {k: str(v) for k, v in DEFAULT_TRADING_SETTINGS.items()}
-        )
-        # 사용자 상태 초기화
-        await get_redis_client().set(f"user:{request.user_id}:trading:status", "stopped")
-        
-        if okx_uid is not None:
-            await get_redis_client().hmset(
-                f"user:{okx_uid}:preferences", 
-                {k: str(v) for k, v in DEFAULT_TRADING_SETTINGS.items()}
-            )
-            await get_redis_client().hmset(f"user:{okx_uid}:trading:status", "stopped")
-            print("❤️‍❤️‍❤️‍❤️‍ ")
-        
+            if existing_keys:
+                raise HTTPException(
+                    status_code=400,
+                    detail="이미 등록된 사용자입니다."
+                )
 
-        
-        # 트레이딩 통계 초기화
-        registration_time = int(time.time())
-        await get_redis_client().hmset(f"user:{request.user_id}:stats", {
-            'total_trades': '0',
-            'entry_trade': '0',
-            'successful_trades': '0',
-            'profit_percentage': '0',
-            'registration_date': str(registration_time),
-            'last_trade_date': '0'
-        })
-        
-        if okx_uid is not None:
-            await get_redis_client().hmset(f"user:{okx_uid}:stats", {
-                'total_trades': '0',
-                'entry_trade': '0',
-                'successful_trades': '0',
-                'profit_percentage': '0',
-                'registration_date': str(registration_time),
-                'last_trade_date': '0'
-            })
-        
+            # Redis에 API 키 정보 저장
+            await asyncio.wait_for(
+                redis.hmset(f"user:{request.user_id}:api:keys", {
+                    'api_key': request.api_key,
+                    'api_secret': request.api_secret,
+                    'passphrase': request.passphrase
+                }),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
+            # TimescaleDB에 API 정보 저장 (필요 시 확장 가능)
+
+
+
+            # OKX UID 가져오기 및 저장 시도
+            okx_uid = None
+            try:
+                is_invitee, uid = get_uid_from_api_keys(request.api_key, request.api_secret, request.passphrase)
+                if uid:
+                    # OKX UID를 Redis에 저장
+                    await store_user_id_mapping(request.user_id, uid)
+                    okx_uid = uid
+                    print(f"사용자 {request.user_id}의 OKX UID {uid} 저장 완료")
+            except Exception as e:
+                # OKX UID 가져오기 실패해도 사용자 등록은 계속 진행
+                print(f"OKX UID 가져오기 실패: {str(e)}")
+
+
+
+            # 기본 트레이딩 설정 저장
+            await asyncio.wait_for(
+                redis.hmset(
+                    f"user:{request.user_id}:preferences",
+                    {k: str(v) for k, v in DEFAULT_TRADING_SETTINGS.items()}
+                ),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+            # 사용자 상태 초기화
+            await asyncio.wait_for(
+                redis.set(f"user:{request.user_id}:trading:status", "stopped"),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
+            if okx_uid is not None:
+                await asyncio.wait_for(
+                    redis.hmset(
+                        f"user:{okx_uid}:preferences",
+                        {k: str(v) for k, v in DEFAULT_TRADING_SETTINGS.items()}
+                    ),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
+                await asyncio.wait_for(
+                    redis.hmset(f"user:{okx_uid}:trading:status", "stopped"),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
+                print("❤️‍❤️‍❤️‍❤️‍ ")
+
+
+
+            # 트레이딩 통계 초기화
+            registration_time = int(time.time())
+            await asyncio.wait_for(
+                redis.hmset(f"user:{request.user_id}:stats", {
+                    'total_trades': '0',
+                    'entry_trade': '0',
+                    'successful_trades': '0',
+                    'profit_percentage': '0',
+                    'registration_date': str(registration_time),
+                    'last_trade_date': '0'
+                }),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
+            if okx_uid is not None:
+                await asyncio.wait_for(
+                    redis.hmset(f"user:{okx_uid}:stats", {
+                        'total_trades': '0',
+                        'entry_trade': '0',
+                        'successful_trades': '0',
+                        'profit_percentage': '0',
+                        'registration_date': str(registration_time),
+                        'last_trade_date': '0'
+                    }),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
+
         return UserResponse(
             user_id=request.user_id,
             status="registered",
@@ -387,21 +415,32 @@ async def register_user(
 )
 async def get_user(user_id: str, db: Session = Depends(get_db)):
     try:
-        # 사용자 존재 여부 확인
-        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
-        if not api_keys:
-            raise HTTPException(
-                status_code=404,
-                detail="등록되지 않은 사용자입니다."
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 사용자 존재 여부 확인
+            api_keys = await asyncio.wait_for(
+                redis.hgetall(f"user:{user_id}:api:keys"),
+                timeout=RedisTimeout.FAST_OPERATION
             )
-            
-        # 사용자 상태 정보 조회
-        stats = await get_redis_client().hgetall(f"user:{user_id}:stats")
-        status = await get_redis_client().get(f"user:{user_id}:trading:status")
-        
+            if not api_keys:
+                raise HTTPException(
+                    status_code=404,
+                    detail="등록되지 않은 사용자입니다."
+                )
+
+            # 사용자 상태 정보 조회
+            stats = await asyncio.wait_for(
+                redis.hgetall(f"user:{user_id}:stats"),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+            status = await asyncio.wait_for(
+                redis.get(f"user:{user_id}:trading:status"),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
         # OKX UID 조회
         okx_uid = await get_okx_uid_from_telegram(user_id)
-        
+
         # status 처리 - bytes일 수도 있고 str일 수도 있음
         status_str = status.decode() if isinstance(status, bytes) else status
         if not status_str:
@@ -415,7 +454,7 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
         else:
             # 이미 문자열이거나 다른 형태인 경우
             registration_date = int(str(registration_date_bytes) or '0')
-        
+
         return UserResponse(
             user_id=user_id,
             status=status_str,
@@ -478,14 +517,19 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
 )
 async def get_okx_uid(user_id: str, db: Session = Depends(get_db)):
     try:
-        # 사용자 존재 여부 확인
-        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
-        if not api_keys:
-            raise HTTPException(
-                status_code=404,
-                detail="등록되지 않은 사용자입니다."
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 사용자 존재 여부 확인
+            api_keys = await asyncio.wait_for(
+                redis.hgetall(f"user:{user_id}:api:keys"),
+                timeout=RedisTimeout.FAST_OPERATION
             )
-            
+            if not api_keys:
+                raise HTTPException(
+                    status_code=404,
+                    detail="등록되지 않은 사용자입니다."
+                )
+
         # OKX UID 조회
         okx_uid = await get_okx_uid_from_telegram(user_id)
         
@@ -579,20 +623,25 @@ async def get_okx_uid(user_id: str, db: Session = Depends(get_db)):
 )
 async def set_okx_uid(user_id: str, okx_uid: str):
     try:
-        # 사용자 존재 여부 확인
-        api_keys = await get_redis_client().hgetall(f"user:{user_id}:api:keys")
-        if not api_keys:
-            raise HTTPException(
-                status_code=404,
-                detail="등록되지 않은 사용자입니다."
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 사용자 존재 여부 확인
+            api_keys = await asyncio.wait_for(
+                redis.hgetall(f"user:{user_id}:api:keys"),
+                timeout=RedisTimeout.FAST_OPERATION
             )
-            
+            if not api_keys:
+                raise HTTPException(
+                    status_code=404,
+                    detail="등록되지 않은 사용자입니다."
+                )
+
         # OKX UID를 Redis에 저장
         await store_user_id_mapping(user_id, okx_uid)
-        
+
         # 초대 여부 확인 (실제 구현에서는 이 부분에 로직 추가 필요)
         is_invitee = True
-        
+
         return OkxUidResponse(
             user_id=user_id,
             okx_uid=okx_uid,
@@ -683,42 +732,58 @@ OKX UID에 매핑된 텔레그램 ID를 역방향으로 조회합니다. 여러 
 )
 async def get_telegram_id_from_okx_uid(okx_uid: str):
     try:
-        # 모든 사용자 키를 검색하기 위한 패턴
-        pattern = "user:*:okx_uid"
-        keys = await get_redis_client().keys(pattern)
-        
-        valid_telegram_ids = []
-        
-        for key in keys:
-            # Redis 키에서 저장된 OKX UID 값 가져오기
-            stored_uid = await get_redis_client().get(key)
-            
-            # stored_uid 값 처리 (bytes일 수도 있고 str일 수도 있음)
-            stored_uid_str = stored_uid.decode() if isinstance(stored_uid, bytes) else stored_uid
-            
-            # 요청된 OKX UID와 일치하는 경우
-            if stored_uid and stored_uid_str == okx_uid:
-                # user:123456789:okx_uid 형식에서 user_id(텔레그램 ID) 추출
-                user_key = key.decode() if isinstance(key, bytes) else key
-                user_id = user_key.split(':')[1]
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 모든 사용자 키를 검색하기 위한 패턴
+            pattern = "user:*:okx_uid"
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            keys = await scan_keys_pattern(pattern, redis=redis)
 
-                # 숫자로 시작하는 텔레그램 ID만 추가 (13자리 미만은 텔레그램 ID)
-                if user_id.isdigit() and len(user_id) < 13:
-                    # 최근 활동 시간 확인 (가능한 경우)
-                    last_activity = 0
-                    try:
-                        stats = await get_redis_client().hgetall(f"user:{user_id}:stats")
-                        if stats and b'last_trade_date' in stats:
-                            last_trade_date = stats[b'last_trade_date'] if isinstance(stats[b'last_trade_date'], bytes) else stats[b'last_trade_date'].encode()
-                            last_activity = int(last_trade_date.decode() or '0')
-                    except Exception as e:
-                        print(f"통계 정보 가져오기 오류: {str(e)}")
-                        pass
-                    
-                    valid_telegram_ids.append({
-                        "telegram_id": int(user_id),
-                        "last_activity": last_activity
-                    })
+            valid_telegram_ids = []
+
+            for key in keys:
+                # Redis 키에서 저장된 OKX UID 값 가져오기
+                stored_uid = await asyncio.wait_for(
+                    redis.get(key),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
+
+                # stored_uid 값 처리 (bytes일 수도 있고 str일 수도 있음)
+                stored_uid_str = stored_uid.decode() if isinstance(stored_uid, bytes) else stored_uid
+
+                # 요청된 OKX UID와 일치하는 경우
+                if stored_uid and stored_uid_str == okx_uid:
+                    # user:123456789:okx_uid 형식에서 user_id(텔레그램 ID) 추출
+                    user_key = key.decode() if isinstance(key, bytes) else key
+                    user_id = user_key.split(':')[1]
+
+                    # 숫자로 시작하는 텔레그램 ID만 추가 (13자리 미만은 텔레그램 ID)
+                    if user_id.isdigit() and len(user_id) < 13:
+                        # 최근 활동 시간 확인 (가능한 경우)
+                        last_activity = 0
+                        try:
+                            stats = await asyncio.wait_for(
+                                redis.hgetall(f"user:{user_id}:stats"),
+                                timeout=RedisTimeout.FAST_OPERATION
+                            )
+                            if stats and b'last_trade_date' in stats:
+                                last_trade_date = stats[b'last_trade_date'] if isinstance(stats[b'last_trade_date'], bytes) else stats[b'last_trade_date'].encode()
+                                last_activity = int(last_trade_date.decode() or '0')
+                        except Exception as e:
+                            print(f"통계 정보 가져오기 오류: {str(e)}")
+                            pass
+
+                        # telegram_id는 정수여야 하므로 안전하게 변환
+                        try:
+                            telegram_id = int(user_id)
+                        except (ValueError, TypeError):
+                            # UUID인 경우 건너뛰기 (텔레그램 ID가 아님)
+                            continue
+
+                        valid_telegram_ids.append({
+                            "telegram_id": telegram_id,
+                            "last_activity": last_activity
+                        })
         
         if valid_telegram_ids:
             # 최근 활동순으로 정렬

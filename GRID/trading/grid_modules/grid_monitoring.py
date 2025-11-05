@@ -17,7 +17,6 @@ from typing import Any, Dict, Optional
 from ccxt.async_support import ExchangeError, NetworkError
 
 from GRID import telegram_message
-from GRID.core.redis import get_redis_connection
 from GRID.core.websocket import log_exception
 from GRID.database import redis_database
 from GRID.database.redis_database import update_active_grid, update_take_profit_orders_info
@@ -78,7 +77,7 @@ async def check_order_status(exchange_instance,exchange_name, order_id, symbol, 
                 filled_quantity = fetched_order.get('filled', adjusted_quantity)  # 'filled' 키가 없는 경우 기본값 0
                 level_quantities[level_index] = round(adjusted_quantity,4 )
                 print(f"f 체결. {level_quantities[level_index]}")
-                trading_direction = '🔴 숏' if is_short_order else '🟢 롱'
+                trading_direction = '🔴 숏' if is_short_order else '\ 롱'
                 message = f"<{symbol} :{level_index}의 {trading_direction} 주문 체결되었습니다.>\n 수량 : {level_quantities[level_index]} | 가격 : {fetched_order['price']} | 시간 : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 asyncio.create_task(telegram_message.send_telegram_message(message, exchange_name, user_id))
                 #await manager.add_user_message(user_id, message)

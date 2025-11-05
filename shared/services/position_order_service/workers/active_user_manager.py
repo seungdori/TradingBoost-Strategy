@@ -5,6 +5,7 @@ Ensures continuous monitoring for all active bot users to detect new positions.
 """
 
 import asyncio
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Set
 
@@ -172,13 +173,37 @@ class ActiveUserManager:
                 )
 
                 for key in keys:
-                    settings_data = await self.redis_client.hgetall(key)
-                    if settings_data.get('bot_enabled') == 'true':
-                        # Extract user_id
-                        parts = key.split(':')
-                        if len(parts) >= 2:
-                            user_id = parts[1]
-                            active_users.add(user_id)
+                    try:
+                        # Check key type before attempting to read
+                        key_type = await self.redis_client.type(key)
+
+                        if key_type == 'hash':
+                            # Hash type - use HGETALL
+                            settings_data = await self.redis_client.hgetall(key)
+                            if settings_data.get('bot_enabled') == 'true':
+                                parts = key.split(':')
+                                if len(parts) >= 2:
+                                    user_id = parts[1]
+                                    active_users.add(user_id)
+
+                        elif key_type == 'string':
+                            # String type (JSON) - use GET and parse
+                            settings_json = await self.redis_client.get(key)
+                            if settings_json:
+                                settings_data = json.loads(settings_json)
+
+                                # Check bot_enabled field OR API key existence
+                                has_bot_enabled = settings_data.get('bot_enabled') == True
+                                has_api_key = bool(settings_data.get('api_key'))
+
+                                if has_bot_enabled or has_api_key:
+                                    parts = key.split(':')
+                                    if len(parts) >= 2:
+                                        user_id = parts[1]
+                                        active_users.add(user_id)
+                    except Exception as e:
+                        # Skip problematic keys
+                        logger.debug(f"Skipping key {key}: {e}")
 
                 if cursor == 0:
                     break
@@ -197,16 +222,54 @@ class ActiveUserManager:
                     )
 
                     for key in keys:
-                        user_data = await self.redis_client.hgetall(key)
-                        if user_data.get('api_key'):
-                            # Extract user_id
-                            parts = key.split(':')
-                            if len(parts) >= 3:
-                                user_id = parts[2]
-                                active_users.add(user_id)
+                        try:
+                            # Check key type before attempting HGETALL
+                            key_type = await self.redis_client.type(key)
+                            if key_type == 'hash':
+                                user_data = await self.redis_client.hgetall(key)
+                                if user_data.get('api_key'):
+                                    # Extract user_id
+                                    parts = key.split(':')
+                                    if len(parts) >= 3:
+                                        user_id = parts[2]
+                                        active_users.add(user_id)
+                        except Exception as e:
+                            # Skip problematic keys
+                            logger.debug(f"Skipping key {key}: {e}")
 
                     if cursor == 0:
                         break
+
+            # Method 5: HYPERRSI API keys
+            # Pattern: user:{user_id}:api:keys (users with registered API keys)
+            pattern = "user:*:api:keys"
+            cursor = 0
+
+            while True:
+                cursor, keys = await self.redis_client.scan(
+                    cursor,
+                    match=pattern,
+                    count=100
+                )
+
+                for key in keys:
+                    try:
+                        # Check key type before attempting HGETALL
+                        key_type = await self.redis_client.type(key)
+                        if key_type == 'hash':
+                            api_keys = await self.redis_client.hgetall(key)
+                            if api_keys.get('api_key'):
+                                # Extract user_id from key: user:{user_id}:api:keys
+                                parts = key.split(':')
+                                if len(parts) >= 3:
+                                    user_id = parts[1]
+                                    active_users.add(user_id)
+                    except Exception as e:
+                        # Skip problematic keys
+                        logger.debug(f"Skipping key {key}: {e}")
+
+                if cursor == 0:
+                    break
 
             # Start tracking all active users
             for user_id in active_users:
@@ -474,43 +537,60 @@ class ActiveUserManager:
         exchanges = []
 
         for exchange in ['okx', 'binance', 'upbit', 'bitget', 'bybit']:
-            # Check for API keys
-            key1 = f"user:{user_id}:api:keys"
-            key2 = f"{exchange}:user:{user_id}"
+            try:
+                # Check for API keys
+                key1 = f"user:{user_id}:api:keys"
+                key2 = f"{exchange}:user:{user_id}"
 
-            data1 = await self.redis_client.hgetall(key1)
-            data2 = await self.redis_client.hgetall(key2)
+                data1 = {}
+                data2 = {}
 
-            if data1.get('api_key') or data2.get('api_key'):
-                exchanges.append(exchange)
+                # Check key types before attempting HGETALL
+                if await self.redis_client.type(key1) == 'hash':
+                    data1 = await self.redis_client.hgetall(key1)
+                if await self.redis_client.type(key2) == 'hash':
+                    data2 = await self.redis_client.hgetall(key2)
+
+                if data1.get('api_key') or data2.get('api_key'):
+                    exchanges.append(exchange)
+            except Exception as e:
+                logger.debug(f"Error detecting {exchange} for user {user_id}: {e}")
 
         return exchanges
 
     async def _get_user_api_credentials(self, user_id: str, exchange: str) -> Dict[str, str]:
         """Get user API credentials"""
-        # Try format 1
-        key = f"user:{user_id}:api:keys"
-        data = await self.redis_client.hgetall(key)
+        try:
+            # Try format 1
+            key = f"user:{user_id}:api:keys"
+            data = {}
+            if await self.redis_client.type(key) == 'hash':
+                data = await self.redis_client.hgetall(key)
 
-        if data.get('api_key'):
-            return {
-                'api_key': data.get('api_key'),
-                'api_secret': data.get('api_secret'),
-                'passphrase': data.get('passphrase') or data.get('password')
-            }
+            if data.get('api_key'):
+                return {
+                    'api_key': data.get('api_key'),
+                    'api_secret': data.get('api_secret'),
+                    'passphrase': data.get('passphrase') or data.get('password')
+                }
 
-        # Try format 2
-        key = f"{exchange}:user:{user_id}"
-        data = await self.redis_client.hgetall(key)
+            # Try format 2
+            key = f"{exchange}:user:{user_id}"
+            data = {}
+            if await self.redis_client.type(key) == 'hash':
+                data = await self.redis_client.hgetall(key)
 
-        if data.get('api_key'):
-            return {
-                'api_key': data.get('api_key'),
-                'api_secret': data.get('api_secret'),
-                'passphrase': data.get('password')
-            }
+            if data.get('api_key'):
+                return {
+                    'api_key': data.get('api_key'),
+                    'api_secret': data.get('api_secret'),
+                    'passphrase': data.get('password')
+                }
 
-        return {}
+            return {}
+        except Exception as e:
+            logger.debug(f"Error getting credentials for user {user_id} on {exchange}: {e}")
+            return {}
 
     async def _get_user_symbols(self, user_id: str, exchange: str) -> List[str]:
         """Get symbols from existing positions/orders"""
@@ -536,11 +616,15 @@ class ActiveUserManager:
         order_ids = await self.redis_client.smembers(open_orders_key)
 
         for order_id in order_ids:
-            order_key = f"orders:realtime:{user_id}:{exchange}:{order_id}"
-            order_data = await self.redis_client.hgetall(order_key)
-
-            if order_data.get('symbol'):
-                symbols.add(order_data['symbol'])
+            try:
+                order_key = f"orders:realtime:{user_id}:{exchange}:{order_id}"
+                # Check key type before attempting HGETALL
+                if await self.redis_client.type(order_key) == 'hash':
+                    order_data = await self.redis_client.hgetall(order_key)
+                    if order_data.get('symbol'):
+                        symbols.add(order_data['symbol'])
+            except Exception as e:
+                logger.debug(f"Error getting order data for {order_id}: {e}")
 
         return list(symbols)
 

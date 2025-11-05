@@ -10,7 +10,11 @@ def map_exchange_error(error: Exception) -> str:
     # 일반적인 에러 패턴 매칭 (우선순위 순서대로 체크)
     # 최소 수량 에러를 먼저 체크 (더 구체적인 조건)
     if ("minimum" in error_str or "최소" in error_str) and "수량" in error_str:
-        return "📉 주문 수량이 최소 수량 미만입니다."
+        # HTTPException의 경우 detail만 추출 (status_code 제거)
+        error_detail = str(error)
+        if hasattr(error, 'detail'):
+            error_detail = str(error.detail)
+        return f"📉 주문 수량이 최소 수량 미만입니다.\n{error_detail}"
 
     if "insufficient" in error_str and "balance" in error_str:
         return "💰 계좌 잔고가 부족합니다. 거래 금액을 줄이거나 잔고를 충전해주세요."
@@ -72,11 +76,19 @@ def map_exchange_error(error: Exception) -> str:
             error_code = error_str.split('"code":"')[1].split('"')[0]
         else:
             # 에러 코드를 찾을 수 없는 경우
-            return f"❌ 거래 실행 중 오류가 발생했습니다: {str(error)}"
+            # HTTPException의 경우 detail만 추출
+            error_detail = str(error)
+            if hasattr(error, 'detail'):
+                error_detail = str(error.detail)
+            return f"❌ 거래 실행 중 오류가 발생했습니다:\n{error_detail}"
             
         # 맵핑된 메시지 반환
         return error_mappings.get(error_code, f"❌ 알 수 없는 오류가 발생했습니다. (코드: {error_code})")
     except Exception as e:
         traceback.print_exc()
         # 에러 코드 추출 실패시 기본 메시지
-        return f"❌ 거래 실행 중 오류가 발생했습니다: {str(error)}"
+        # HTTPException의 경우 detail만 추출
+        error_detail = str(error)
+        if hasattr(error, 'detail'):
+            error_detail = str(error.detail)
+        return f"❌ 거래 실행 중 오류가 발생했습니다:\n{error_detail}"

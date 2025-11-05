@@ -17,6 +17,7 @@ import certifi
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.logger import get_logger
 from shared.database.redis import get_redis
+from shared.database.redis_patterns import scan_keys_pattern
 
 logger = get_logger(__name__)
 
@@ -55,7 +56,8 @@ class OKXWebsocketManager:
                 current_time = time.time()
                 # Redis에서 활성 사용자 목록 가져오기
                 redis = await get_redis()
-                keys = await redis.keys("user:*:trading:status")
+                # Use SCAN instead of KEYS to avoid blocking Redis
+                keys = await scan_keys_pattern("user:*:trading:status", redis=redis)
                 active_user_ids = []
                 
                 for key in keys:
@@ -276,7 +278,8 @@ class OKXWebsocketManager:
             # 기존 포지션 정보 가져오기 (TP 정보 포함)
             existing_positions = {}
             position_pattern = f"user:{user_id}:position"
-            existing_keys = await redis.keys(position_pattern)
+            # Use SCAN instead of KEYS to avoid blocking Redis
+            existing_keys = await scan_keys_pattern(position_pattern, redis=redis)
             
             for key in existing_keys:
                 if ":summary" not in key:  # 요약 정보 제외

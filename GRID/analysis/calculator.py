@@ -263,13 +263,15 @@ async def summarize_trading_results(exchange_name: str, direction: str) -> list:
     try:
         from GRID.data import get_cache, set_cache
         from shared.database.redis import get_redis
+        from shared.database.redis_patterns import scan_keys_pattern
 
         # Use shared async connection pool
         redis_client = await get_redis()
 
         # Redis에서 해당 거래소와 방향의 모든 심볼 키 가져오기
         pattern = f"{exchange_name}:*:{direction}"
-        all_keys = await redis_client.keys(pattern)
+        # Use SCAN instead of KEYS to avoid blocking Redis
+        all_keys = await scan_keys_pattern(pattern, redis=redis_client)
 
         results = []
 

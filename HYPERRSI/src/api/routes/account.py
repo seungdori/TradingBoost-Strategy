@@ -1,5 +1,6 @@
 #src/api/routes/account.py
 
+import asyncio
 import hmac
 import json
 import logging
@@ -14,6 +15,7 @@ from pydantic import BaseModel
 
 from HYPERRSI.src.api.dependencies import get_exchange_context
 from shared.database.redis_helper import get_redis_client
+from shared.database.redis_patterns import redis_context, RedisTimeout
 
 logger = logging.getLogger(__name__)
 
@@ -139,40 +141,66 @@ async def update_contract_specifications(user_id: str):
     계약 사양을 업데이트하는 헬퍼 함수
     마지막 업데이트가 24시간 이전이면 새로 조회합니다
     """
+    def safe_float(value, default=0.0):
+        """
+        문자열을 float로 안전하게 변환
+        빈 문자열이나 None은 default 값 반환
+        """
+        try:
+            if value is None or value == '':
+                return default
+            return float(value)
+        except (ValueError, TypeError):
+            return default
+
     try:
-        redis = await get_redis_client()
-        # 마지막 업데이트 시간 확인
-        last_update = await redis.get("symbol_info:contract_specs_last_update")
-        current_time = int(time.time())
-        
-        if not last_update or (current_time - int(last_update)) > 86400:
-            async with get_exchange_context(user_id) as exchange:
-                response = await exchange.publicGetPublicInstruments(params={'instType': 'SWAP'})
-                
-                # 모든 계약 사양 저장
-                specs_dict = {}
-                for instrument in response['data']:
-                    specs_dict[instrument['instId']] = {
-                        'contractSize': float(instrument['ctVal']),
-                        'tickSize': float(instrument['tickSz']),
-                        'minSize': float(instrument['minSz']),
-                        'ctType': instrument['ctType'],
-                        'quoteCcy': instrument['quoteCcy'],
-                        'baseCcy': instrument['baseCcy'],
-                        'settleCcy': instrument['settleCcy'],
-                        'maxLeverage': float(instrument.get('maxLever', '100')),
-                        'update_time': current_time
-                    }
-                
-                # Redis에 저장 (만료시간 없이)
-                await redis.set("symbol_info:contract_specifications", json.dumps(specs_dict))
-                await redis.set("symbol_info:contract_specs_last_update", str(current_time))
-                
-                return specs_dict
-        
-        # 기존 데이터 반환
-        specs = await redis.get("symbol_info:contract_specifications")
-        return json.loads(specs) if specs else {}
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 마지막 업데이트 시간 확인
+            last_update = await asyncio.wait_for(
+                redis.get("symbol_info:contract_specs_last_update"),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+            current_time = int(time.time())
+
+            if not last_update or (current_time - int(last_update)) > 86400:
+                async with get_exchange_context(user_id) as exchange:
+                    response = await exchange.publicGetPublicInstruments(params={'instType': 'SWAP'})
+
+                    # 모든 계약 사양 저장
+                    specs_dict = {}
+                    for instrument in response['data']:
+                        # safe_float로 빈 문자열이나 None 값 안전하게 처리
+                        specs_dict[instrument['instId']] = {
+                            'contractSize': safe_float(instrument.get('ctVal'), 1.0),
+                            'tickSize': safe_float(instrument.get('tickSz'), 0.01),
+                            'minSize': safe_float(instrument.get('minSz'), 1.0),
+                            'ctType': instrument.get('ctType', ''),
+                            'quoteCcy': instrument.get('quoteCcy', ''),
+                            'baseCcy': instrument.get('baseCcy', ''),
+                            'settleCcy': instrument.get('settleCcy', ''),
+                            'maxLeverage': safe_float(instrument.get('maxLever'), 100.0),
+                            'update_time': current_time
+                        }
+
+                    # Redis에 저장 (만료시간 없이)
+                    await asyncio.wait_for(
+                        redis.set("symbol_info:contract_specifications", json.dumps(specs_dict)),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
+                    await asyncio.wait_for(
+                        redis.set("symbol_info:contract_specs_last_update", str(current_time)),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
+
+                    return specs_dict
+
+            # 기존 데이터 반환
+            specs = await asyncio.wait_for(
+                redis.get("symbol_info:contract_specifications"),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+            return json.loads(specs) if specs else {}
         
     except Exception as e:
         logger.error(f"Failed to update contract specifications: {str(e)}", exc_info=True)
@@ -193,17 +221,30 @@ async def get_contract_specifications(
     - force_update=true로 요청하면 강제로 새로 조회
     """
     try:
-        redis = await get_redis_client()
-        if force_update:
-            # Redis 데이터 삭제 후 새로 조회
-            await redis.delete("symbol_info:contract_specifications")
-            await redis.delete("symbol_info:contract_specs_last_update")
-            
-        specs_dict = await update_contract_specifications(user_id)
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            if force_update:
+                # Redis 데이터 삭제 후 새로 조회
+                await asyncio.wait_for(
+                    redis.delete("symbol_info:contract_specifications"),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
+                await asyncio.wait_for(
+                    redis.delete("symbol_info:contract_specs_last_update"),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
+
+            specs_dict = await update_contract_specifications(user_id)
+
+            last_update = await asyncio.wait_for(
+                redis.get("symbol_info:contract_specs_last_update"),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
         return {
             "success": True,
             "data": specs_dict,
-            "last_update": await redis.get("symbol_info:contract_specs_last_update")
+            "last_update": last_update
         }
     
     except Exception as e:
@@ -629,71 +670,78 @@ async def get_history(
     keys = get_redis_keys(user_id)
 
     try:
-        redis = await get_redis_client()
-        async with get_exchange_context(str(user_id)) as exchange:
-            history_list = await redis.lrange(keys['history'], 0, limit - 1)
+        # Use context manager for proper connection management and timeout protection
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            history_list = await asyncio.wait_for(
+                redis.lrange(keys['history'], 0, limit - 1),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
             if not history_list:
                 return []
-                
+
             results = []
-            for trade_data in history_list:
-                trade_info = json.loads(trade_data)
-                
-                # 주문 상태 업데이트
-                if trade_info.get('order_id') and trade_info.get('symbol'):
-                    try:
-                        print("fetch_order 호출", trade_info['order_id'], trade_info['symbol'])
-                        order = await exchange.fetch_order(
-                            trade_info['order_id'], 
-                            trade_info['symbol']
-                        )
-                        
-                        if order['status'] in ['closed', 'canceled', 'expired']:
-                            # 체결 정보 업데이트
-                            trade_info['status'] = 'closed'
-                            trade_info['exit_price'] = float(order['average']) if order.get('average') else float(order['price'])
-                            trade_info['exit_timestamp'] = datetime.fromtimestamp(
-                                order.get('lastTradeTimestamp', order['timestamp']) / 1000
-                            ).strftime('%Y-%m-%d %H:%M:%S')
-                            
-                            # PNL 계산
-                            entry_price = float(trade_info['entry_price'])
-                            exit_price = float(trade_info['exit_price'])
-                            size = float(trade_info['size'])
-                            is_long = trade_info['side'] == 'long'
-                            
-                            if entry_price > 0 and size > 0:
-                                pnl = (exit_price - entry_price) * size if is_long else (entry_price - exit_price) * size
-                                trade_info['pnl'] = pnl
-                                trade_info['pnl_percent'] = (pnl / (entry_price * size)) * 100
-                            
-                            # 수수료 정보
-                            if order.get('fee'):
-                                trade_info['fee'] = {
-                                    'cost': float(order['fee']['cost']),
-                                    'currency': order['fee']['currency']
-                                }
-                            
-                            # 청산 유형 확인
-                            info = order.get('info', {})
-                            if info.get('tpTriggerPx'):
-                                trade_info['close_type'] = 'TP'
-                            elif info.get('slTriggerPx'):
-                                trade_info['close_type'] = 'SL'
-                            else:
-                                trade_info['close_type'] = 'Manual'
-                            
-                            # Redis 업데이트
-                            await redis.lset(
-                                keys['history'],
-                                history_list.index(trade_data),
-                                json.dumps(trade_info)
+            async with get_exchange_context(str(user_id)) as exchange:
+                for trade_data in history_list:
+                    trade_info = json.loads(trade_data)
+
+                    # 주문 상태 업데이트
+                    if trade_info.get('order_id') and trade_info.get('symbol'):
+                        try:
+                            print("fetch_order 호출", trade_info['order_id'], trade_info['symbol'])
+                            order = await exchange.fetch_order(
+                                trade_info['order_id'],
+                                trade_info['symbol']
                             )
-                            
-                    except Exception as e:
-                        logger.error(f"주문 정보 업데이트 실패 - order_id: {trade_info.get('order_id')}, error: {str(e)}")
-                
-                results.append(TradeHistory(**trade_info))
+
+                            if order['status'] in ['closed', 'canceled', 'expired']:
+                                # 체결 정보 업데이트
+                                trade_info['status'] = 'closed'
+                                trade_info['exit_price'] = float(order['average']) if order.get('average') else float(order['price'])
+                                trade_info['exit_timestamp'] = datetime.fromtimestamp(
+                                    order.get('lastTradeTimestamp', order['timestamp']) / 1000
+                                ).strftime('%Y-%m-%d %H:%M:%S')
+
+                                # PNL 계산
+                                entry_price = float(trade_info['entry_price'])
+                                exit_price = float(trade_info['exit_price'])
+                                size = float(trade_info['size'])
+                                is_long = trade_info['side'] == 'long'
+
+                                if entry_price > 0 and size > 0:
+                                    pnl = (exit_price - entry_price) * size if is_long else (entry_price - exit_price) * size
+                                    trade_info['pnl'] = pnl
+                                    trade_info['pnl_percent'] = (pnl / (entry_price * size)) * 100
+
+                                # 수수료 정보
+                                if order.get('fee'):
+                                    trade_info['fee'] = {
+                                        'cost': float(order['fee']['cost']),
+                                        'currency': order['fee']['currency']
+                                    }
+
+                                # 청산 유형 확인
+                                info = order.get('info', {})
+                                if info.get('tpTriggerPx'):
+                                    trade_info['close_type'] = 'TP'
+                                elif info.get('slTriggerPx'):
+                                    trade_info['close_type'] = 'SL'
+                                else:
+                                    trade_info['close_type'] = 'Manual'
+
+                                # Redis 업데이트
+                                await asyncio.wait_for(
+                                    redis.lset(
+                                        keys['history'],
+                                        history_list.index(trade_data),
+                                        json.dumps(trade_info)
+                                    ),
+                                    timeout=RedisTimeout.FAST_OPERATION
+                                )
+
+                        except Exception as e:
+                            logger.error(f"주문 정보 업데이트 실패 - order_id: {trade_info.get('order_id')}, error: {str(e)}")
+
+                    results.append(TradeHistory(**trade_info))
                 
             return results
 
