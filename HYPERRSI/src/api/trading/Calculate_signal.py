@@ -359,80 +359,84 @@ class TrendStateCalculator:
     
     async def analyze_market_state_from_redis(self, symbol: str, timeframe: str, trend_timeframe: str = None) -> Dict:
         """
-        간단한 예시:
-        - 최근 21개 캔들을 불러와서 모멘텀 계산
-        - 없는 경우(예: bb_upper)라면 Bollinger Bands 자동 계산
-        - sma20, sma60(또는 sma50 등)을 비교하여 상태 구분
+        시장 상태 분석 (저장된 PineScript 기반 trend_state 사용)
+
+        Args:
+            symbol: 심볼 (예: BTC-USDT-SWAP)
+            timeframe: 기본 타임프레임
+            trend_timeframe: 트렌드 분석용 타임프레임 (None이면 timeframe 사용)
+
+        Returns:
+            Dict: 분석 결과
+                - extreme_state: -2 (강한 하락), 0 (중립), 2 (강한 상승)
+                - CYCLE_Bull: 불 사이클 여부
+                - CYCLE_Bear: 베어 사이클 여부
+                - BB_State: BB 상태
+                - ma20, ma60, upper_band, lower_band: 참고용 지표
         """
         try:
             tf_str = get_timeframe(timeframe)
-            trend_tf_str = get_timeframe(trend_timeframe)
-            # DataFrame 전체 가져와서 뒤에서 21개만 사용(혹은 필요한 만큼)
+            trend_tf_str = get_timeframe(trend_timeframe) if trend_timeframe else tf_str
+
+            # DataFrame 전체 가져오기
             df = await self.get_candles_with_indicators_from_redis(symbol, tf_str)
-            
-            # trend_timeframe이 None이거나 timeframe과 동일한 경우
-            if trend_tf_str is None or trend_tf_str == tf_str:
-                trend_df = df
-            else:
+
+            # trend_timeframe이 다르면 별도로 가져오기
+            if trend_tf_str != tf_str:
                 trend_df = await self.get_candles_with_indicators_from_redis(symbol, trend_tf_str)
-                
-            if df.empty or len(trend_df) < 21:
+            else:
+                trend_df = df
+
+            if df.empty or trend_df.empty:
                 logger.error(f"충분한 캔들 데이터를 찾을 수 없습니다: {symbol} / {tf_str}")
                 return self._get_empty_state()
-            
-            # ----- (1) Bollinger Bands가 없다면 여기서 계산 -----
-            # 예: 'bb_upper' 혹은 'bb_lower' 컬럼이 없다면 직접 calculate_bollinger_bands 사용
-            if 'bb_upper' not in trend_df.columns or 'bb_lower' not in trend_df.columns:
-                upper, middle, lower = self.calculate_bollinger_bands(df['close'])
-            
-                df['bb_upper'] = upper
-                df['bb_middle'] = middle
-                df['bb_lower'] = lower
-            # --------------------------------------------------
-            
-            # 뒤에서 21개
-            recent_df = trend_df.iloc[-21:]
-            
-            close_prices = recent_df['close'].values
-            current_price = close_prices[-1]
-            price_20_periods_ago = close_prices[0]
-            momentum = (current_price - price_20_periods_ago) / price_20_periods_ago
-            trend_state = recent_df['trend_state'].iloc[-1]
-            # latest candle (가장 마지막)
-            latest_candle = recent_df.iloc[-1]
-            
-            # 필요한 지표들 (예시에 맞게 가져옴. 실제로는 sma60 대신 sma50 등 쓰세요)
-            ma20 = latest_candle.get('sma20', 0.0)
-            # 예시상 sma60 이 없는 경우가 많으니, sma50, sma100 등으로 교체 가능
-            ma60 = latest_candle.get('sma60', 0.0)  # 혹은 sma60을 실제로 넣어서 쓰세요
-            
-            # Bollinger Bands 컬럼에서 가져오기
-            upper_band = latest_candle.get('bb_upper', 0.0)
-            lower_band = latest_candle.get('bb_lower', 0.0)
-            
-            # 상태 판단 (예시 로직)
-            extreme_state = 0  # 기본 중립
-            if current_price > upper_band and momentum > 0:
-                extreme_state = 2  # 강한 상승
-            elif current_price > ma20 and ma20 > ma60 and momentum > 0:
-                extreme_state = 1  # 약한 상승
-            elif lower_band <= current_price <= upper_band:
-                extreme_state = 0  # 중립
-            elif current_price < ma20 and ma20 < ma60 and momentum < 0:
-                extreme_state = -1  # 약한 하락
-            elif current_price < lower_band and momentum < 0:
-                extreme_state = -2  # 강한 하락
-            
+
+            # 최신 캔들 가져오기
+            latest_candle = trend_df.iloc[-1]
+
+            # 저장된 PineScript 기반 trend_state 직접 사용
+            extreme_state = int(latest_candle.get('trend_state', 0))
+
+            # PineScript 기반 추가 정보
+            cycle_bull = latest_candle.get('CYCLE_Bull', False)
+            cycle_bear = latest_candle.get('CYCLE_Bear', False)
+            bb_state = int(latest_candle.get('BB_State', 0))
+
+            # 참고용 지표들
+            ma20 = float(latest_candle.get('sma20', 0.0))
+            ma60 = float(latest_candle.get('sma60', latest_candle.get('sma50', 0.0)))  # sma60이 없으면 sma50 사용
+            upper_band = float(latest_candle.get('bb_upper', 0.0))
+            lower_band = float(latest_candle.get('bb_lower', 0.0))
+            current_price = float(latest_candle.get('close', 0.0))
+
+            # 모멘텀 계산 (선택적, 20봉 기준)
+            if len(trend_df) >= 21:
+                close_prices = trend_df['close'].values[-21:]
+                price_20_periods_ago = close_prices[0]
+                momentum = (current_price - price_20_periods_ago) / price_20_periods_ago if price_20_periods_ago != 0 else 0
+            else:
+                momentum = 0.0
+
+            logger.info(
+                f"[PineScript Trend State] {symbol} {trend_tf_str}: "
+                f"extreme_state={extreme_state}, "
+                f"CYCLE_Bull={cycle_bull}, CYCLE_Bear={cycle_bear}, "
+                f"BB_State={bb_state}"
+            )
+
             return {
+                'extreme_state': extreme_state,
+                'CYCLE_Bull': cycle_bull,
+                'CYCLE_Bear': cycle_bear,
+                'BB_State': bb_state,
                 'ma20': ma20,
                 'ma60': ma60,
                 'momentum': momentum,
                 'upper_band': upper_band,
                 'lower_band': lower_band,
-                'extreme_state': extreme_state,
-                'trend_state': trend_state
+                'current_price': current_price
             }
-            
+
         except Exception as e:
             logger.error(f"시장 상태 분석 중 오류 발생: {str(e)}")
             return self._get_empty_state()
@@ -442,13 +446,16 @@ class TrendStateCalculator:
         데이터가 없을 때 반환할 기본 상태 딕셔너리
         """
         return {
-            'ma20': None,
-            'ma60': None,
-            'momentum': None,
-            'upper_band': None,
-            'lower_band': None,
             'extreme_state': 0,
-            'trend_state': 0
+            'CYCLE_Bull': False,
+            'CYCLE_Bear': False,
+            'BB_State': 0,
+            'ma20': 0.0,
+            'ma60': 0.0,
+            'momentum': 0.0,
+            'upper_band': 0.0,
+            'lower_band': 0.0,
+            'current_price': 0.0
         }
 
 # --------------------------------------------------------------------------

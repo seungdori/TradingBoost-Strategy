@@ -1,0 +1,374 @@
+//@version=6
+indicator("Extreme State Indicator", overlay=true)
+
+// ==============================================================================
+//                                  INPUTS
+// ==============================================================================
+MTF_str = input.timeframe(defval = '자동', title = '트랜드 타임프레임 기준', group = '=====TREND =====', options = ['자동','5분','15분', '30분', '1시간','2시간', '4시간', '8시간', '1일','2일','3일'])
+use_longer_trend = input.bool(defval = false, title = '장기 트랜드 이용', group = '=====TREND =====')
+
+// ==============================================================================
+//                             Helper Functions
+// ==============================================================================
+f_security(_sym, _res, _src) => request.security(_sym, _res, _src[barstate.isrealtime ? 1 : 0], barmerge.gaps_off, lookahead=barmerge.lookahead_off)[barstate.isrealtime ? 0 : 1]
+
+
+count_not_na(arr) =>
+    count = 0
+    for i = 0 to array.size(arr) - 1
+        if not na(array.get(arr, i))
+            count := count + 1
+    count
+
+// ==============================================================================
+//                             Timeframe Settings
+// ==============================================================================
+
+// ==============================================================================
+//                             Trend State
+// ==============================================================================
+show_MA = false
+CYCLE_TYPE = "JMA"
+res_ = timeframe.isminutes and timeframe.multiplier <= 3 ? '15' : timeframe.isminutes and timeframe.multiplier <= 30 ? '30' : timeframe.isminutes and timeframe.multiplier < 240 ? '60' : '480'
+
+MTF = ''
+if MTF_str == '자동'
+    MTF := ''
+if MTF_str == '5분'
+    MTF := '5'
+if MTF_str == '15분'
+    MTF := '15'
+if MTF_str == '30분'
+    MTF := '30'
+if MTF_str == '1시간'
+    MTF := '60'
+if MTF_str == '2시간'
+    MTF := '120'
+if MTF_str == '4시간'
+    MTF := '240'
+if MTF_str == '8시간'
+    MTF := '480'
+if MTF_str == '1일'
+    MTF := 'D'
+if MTF_str == '2일'
+    MTF := '2D'
+if MTF_str == '3일'
+    MTF := '3D'
+
+
+if MTF_str != '자동'
+    res_ := MTF
+
+src = close
+
+var int lenF = 5
+var int lenM = 10
+var int lenS = 20
+
+lenF_2nd = 3
+lenM_2nd = 9
+lenS_2nd = 21
+
+
+transp = 90
+
+if use_longer_trend 
+    res_ := 'D'
+    lenF := 20  
+    lenM := 40 
+    lenS := 120
+    CYCLE_TYPE := 'T3'
+
+
+
+
+relativeWeight = 0.5, lookback = 30, startAtBar = 5
+phase_JMA = 50
+power = 2
+
+float smma = na
+float mg = na
+
+
+
+
+
+ssfLength =20
+ssfPoles = 2
+
+//Below, OG type//
+
+
+
+inp = hl2
+alpha = 0.07
+
+
+
+FuncVIDYA(_src, smoothPeriod)=>
+    vidya_price = _src
+    vidya_pricc = close
+    sumUp = 0., sumDo = 0.
+    for k = 1 to 9 
+        diff = nz(vidya_pricc[k]) -  nz(vidya_pricc[k-1])
+        if (diff > 0)
+            sumUp += diff
+        else  
+            sumDo -= diff
+    vidya_value = 0.
+    vidya_value := nz(vidya_value[1]) +   
+         ((((sumUp + sumDo) != 0) ? math.abs((sumUp-sumDo)/(sumUp+sumDo)) : 1) *  
+         2.00 / (1.00 + math.max(smoothPeriod, 1))) *  
+         (vidya_price - nz(vidya_value[1]))
+    vidya_value
+
+calc_jma(_src, _length, _phase, _power) =>
+    phaseRatio = _phase < -100 ? 0.5 : _phase > 100 ? 2.5 : _phase / 100 + 1.5
+    
+    beta = 0.45 * (_length - 1) / (0.45 * (_length - 1) + 2)
+    alpha1 = math.pow(beta, _power)
+    
+    e0 = 0.0,e0 := (1 - alpha1) * _src + alpha1 * nz(e0[1])
+    
+    e1 = 0.0,e1 := (_src - e0) * (1 - beta) + beta * nz(e1[1])
+    
+    jma = 0.0, e2 = 0.0,e2 := (e0 + phaseRatio * e1 - nz(jma[1])) * 
+       math.pow(1 - alpha1, 2) + math.pow(alpha1, 2) * nz(e2[1])
+    
+    jma := e2 + nz(jma[1])
+    jma
+
+
+
+
+getMA(source ,ma_type, length) =>
+    maPrice = ta.ema(source, length)
+    ema = ta.ema(source, length)
+    sma = ta.sma(source, length)
+    if ma_type == 'SMA'
+        maPrice := ta.sma(source, length)
+        maPrice
+    if ma_type == 'HMA'
+        maPrice := ta.hma(source, length)
+        maPrice
+    if ma_type == 'WMA'
+        maPrice := ta.wma(source, length)
+        maPrice
+
+
+    if ma_type == "JMA"
+        maPrice := calc_jma(source, length, phase_JMA, power)
+    if ma_type == "SWMA"
+        maPrice := ta.swma(source)
+    if ma_type == "SMMA"
+        maPrice := na(smma[1]) ? sma : (smma[1] * (length - 1) + source) / length
+    if ma_type == "RMA"
+        maPrice := ta.rma(source, length)
+    if ma_type == "EHMA"
+        maPrice := (ta.ema(2 * ta.ema(source, length / 2) - ta.ema(source, length), math.round(math.sqrt(length))))
+    if ma_type == "TMA"
+        maPrice := ta.sma(ta.sma(source, math.ceil(length / 2)), math.floor(length / 2) + 1)
+
+    if ma_type == "VIDYA"
+        maPrice := FuncVIDYA(source, length)
+    maPrice
+
+///Funtion Define//
+
+
+
+rationalQuadratic(_src, _lookback, _relativeWeight, startAtBar) =>
+    _currentWeight = 0.0 // Initialize the current weight variable
+    _cumulativeWeight = 0.0 // Initialize the cumulative weight variable
+    _size = array.size(array.from(_src)) // Get the size of the input series
+    for i = 0 to _size + startAtBar // Iterate over the input series
+        y = _src[i] // Get the value at index i
+        w = math.pow(1 + (math.pow(i, 2) / ((math.pow(_lookback, 2) * 2 * _relativeWeight))), -_relativeWeight) // Calculate the weight using the rational quadratic formula
+        _currentWeight += y * w // Add the weighted value to the current weight
+        _cumulativeWeight += w // Add the weight to the cumulative weight
+    rationalQuad = _currentWeight / _cumulativeWeight // Calculate the rational quadratic value
+    rationalQuad
+
+//end Region ========================================================================================================
+//Region : MA CYCLE
+
+// Minor Region : MA CYCLE 1st
+
+MA1_ = getMA(src, CYCLE_TYPE, lenF)
+MA2_ = getMA(src, CYCLE_TYPE, lenM)
+MA3_ = getMA(src, CYCLE_TYPE, lenS)
+
+if true
+    MA1_ := rationalQuadratic(MA1_, lookback, relativeWeight, startAtBar)
+    MA2_ := rationalQuadratic(MA2_, lookback, relativeWeight, startAtBar)
+    MA3_ := rationalQuadratic(MA3_, lookback, relativeWeight, startAtBar)
+
+
+
+
+
+////////////////////////////////////
+CYCLE_TYPE_2nd = 'VIDYA'
+CYCLE_RES_2nd = '240'
+CYCLE_MA1_2nd = getMA(close, CYCLE_TYPE_2nd, lenF_2nd)
+//CYCLE_MA1_MTF_2nd = f_security(syminfo.tickerid, CYCLE_RES_2nd, CYCLE_MA1_2nd)
+
+CYCLE_MA2_2nd = getMA(close, CYCLE_TYPE_2nd, lenM_2nd)
+//CYCLE_MA2_MTF_2nd = f_security(syminfo.tickerid, CYCLE_RES_2nd, CYCLE_MA2_2nd)
+
+CYCLE_MA3_2nd = getMA(close, CYCLE_TYPE_2nd, lenS_2nd)
+//CYCLE_MA3_MTF_2nd = f_security(syminfo.tickerid, CYCLE_RES_2nd, CYCLE_MA3_2nd)
+CYCLE_Bull_2nd_og = ((CYCLE_MA1_2nd > CYCLE_MA3_2nd and CYCLE_MA3_2nd > CYCLE_MA2_2nd) or (CYCLE_MA1_2nd > CYCLE_MA2_2nd and CYCLE_MA2_2nd > CYCLE_MA3_2nd) or (CYCLE_MA2_2nd > CYCLE_MA1_2nd and CYCLE_MA1_2nd > CYCLE_MA3_2nd)) and barstate.isconfirmed
+CYCLE_Bear_2nd_og = ((CYCLE_MA3_2nd > CYCLE_MA2_2nd and CYCLE_MA2_2nd > CYCLE_MA1_2nd) or (CYCLE_MA2_2nd > CYCLE_MA3_2nd and CYCLE_MA3_2nd > CYCLE_MA1_2nd) or (CYCLE_MA3_2nd > CYCLE_MA1_2nd and CYCLE_MA1_2nd > CYCLE_MA2_2nd)) and barstate.isconfirmed
+
+CYCLE_Bull_2nd = f_security(syminfo.tickerid, CYCLE_RES_2nd, CYCLE_Bull_2nd_og)
+CYCLE_Bear_2nd = f_security(syminfo.tickerid, CYCLE_RES_2nd, CYCLE_Bear_2nd_og)
+
+
+
+CYCLE_Bull_og = ((MA1_ > MA2_ and MA2_ > MA3_) or (MA2_ > MA1_ and MA1_ > MA3_)) and barstate.isconfirmed
+CYCLE_Bear_og = (MA3_ > MA2_ and MA2_ > MA1_) and barstate.isconfirmed
+
+CYCLE_Bull = f_security(syminfo.tickerid, res_, CYCLE_Bull_og)
+CYCLE_Bear = f_security(syminfo.tickerid, res_, CYCLE_Bear_og)
+
+
+//bgcolor(CYCLE_Bull ? color.new(color.green,80) : CYCLE_Bear ? color.new(color.red, 80) : na)
+
+if use_longer_trend
+    CYCLE_Bull := CYCLE_Bull and CYCLE_Bull_2nd and barstate.isconfirmed// (MTF == 'D' or MTF == '240' ? CYCLE_Bull_2nd : true)
+    CYCLE_Bear := CYCLE_Bear and CYCLE_Bear_2nd and barstate.isconfirmed // (MTF == 'D' or MTF == '240' ? CYCLE_Bear_2nd : true)
+
+//bgcolor(color.new(col,transp) , title='MAGC Bar Color') 
+
+
+
+//BBW//
+
+
+length = 15//input.int(20, 'Main BB',minval=1)
+
+len_ma = 100//input(title='lenght of the SMA', defval=100)
+
+mult = 1.5//input.float(2.0, minval=0.001, maxval=50)
+signal = false, array_size = 50, pivot_left = 20, mult_plph = 0.7
+
+use_bbw_2nd = true, show_2nd = false , length_2nd = 60
+
+
+//BBW 1st//
+
+basis = ta.sma(close, length)
+
+dev = mult * ta.stdev(close, length)
+
+upper = basis + dev
+lower = basis - dev
+
+bbw = (upper - lower)*10 / basis
+
+bbr = (close - lower)/(upper - lower)
+
+ma = ta.sma(bbw, len_ma)
+
+
+//Pivot//
+ph = ta.pivothigh(bbw, pivot_left,10)
+pl = ta.pivotlow(bbw, pivot_left, 10)
+
+
+var float[] ph_array = array.new_float(array_size, na)
+var float[] pl_array = array.new_float(array_size, na)
+
+if bbw> ma and ph > 0 
+    array.push(ph_array, ph)
+    array.shift(ph_array)
+if bbw < ma and pl > 0
+    array.shift(pl_array)
+    array.push(pl_array, pl)
+ph_count = count_not_na(ph_array)
+pl_count = count_not_na(pl_array)
+ph_sum = array.sum(ph_array)
+pl_sum = array.sum(pl_array)
+ph_avg = ph_count != 0 ? ph_sum / ph_count : math.max(bbw, 5)
+pl_avg = pl_count != 0 ? pl_sum / pl_count : math.min(bbw, 5)
+
+basis_2nd = ta.sma(close, length_2nd)
+dev_2nd = mult * ta.stdev(close, length_2nd)
+upper_2nd = basis_2nd + dev_2nd
+lower_2nd = basis_2nd - dev_2nd
+
+
+bbw_2nd = (upper_2nd - lower_2nd)*10 / basis_2nd
+ma_2nd = ta.sma(bbw_2nd, len_ma)
+
+
+var float[] ph_array_2nd = array.new_float(array_size, na)
+var float[] pl_array_2nd = array.new_float(array_size, na)
+
+pl_2nd = ta.pivotlow(bbw_2nd, 30, 10)
+
+if bbw_2nd < 1 and pl_2nd > 0
+    array.shift(pl_array_2nd)
+    array.push(pl_array_2nd, pl_2nd)
+
+pl_count_2nd = count_not_na(pl_array_2nd)
+
+pl_sum_2nd = array.sum(pl_array_2nd)
+
+pl_avg_2nd = pl_count_2nd != 0 ? pl_sum_2nd / pl_count_2nd : math.min(bbw_2nd, 5)
+
+
+buzz = ph_avg * mult_plph
+sqeeze = pl_avg * (1/mult_plph)
+
+squeeze_2nd = pl_avg_2nd*(1/mult_plph)
+
+bbw_falling = ta.falling(bbw, 3)
+bbw_rising = ta.rising(bbw, 1) 
+var bool bbw_2nd_squeeze = true
+
+if use_bbw_2nd and bbw_2nd > squeeze_2nd and barstate.isconfirmed
+    bbw_2nd_squeeze := false
+if use_bbw_2nd and bbw_2nd < squeeze_2nd and barstate.isconfirmed
+    bbw_2nd_squeeze := true
+
+
+var BB_State = 0
+if ta.crossover(bbw, buzz) and bbr > 0.5 and barstate.isconfirmed
+    BB_State := 2
+if ta.crossover(bbw, buzz) and bbr < 0.5 and barstate.isconfirmed
+    BB_State := -2
+if bbw < sqeeze and bbw_2nd_squeeze
+    BB_State := -1
+
+if BB_State == 2 and bbr < 0.2 and barstate.isconfirmed
+    BB_State := -2
+if BB_State == -2 and bbr > 0.8 and barstate.isconfirmed
+    BB_State := 2
+
+
+if ((BB_State == 2 or BB_State == -2) and bbw_falling) or (bbw > pl_avg and BB_State == -1 and bbw_rising) and barstate.isconfirmed
+    BB_State := 0
+
+
+bb_mtf = timeframe.multiplier <= 3 and timeframe.isminutes ? '5' : timeframe.multiplier <= 15 and timeframe.isminutes ? '15' : '60'
+
+
+BB_State_MTF = f_security(syminfo.tickerid, bb_mtf, BB_State)
+
+//Exteme State//
+
+var int extreme_state = 0
+
+if barstate.isconfirmed and CYCLE_Bull and (use_longer_trend ? true : BB_State_MTF == 2)
+    extreme_state := 2
+
+if barstate.isconfirmed and extreme_state == 2 and not CYCLE_Bull
+    extreme_state := 0
+
+if barstate.isconfirmed and CYCLE_Bear and ( use_longer_trend ? true : BB_State_MTF == -2)
+    extreme_state := -2
+
+if barstate.isconfirmed and extreme_state == -2 and not CYCLE_Bear
+    extreme_state := 0

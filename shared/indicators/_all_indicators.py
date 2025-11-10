@@ -7,10 +7,231 @@ import numpy as np
 
 from ._atr import calc_atr
 from ._bollinger import calc_bollinger_bands, calc_stddev
-from ._core import crossover, crossunder, dynamic_round
+from ._core import crossover, crossunder, dynamic_round, rising, falling, pivothigh, pivotlow, resample_candles
 from ._moving_averages import calc_jma, calc_sma, calc_t3, calc_vidya
 from ._rsi import calc_rsi
 from ._trend import rational_quadratic
+
+
+def _calc_bb_state_helper(candle_data, bb_length=15, bb_mult=1.5, bb_ma_len=100):
+    """
+    BB_State 계산 헬퍼 함수 (Pine Script Line 261-352)
+
+    Args:
+        candle_data: 캔들 데이터 리스트
+        bb_length: Bollinger Band 길이
+        bb_mult: Bollinger Band 배수
+        bb_ma_len: BBW MA 길이
+
+    Returns:
+        bb_state_list: BB_State 값 리스트
+    """
+    closes = [c["close"] for c in candle_data]
+
+    # BBW 1st (length=15, mult=1.5)
+    basis_list = calc_sma(closes, bb_length)
+    stdev_list = calc_stddev(closes, bb_length)
+    bbw_list = []
+    bbr_list = []  # BBR (Bollinger Band Ratio)
+
+    for i in range(len(closes)):
+        basis_val = basis_list[i]
+        stdev_val = stdev_list[i]
+        if basis_val is None or stdev_val is None or math.isnan(basis_val) or math.isnan(stdev_val):
+            bbw_list.append(math.nan)
+            bbr_list.append(math.nan)
+        else:
+            upper = basis_val + bb_mult * stdev_val
+            lower = basis_val - bb_mult * stdev_val
+
+            # BBW = (upper - lower) * 10 / basis
+            if basis_val != 0:
+                bbw_list.append((upper - lower) * 10.0 / basis_val)
+            else:
+                bbw_list.append(math.nan)
+
+            # BBR = (close - lower) / (upper - lower)
+            if (upper - lower) != 0:
+                bbr_list.append((closes[i] - lower) / (upper - lower))
+            else:
+                bbr_list.append(math.nan)
+
+    # BBW MA (len_ma=100)
+    bbw_ma = calc_sma(bbw_list, bb_ma_len)
+
+    # Pivot High/Low 계산 (pivot_left=20, right=10)
+    pivot_left = 20
+    pivot_right = 10
+    ph_list = pivothigh(bbw_list, pivot_left, pivot_right)
+    pl_list = pivotlow(bbw_list, pivot_left, pivot_right)
+
+    # Pine Script의 var 동작 모방: 각 바마다 동적으로 ph_array, pl_array 업데이트
+    array_size = 50
+    mult_plph = 0.7
+
+    # 각 바마다의 ph_avg, pl_avg, buzz, squeeze를 저장할 리스트
+    ph_avg_list = [math.nan] * len(closes)
+    pl_avg_list = [math.nan] * len(closes)
+    buzz_list = [math.nan] * len(closes)
+    squeeze_list = [math.nan] * len(closes)
+
+    # var 변수 초기화 (Pine Script의 var 동작)
+    ph_array = []
+    pl_array = []
+
+    # Pine Script lines 283-294: 각 바마다 pivot 수집 및 평균 계산
+    for i in range(len(closes)):
+        bbw_val = bbw_list[i]
+        ma_val = bbw_ma[i]
+
+        # pivot 수집 (Pine Script lines 283-288)
+        if not (ma_val is None or math.isnan(ma_val) or math.isnan(bbw_val)):
+            # bbw > ma일 때만 pivot high 수집
+            if bbw_val > ma_val and ph_list[i] is not None:
+                ph_array.append(ph_list[i])
+                if len(ph_array) > array_size:
+                    ph_array.pop(0)
+
+            # bbw < ma일 때만 pivot low 수집
+            if bbw_val < ma_val and pl_list[i] is not None:
+                pl_array.append(pl_list[i])
+                if len(pl_array) > array_size:
+                    pl_array.pop(0)
+
+        # 현재 바의 ph_avg, pl_avg 계산 (Pine Script lines 289-294)
+        if len(ph_array) > 0:
+            ph_avg_list[i] = sum(ph_array) / len(ph_array)
+        else:
+            # 기본값: max(현재 바의 bbw, 5) - Pine Script: math.max(bbw, 5)
+            ph_avg_list[i] = max(bbw_val, 5) if not math.isnan(bbw_val) else 5
+
+        if len(pl_array) > 0:
+            pl_avg_list[i] = sum(pl_array) / len(pl_array)
+        else:
+            # 기본값: min(현재 바의 bbw, 5) - Pine Script: math.min(bbw, 5)
+            pl_avg_list[i] = min(bbw_val, 5) if not math.isnan(bbw_val) else 5
+
+        # 현재 바의 buzz, squeeze 계산 (Pine Script lines 322-323)
+        buzz_list[i] = ph_avg_list[i] * mult_plph
+        squeeze_list[i] = pl_avg_list[i] * (1 / mult_plph)
+
+    # BBW 2nd (length_2nd=60, mult=1.5)
+    length_2nd = 60
+    use_bbw_2nd = True
+    basis_2nd_list = calc_sma(closes, length_2nd)
+    stdev_2nd_list = calc_stddev(closes, length_2nd)
+    bbw_2nd_list = []
+
+    for i in range(len(closes)):
+        basis_val = basis_2nd_list[i]
+        stdev_val = stdev_2nd_list[i]
+        if basis_val is None or stdev_val is None or math.isnan(basis_val) or math.isnan(stdev_val):
+            bbw_2nd_list.append(math.nan)
+        else:
+            upper_2nd = basis_val + bb_mult * stdev_val
+            lower_2nd = basis_val - bb_mult * stdev_val
+            if basis_val != 0:
+                bbw_2nd_list.append((upper_2nd - lower_2nd) * 10.0 / basis_val)
+            else:
+                bbw_2nd_list.append(math.nan)
+
+    # BBW_2nd MA
+    bbw_2nd_ma = calc_sma(bbw_2nd_list, bb_ma_len)
+
+    # Pivot Low for BBW_2nd (pivot_left=30, right=10)
+    pl_2nd_list = pivotlow(bbw_2nd_list, 30, 10)
+
+    # 각 바마다의 pl_avg_2nd, squeeze_2nd를 저장할 리스트
+    pl_avg_2nd_list = [math.nan] * len(closes)
+    squeeze_2nd_list = [math.nan] * len(closes)
+
+    # var 변수 초기화 (Pine Script의 var 동작)
+    pl_array_2nd = []
+
+    # Pine Script lines 311-320: 각 바마다 pivot 수집 및 평균 계산
+    for i in range(len(closes)):
+        bbw_2nd_val = bbw_2nd_list[i]
+
+        # pivot low 수집 (Pine Script lines 311-313)
+        if not math.isnan(bbw_2nd_val) and bbw_2nd_val < 1 and pl_2nd_list[i] is not None:
+            pl_array_2nd.append(pl_2nd_list[i])
+            if len(pl_array_2nd) > array_size:
+                pl_array_2nd.pop(0)
+
+        # 현재 바의 pl_avg_2nd 계산 (Pine Script lines 315-319)
+        if len(pl_array_2nd) > 0:
+            pl_avg_2nd_list[i] = sum(pl_array_2nd) / len(pl_array_2nd)
+        else:
+            # 기본값: min(현재 바의 bbw_2nd, 5) - Pine Script: math.min(bbw_2nd, 5)
+            pl_avg_2nd_list[i] = min(bbw_2nd_val, 5) if not math.isnan(bbw_2nd_val) else 5
+
+        # 현재 바의 squeeze_2nd 계산 (Pine Script line 325)
+        squeeze_2nd_list[i] = pl_avg_2nd_list[i] * (1 / mult_plph)
+
+    # bbw_2nd_squeeze 상태 (var bool, lines 329-334)
+    bbw_2nd_squeeze = True
+    bbw_2nd_squeeze_history = [True] * len(closes)
+
+    for i in range(len(closes)):
+        bbw_2nd_val = bbw_2nd_list[i]
+        squeeze_2nd = squeeze_2nd_list[i]  # 동적 squeeze_2nd 사용
+        if not math.isnan(bbw_2nd_val) and not math.isnan(squeeze_2nd):
+            if use_bbw_2nd and bbw_2nd_val > squeeze_2nd:
+                bbw_2nd_squeeze = False
+            if use_bbw_2nd and bbw_2nd_val < squeeze_2nd:
+                bbw_2nd_squeeze = True
+        bbw_2nd_squeeze_history[i] = bbw_2nd_squeeze
+
+    # BB_State 계산 (Pine Script lines 337-352)
+    bb_state_list = [0] * len(closes)
+
+    for i in range(len(closes)):
+        if i < 1:
+            bb_state_list[i] = 0
+            continue
+
+        bbw_val = bbw_list[i]
+        bbr_val = bbr_list[i]
+        prev_bb_state = bb_state_list[i-1]
+
+        # 현재 바의 동적 임계값 사용
+        buzz = buzz_list[i]
+        squeeze = squeeze_list[i]
+        pl_avg = pl_avg_list[i]
+
+        if math.isnan(bbw_val) or math.isnan(bbr_val) or math.isnan(buzz) or math.isnan(squeeze):
+            bb_state_list[i] = prev_bb_state
+            continue
+
+        # 기본적으로 이전 상태 유지
+        current_state = prev_bb_state
+
+        # Line 338-341: crossover(bbw, buzz)
+        if crossover(bbw_list, buzz_list, i):
+            if bbr_val > 0.5:
+                current_state = 2
+            else:
+                current_state = -2
+
+        # Line 342-343: bbw < squeeze
+        if bbw_val < squeeze and bbw_2nd_squeeze_history[i]:
+            current_state = -1
+
+        # Line 345-348: 상태 전환
+        if current_state == 2 and bbr_val < 0.2:
+            current_state = -2
+        if current_state == -2 and bbr_val > 0.8:
+            current_state = 2
+
+        # Line 351-352: falling/rising으로 리셋
+        if ((current_state == 2 or current_state == -2) and falling(bbw_list, i, 3)):
+            current_state = 0
+        if (bbw_val > pl_avg and current_state == -1 and rising(bbw_list, i, 1)):
+            current_state = 0
+
+        bb_state_list[i] = current_state
+
+    return bb_state_list
 
 
 def compute_all_indicators(candles, rsi_period=14, atr_period=14,
@@ -24,13 +245,67 @@ def compute_all_indicators(candles, rsi_period=14, atr_period=14,
                            bb_length=15,
                            bb_mult=1.5,
                            bb_ma_len=100,
+                           # MTF (Multi-Timeframe) 파라미터
+                           candles_higher_tf=None,        # CYCLE용 MTF 데이터 (res_)
+                           candles_4h=None,               # CYCLE_2nd용 MTF 데이터 (240분)
+                           candles_bb_mtf=None,           # BB_State용 MTF 데이터 (bb_mtf)
+                           current_timeframe_minutes=None, # 현재 타임프레임 (분), 리샘플링용
                            ):
     """
     candles: [{timestamp, open, high, low, close, volume}, ... ] (과거->현재)
       기존: SMA, JMA, RSI, Bollinger Bands, ATR 저장
       + Trend State( CYCLE_Bull, CYCLE_Bear, BBW 관련, trend_state )도 추가
+
+    Pine Script의 request.security() (f_security) 동작을 구현:
+    - candles_higher_tf: CYCLE_Bull/Bear 계산용 (현재 TF에 따라 15m/30m/60m/480m)
+    - candles_4h: CYCLE_Bull_2nd/Bear_2nd 계산용 (항상 240분)
+    - candles_bb_mtf: BB_State_MTF 계산용 (현재 TF에 따라 5m/15m/60m)
+
+    MTF 데이터가 제공되지 않으면 current_timeframe_minutes 기반으로 리샘플링.
     """
     closes = [c["close"] for c in candles]
+
+    # =============================================================================
+    # MTF (Multi-Timeframe) 데이터 준비
+    # =============================================================================
+    # Pine Script Line 32: res_ 타임프레임 결정
+    res_minutes = None
+    if current_timeframe_minutes is not None:
+        if current_timeframe_minutes <= 3:
+            res_minutes = 15
+        elif current_timeframe_minutes <= 30:
+            res_minutes = 30
+        elif current_timeframe_minutes < 240:
+            res_minutes = 60
+        else:
+            res_minutes = 480
+
+    # Pine Script Line 355: bb_mtf 타임프레임 결정
+    bb_mtf_minutes = None
+    if current_timeframe_minutes is not None:
+        if current_timeframe_minutes <= 3:
+            bb_mtf_minutes = 5
+        elif current_timeframe_minutes <= 15:
+            bb_mtf_minutes = 15
+        else:
+            bb_mtf_minutes = 60
+
+    # Pine Script Line 212: CYCLE_RES_2nd = '240'
+    cycle_2nd_minutes = 240
+
+    # MTF 데이터 준비: 제공되지 않으면 리샘플링
+    if candles_higher_tf is None and res_minutes is not None:
+        candles_higher_tf = resample_candles(candles, res_minutes)
+    elif candles_higher_tf is None:
+        candles_higher_tf = candles  # 폴백: 현재 타임프레임 사용
+
+    if candles_4h is None:
+        candles_4h = resample_candles(candles, cycle_2nd_minutes)
+
+    if candles_bb_mtf is None and bb_mtf_minutes is not None:
+        candles_bb_mtf = resample_candles(candles, bb_mtf_minutes)
+    elif candles_bb_mtf is None:
+        candles_bb_mtf = candles  # 폴백: 현재 타임프레임 사용
 
     # 1) SMA
     sma5   = calc_sma(closes, 5)
@@ -73,28 +348,30 @@ def compute_all_indicators(candles, rsi_period=14, atr_period=14,
         lenS = round(custom_length * 4.8)
         CYCLE_TYPE = "T3"
 
-    # (B) 1st Cycle MA
+    # (B) 1st Cycle MA - Pine Script Line 197-204: MTF (res_) 데이터로 계산
+    closes_htf = [c["close"] for c in candles_higher_tf]
     if CYCLE_TYPE == "T3":
-        MA1_ = calc_t3(closes, lenF)
-        MA2_ = calc_t3(closes, lenM)
-        MA3_ = calc_t3(closes, lenS)
+        MA1_ = calc_t3(closes_htf, lenF)
+        MA2_ = calc_t3(closes_htf, lenM)
+        MA3_ = calc_t3(closes_htf, lenS)
     else:
         # 기본 JMA
-        MA1_ = calc_jma(closes, length=lenF, phase=50, power=2)
-        MA2_ = calc_jma(closes, length=lenM, phase=50, power=2)
-        MA3_ = calc_jma(closes, length=lenS, phase=50, power=2)
+        MA1_ = calc_jma(closes_htf, length=lenF, phase=50, power=2)
+        MA2_ = calc_jma(closes_htf, length=lenM, phase=50, power=2)
+        MA3_ = calc_jma(closes_htf, length=lenS, phase=50, power=2)
 
     # rationalQuadratic 보정
     MA1_adj = rational_quadratic(MA1_, lookback=rq_lookback, relative_weight=rq_rel_weight, start_at_bar=rq_start_bar)
     MA2_adj = rational_quadratic(MA2_, lookback=rq_lookback, relative_weight=rq_rel_weight, start_at_bar=rq_start_bar)
     MA3_adj = rational_quadratic(MA3_, lookback=rq_lookback, relative_weight=rq_rel_weight, start_at_bar=rq_start_bar)
 
-    # (C) 2nd Cycle (VIDYA 고정)
+    # (C) 2nd Cycle (VIDYA 고정) - Pine Script Line 213-225: 4시간 MTF 데이터로 계산
     # 간단히 3,9,21
     lenF2, lenM2, lenS2 = 3, 9, 21
-    MA1_2nd = calc_vidya(closes, lenF2)
-    MA2_2nd = calc_vidya(closes, lenM2)
-    MA3_2nd = calc_vidya(closes, lenS2)
+    closes_4h = [c["close"] for c in candles_4h]
+    MA1_2nd = calc_vidya(closes_4h, lenF2)
+    MA2_2nd = calc_vidya(closes_4h, lenM2)
+    MA3_2nd = calc_vidya(closes_4h, lenS2)
 
     # CYCLE_Bull, CYCLE_Bear
     cycle_bull_list = []
@@ -143,63 +420,50 @@ def compute_all_indicators(candles, rsi_period=14, atr_period=14,
         final_bull_list.append(bull)
         final_bear_list.append(bear)
 
-    # (D) BBW & BB_State (간략)
-    # 기본 BB: length=bb_length, mult=bb_mult
-    basis_list = calc_sma(closes, bb_length)
-    stdev_list = calc_stddev(closes, bb_length)
-    bbw_list = []
-    for i in range(len(closes)):
-        basis_val = basis_list[i]
-        stdev_val = stdev_list[i]
-        if basis_val is None or stdev_val is None or math.isnan(basis_val) or math.isnan(stdev_val):
-            bbw_list.append(math.nan)
-        else:
-            up_ = basis_val + bb_mult*stdev_val
-            lo_ = basis_val - bb_mult*stdev_val
-            if basis_val != 0:
-                bbw_list.append((up_ - lo_)*10.0 / basis_val)
-            else:
-                bbw_list.append(math.nan)
-    # bbw의 SMA (ma_2)
-    bbw_ma = calc_sma(bbw_list, bb_ma_len)
+    # (D) BBW & BB_State - Pine Script 원본 로직 정확히 구현
+    # Pine Script lines 261-352
 
-    bb_state_list = [0]*len(closes)
+    # Pine Script Line 261-352: BB_State 계산 (현재 타임프레임)
+    # - 참고용으로 계산하지만, extreme_state에서는 사용 안 함
+    bb_state_list = _calc_bb_state_helper(candles, bb_length=bb_length, bb_mult=bb_mult, bb_ma_len=bb_ma_len)
 
-    for i in range(len(closes)):
-        if i < 1:
-            bb_state_list[i] = 0
-            continue
-        ma_val = bbw_ma[i]
-        if ma_val is None or math.isnan(ma_val):
-            bb_state_list[i] = 0
-            continue
-        # 예시: buzz, squeeze를 ma_val 기반 임의 계산
-        buzz = ma_val * 1.2
-        squeeze = ma_val * 0.7
+    # Pine Script Line 358: BB_State_MTF = f_security(..., bb_mtf, BB_State)
+    # - extreme_state 계산에 실제로 사용되는 MTF BB_State
+    bb_state_mtf_list = _calc_bb_state_helper(candles_bb_mtf, bb_length=bb_length, bb_mult=bb_mult, bb_ma_len=bb_ma_len)
 
-        if crossover(bbw_list, [buzz]*len(closes), i):
-            bb_state_list[i] = 2
-        elif crossunder(bbw_list, [squeeze]*len(closes), i):
-            bb_state_list[i] = -2
-        else:
-            # 간단히 직전 state 유지
-            bb_state_list[i] = bb_state_list[i-1]
-
-    # (E) extreme_state = 2 / -2 / 0
-    # Bull & BB_State=2 => extreme=2
-    # Bear & BB_State=-2 => extreme=-2  (원본처럼 -2를 찍는 분기)
-    # etc...
+    # (E) extreme_state = 2 / -2 / 0 (PineScript 원본 로직과 동일하게 상태 유지)
+    # Bull & BB_State_MTF=2 => extreme=2
+    # Bear & BB_State_MTF=-2 => extreme=-2
+    # 상태 유지 로직 추가
     trend_state_list = [0]*len(closes)
     for i in range(len(closes)):
         bull = final_bull_list[i]
         bear = final_bear_list[i]
-        bb_st = bb_state_list[i]
-        if bull and (bb_st == 2):
+        # Pine Script Line 358, 364, 370: BB_State_MTF 사용 (현재 TF의 BB_State 아님!)
+        bb_st_mtf = bb_state_mtf_list[i]
+
+        # 이전 상태 가져오기 (PineScript의 var 동작 모방)
+        prev_state = trend_state_list[i-1] if i > 0 else 0
+
+        # 상승 극단 조건 (PineScript 라인 364-365)
+        # if CYCLE_Bull and (use_longer_trend ? true : BB_State_MTF == 2)
+        if bull and (use_longer_trend or bb_st_mtf == 2):
             trend_state_list[i] = 2
-        elif bear and (bb_st == -1):
-            trend_state_list[i] = -2
-        else:
+        # 상승 극단 종료 조건 (PineScript 라인 367-368)
+        # if extreme_state == 2 and not CYCLE_Bull
+        elif prev_state == 2 and not bull:
             trend_state_list[i] = 0
+        # 하락 극단 조건 (PineScript 라인 370-371)
+        # if CYCLE_Bear and (use_longer_trend ? true : BB_State_MTF == -2)
+        elif bear and (use_longer_trend or bb_st_mtf == -2):
+            trend_state_list[i] = -2
+        # 하락 극단 종료 조건 (PineScript 라인 373-374)
+        # if extreme_state == -2 and not CYCLE_Bear
+        elif prev_state == -2 and not bear:
+            trend_state_list[i] = 0
+        # 상태 유지 (PineScript의 var 동작)
+        else:
+            trend_state_list[i] = prev_state
 
     # ---------------------------------------------------------
     # 결과를 각 candle에 저장

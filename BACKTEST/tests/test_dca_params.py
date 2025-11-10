@@ -21,7 +21,7 @@ class TestDCAParameterValidation:
         # Verify all default DCA params are set correctly
         assert strategy.pyramiding_enabled is True
         assert strategy.pyramiding_limit == 3
-        assert strategy.entry_multiplier == 0.5
+        assert strategy.entry_multiplier == 1.6
         assert strategy.pyramiding_entry_type == "퍼센트 기준"
         assert strategy.pyramiding_value == 3.0
         assert strategy.entry_criterion == "평균 단가"
@@ -232,31 +232,31 @@ class TestDCAParameterValidation:
     def test_entry_multiplier_too_small_invalid(self):
         """entry_multiplier<0.1 should raise ValueError."""
         params = {"entry_multiplier": 0.09}
-        with pytest.raises(ValueError, match="entry_multiplier must be between 0.1-1.0"):
+        with pytest.raises(ValueError, match="entry_multiplier must be between 0.1-10.0"):
             HyperrsiStrategy(params)
 
     def test_entry_multiplier_zero_invalid(self):
         """entry_multiplier=0 should raise ValueError."""
         params = {"entry_multiplier": 0.0}
-        with pytest.raises(ValueError, match="entry_multiplier must be between 0.1-1.0"):
+        with pytest.raises(ValueError, match="entry_multiplier must be between 0.1-10.0"):
             HyperrsiStrategy(params)
 
     def test_entry_multiplier_negative_invalid(self):
         """Negative entry_multiplier should raise ValueError."""
         params = {"entry_multiplier": -0.5}
-        with pytest.raises(ValueError, match="entry_multiplier must be between 0.1-1.0"):
+        with pytest.raises(ValueError, match="entry_multiplier must be between 0.1-10.0"):
             HyperrsiStrategy(params)
 
     def test_entry_multiplier_too_large_invalid(self):
-        """entry_multiplier>1.0 should raise ValueError."""
-        params = {"entry_multiplier": 1.01}
-        with pytest.raises(ValueError, match="entry_multiplier must be between 0.1-1.0"):
+        """entry_multiplier>10.0 should raise ValueError."""
+        params = {"entry_multiplier": 10.01}
+        with pytest.raises(ValueError, match="entry_multiplier must be between 0.1-10.0"):
             HyperrsiStrategy(params)
 
     def test_entry_multiplier_way_too_large_invalid(self):
-        """entry_multiplier>>1.0 should raise ValueError."""
-        params = {"entry_multiplier": 2.0}
-        with pytest.raises(ValueError, match="entry_multiplier must be between 0.1-1.0"):
+        """entry_multiplier>>10.0 should raise ValueError."""
+        params = {"entry_multiplier": 20.0}
+        with pytest.raises(ValueError, match="entry_multiplier must be between 0.1-10.0"):
             HyperrsiStrategy(params)
 
     def test_invalid_entry_type_english(self):

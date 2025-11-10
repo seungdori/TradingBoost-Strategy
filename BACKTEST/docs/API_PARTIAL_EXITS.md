@@ -627,7 +627,7 @@ function validatePartialExits(params: StrategyParams): string[] {
 Use this test request to verify partial exits integration:
 
 ```bash
-curl -X POST http://localhost:8013/api/v1/backtest/run \
+curl -X POST http://localhost:8013/backtest/run \
   -H "Content-Type: application/json" \
   -d '{
     "symbol": "BTC-USDT-SWAP",

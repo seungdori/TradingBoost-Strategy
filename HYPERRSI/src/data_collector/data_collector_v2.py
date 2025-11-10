@@ -216,7 +216,9 @@ def check_and_fill_gap(symbol, timeframe):
         # 기존 데이터의 마지막 타임스탬프 찾기
         existing_map = {}
         for item in existing_data:
-            parts = item.split(",")
+            # Redis는 bytes를 반환하므로 decode 필요
+            item_str = item.decode('utf-8') if isinstance(item, bytes) else item
+            parts = item_str.split(",")
             ts = int(parts[0])
             existing_map[ts] = parts
         
@@ -311,7 +313,9 @@ def update_candle_data(symbol, timeframe, new_candles):
         
         # 기존 데이터 파싱
         for item in existing:
-            parts = item.split(",")
+            # Redis는 bytes를 반환하므로 decode 필요
+            item_str = item.decode('utf-8') if isinstance(item, bytes) else item
+            parts = item_str.split(",")
             ts = int(parts[0])
             candle_map[ts] = parts
         
@@ -509,7 +513,9 @@ def update_current_candle_with_indicators(symbol, timeframe, current_candle):
         # 캔들 객체 리스트 생성
         candles = []
         for item in existing_data:
-            parts = item.split(",")
+            # Redis는 bytes를 반환하므로 decode 필요
+            item_str = item.decode('utf-8') if isinstance(item, bytes) else item
+            parts = item_str.split(",")
             ts = int(parts[0])
             candles.append({
                 "timestamp": ts,

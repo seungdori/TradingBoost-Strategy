@@ -5,7 +5,9 @@ API schemas for BACKTEST service.
 from BACKTEST.api.schemas.request import (
     BacktestRunRequest,
     OptimizationRequest,
-    BacktestListRequest
+    BacktestListRequest,
+    CandleDataRequest,
+    RecalculateIndicatorsRequest
 )
 from BACKTEST.api.schemas.response import (
     TradeResponse,
@@ -13,7 +15,8 @@ from BACKTEST.api.schemas.response import (
     BacktestDetailResponse,
     BacktestListResponse,
     OptimizationResultResponse,
-    ErrorResponse
+    ErrorResponse,
+    CandleData
 )
 
 __all__ = [
@@ -21,6 +24,8 @@ __all__ = [
     "BacktestRunRequest",
     "OptimizationRequest",
     "BacktestListRequest",
+    "CandleDataRequest",
+    "RecalculateIndicatorsRequest",
     # Responses
     "TradeResponse",
     "BacktestSummaryResponse",
@@ -28,4 +33,5 @@ __all__ = [
     "BacktestListResponse",
     "OptimizationResultResponse",
     "ErrorResponse",
+    "CandleData",
 ]

@@ -4,7 +4,7 @@
 
 TradingBoost-Strategy 백테스트 API는 HyperRSI 전략의 성능을 검증하고 최적화하기 위한 RESTful API입니다.
 
-**Base URL**: `http://localhost:8013/api/v1/backtest`
+**Base URL**: `http://localhost:8013/backtest`
 
 **지원 전략**:
 - HyperRSI: RSI + 트렌드 기반 매매 전략
@@ -40,12 +40,12 @@ export interface BacktestRequest {
   timeframe: string;           // 타임프레임 (예: "15m", "1h", "4h")
   start_date: string;          // 시작 날짜 (ISO 8601)
   end_date: string;            // 종료 날짜 (ISO 8601)
-  initial_capital: number;     // 초기 자본금 (USDT)
+  initial_balance: number;     // 초기 자본금 (USDT)
 
   // 선택 파라미터
   position_size_percent?: number;  // 포지션 크기 (기본: 100.0)
-  maker_fee?: number;              // 메이커 수수료 % (기본: 0.02)
-  taker_fee?: number;              // 테이커 수수료 % (기본: 0.05)
+  fee_rate?: number;               // 거래 수수료율 (기본: 0.0005, 즉 0.05%)
+  slippage_percent?: number;       // 슬리피지 % (기본: 0.05)
   data_source?: 'timescale' | 'redis' | 'okx';  // 데이터 소스
   strategy_name?: string;          // 전략 이름 (기본: "hyperrsi")
 
@@ -155,7 +155,7 @@ export interface BacktestConfig {
   timeframe: string;
   start_date: string;
   end_date: string;
-  initial_capital: number;
+  initial_balance: number;
   strategy_name: string;
   strategy_params: HyperRSIParams;
 }
@@ -715,7 +715,7 @@ export function BacktestForm() {
     timeframe: '15m',
     start_date: '2025-01-01T00:00:00',
     end_date: '2025-02-01T00:00:00',
-    initial_capital: 10000,
+    initial_balance: 10000,
     strategy_params: {
       rsi_period: 5,
       rsi_ob: 70,
@@ -741,7 +741,7 @@ export function BacktestForm() {
     e.preventDefault();
 
     try {
-      const response = await fetch('http://localhost:8013/api/v1/backtest/run', {
+      const response = await fetch('http://localhost:8013/backtest/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)
@@ -1298,7 +1298,7 @@ import {
   DataValidationResponse
 } from '../types/backtest';
 
-const API_BASE = 'http://localhost:8013/api/v1/backtest';
+const API_BASE = 'http://localhost:8013/backtest';
 
 /**
  * 백테스트 실행
@@ -1410,7 +1410,7 @@ async function example() {
     timeframe: '15m',
     start_date: '2025-01-01T00:00:00',
     end_date: '2025-02-01T00:00:00',
-    initial_capital: 10000,
+    initial_balance: 10000,
     strategy_params: {
       rsi_period: 5,
       use_trend_close: true,
@@ -1453,10 +1453,10 @@ async function example() {
   "timeframe": "15m",
   "start_date": "2025-01-01T00:00:00",
   "end_date": "2025-03-01T00:00:00",
-  "initial_capital": 10000.0,
+  "initial_balance": 10000.0,
   "position_size_percent": 100.0,
-  "maker_fee": 0.02,
-  "taker_fee": 0.05,
+  "fee_rate": 0.0005,
+  "slippage_percent": 0.05,
   "data_source": "timescale",
   "strategy_name": "hyperrsi",
   "strategy_params": {
@@ -1473,15 +1473,15 @@ async function example() {
 | `timeframe` | string | 타임프레임 | `"15m"`, `"1h"`, `"4h"` |
 | `start_date` | string | 시작 날짜 (ISO 8601) | `"2025-01-01T00:00:00"` |
 | `end_date` | string | 종료 날짜 (ISO 8601) | `"2025-03-01T00:00:00"` |
-| `initial_capital` | float | 초기 자본금 (USDT) | `10000.0` |
+| `initial_balance` | float | 초기 자본금 (USDT) | `10000.0` |
 
 #### 선택 파라미터
 
 | 파라미터 | 타입 | 기본값 | 설명 |
 |---------|------|--------|------|
 | `position_size_percent` | float | `100.0` | 포지션 크기 (자본금 대비 %) |
-| `maker_fee` | float | `0.02` | 메이커 수수료 (%) |
-| `taker_fee` | float | `0.05` | 테이커 수수료 (%) |
+| `fee_rate` | float | `0.0005` | 거래 수수료율 (0.05%) |
+| `slippage_percent` | float | `0.05` | 슬리피지 (%) |
 | `data_source` | string | `"timescale"` | 데이터 소스 (`timescale`, `redis`, `okx`) |
 | `strategy_name` | string | `"hyperrsi"` | 전략 이름 |
 
@@ -1506,14 +1506,14 @@ async function example() {
 #### 예제
 
 ```bash
-curl -X POST "http://localhost:8013/api/v1/backtest/run" \
+curl -X POST "http://localhost:8013/backtest/run" \
   -H "Content-Type: application/json" \
   -d '{
     "symbol": "BTC/USDT:USDT",
     "timeframe": "15m",
     "start_date": "2025-01-01T00:00:00",
     "end_date": "2025-02-01T00:00:00",
-    "initial_capital": 10000,
+    "initial_balance": 10000,
     "strategy_params": {
       "rsi_period": 5,
       "rsi_ob": 70,
@@ -1550,7 +1550,7 @@ curl -X POST "http://localhost:8013/api/v1/backtest/run" \
     "timeframe": "15m",
     "start_date": "2025-01-01T00:00:00",
     "end_date": "2025-02-01T00:00:00",
-    "initial_capital": 10000.0,
+    "initial_balance": 10000.0,
     "strategy_name": "hyperrsi",
     "strategy_params": { ... }
   },
@@ -1616,7 +1616,7 @@ curl -X POST "http://localhost:8013/api/v1/backtest/run" \
 #### 예제
 
 ```bash
-curl "http://localhost:8013/api/v1/backtest/550e8400-e29b-41d4-a716-446655440000"
+curl "http://localhost:8013/backtest/550e8400-e29b-41d4-a716-446655440000"
 ```
 
 ---
@@ -1652,7 +1652,7 @@ curl "http://localhost:8013/api/v1/backtest/550e8400-e29b-41d4-a716-446655440000
 #### 예제
 
 ```bash
-curl -X DELETE "http://localhost:8013/api/v1/backtest/550e8400-e29b-41d4-a716-446655440000"
+curl -X DELETE "http://localhost:8013/backtest/550e8400-e29b-41d4-a716-446655440000"
 ```
 
 ---
@@ -1715,7 +1715,7 @@ curl -X DELETE "http://localhost:8013/api/v1/backtest/550e8400-e29b-41d4-a716-44
 #### 예제
 
 ```bash
-curl "http://localhost:8013/api/v1/backtest/validate/data?symbol=BTC/USDT:USDT&timeframe=15m&start_date=2025-01-01T00:00:00&end_date=2025-02-01T00:00:00"
+curl "http://localhost:8013/backtest/validate/data?symbol=BTC/USDT:USDT&timeframe=15m&start_date=2025-01-01T00:00:00&end_date=2025-02-01T00:00:00"
 ```
 
 ---
@@ -1930,14 +1930,14 @@ curl "http://localhost:8013/api/v1/backtest/validate/data?symbol=BTC/USDT:USDT&t
 ### 예제 1: 기본 백테스트
 
 ```bash
-curl -X POST "http://localhost:8013/api/v1/backtest/run" \
+curl -X POST "http://localhost:8013/backtest/run" \
   -H "Content-Type: application/json" \
   -d '{
     "symbol": "BTC/USDT:USDT",
     "timeframe": "15m",
     "start_date": "2025-01-01T00:00:00",
     "end_date": "2025-02-01T00:00:00",
-    "initial_capital": 10000,
+    "initial_balance": 10000,
     "strategy_params": {
       "rsi_period": 5,
       "rsi_ob": 70,
@@ -1949,14 +1949,14 @@ curl -X POST "http://localhost:8013/api/v1/backtest/run" \
 ### 예제 2: 트렌드 반전 + 손절 설정
 
 ```bash
-curl -X POST "http://localhost:8013/api/v1/backtest/run" \
+curl -X POST "http://localhost:8013/backtest/run" \
   -H "Content-Type: application/json" \
   -d '{
     "symbol": "ETH/USDT:USDT",
     "timeframe": "1h",
     "start_date": "2025-01-01T00:00:00",
     "end_date": "2025-03-01T00:00:00",
-    "initial_capital": 10000,
+    "initial_balance": 10000,
     "strategy_params": {
       "rsi_period": 5,
       "use_trend_close": true,
@@ -1968,14 +1968,14 @@ curl -X POST "http://localhost:8013/api/v1/backtest/run" \
 ### 예제 3: 부분 익절 전략
 
 ```bash
-curl -X POST "http://localhost:8013/api/v1/backtest/run" \
+curl -X POST "http://localhost:8013/backtest/run" \
   -H "Content-Type: application/json" \
   -d '{
     "symbol": "BTC/USDT:USDT",
     "timeframe": "15m",
     "start_date": "2025-01-01T00:00:00",
     "end_date": "2025-02-01T00:00:00",
-    "initial_capital": 10000,
+    "initial_balance": 10000,
     "strategy_params": {
       "rsi_period": 5,
       "use_trend_close": true,
@@ -1995,14 +1995,14 @@ curl -X POST "http://localhost:8013/api/v1/backtest/run" \
 ### 예제 4: 트레일링 스톱
 
 ```bash
-curl -X POST "http://localhost:8013/api/v1/backtest/run" \
+curl -X POST "http://localhost:8013/backtest/run" \
   -H "Content-Type: application/json" \
   -d '{
     "symbol": "BTC/USDT:USDT",
     "timeframe": "15m",
     "start_date": "2025-01-01T00:00:00",
     "end_date": "2025-02-01T00:00:00",
-    "initial_capital": 10000,
+    "initial_balance": 10000,
     "strategy_params": {
       "rsi_period": 5,
       "use_trend_close": true,
@@ -2017,14 +2017,14 @@ curl -X POST "http://localhost:8013/api/v1/backtest/run" \
 ### 예제 5: 롱 전용 전략
 
 ```bash
-curl -X POST "http://localhost:8013/api/v1/backtest/run" \
+curl -X POST "http://localhost:8013/backtest/run" \
   -H "Content-Type: application/json" \
   -d '{
     "symbol": "BTC/USDT:USDT",
     "timeframe": "1h",
     "start_date": "2025-01-01T00:00:00",
     "end_date": "2025-02-01T00:00:00",
-    "initial_capital": 10000,
+    "initial_balance": 10000,
     "strategy_params": {
       "rsi_period": 5,
       "direction": "long",

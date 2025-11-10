@@ -126,11 +126,13 @@ DIRECTION_LONG = "롱"
 DIRECTION_SHORT = "숏"
 
 # ============================================================================
-# Trend State Constants
+# Trend State Constants (PineScript 3-level system)
 # ============================================================================
+# HYPERRSI uses PineScript-based trend state calculation with 3 levels:
+# - Only extreme states (-2, 2) are used for entry/exit filtering
+# - Neutral state (0) allows all entries
+# - Based on JMA/T3 + VIDYA moving averages with BBW analysis
 
-TREND_STATE_STRONG_DOWNTREND = -2
-TREND_STATE_DOWNTREND = -1
-TREND_STATE_NEUTRAL = 0
-TREND_STATE_UPTREND = 1
-TREND_STATE_STRONG_UPTREND = 2
+TREND_STATE_STRONG_DOWNTREND = -2  # Extreme downtrend: blocks long entries, closes long positions
+TREND_STATE_NEUTRAL = 0             # Neutral: allows all entries
+TREND_STATE_STRONG_UPTREND = 2      # Extreme uptrend: blocks short entries, closes short positions

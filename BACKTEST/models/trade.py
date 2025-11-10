@@ -23,7 +23,7 @@ class ExitReason(str, Enum):
     STOP_LOSS = "stop_loss"
     TRAILING_STOP = "trailing_stop"
     BREAK_EVEN = "break_even"
-    SIGNAL = "signal"
+    SIGNAL = "트렌드 반전 종료"
     MANUAL = "manual"  # Legacy: kept for backward compatibility
     BACKTEST_END = "backtest_end"  # Position held until backtest end
 

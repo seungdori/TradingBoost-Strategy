@@ -248,3 +248,26 @@ class ErrorResponse(BaseModel):
                 "timestamp": "2025-01-15T10:00:00Z"
             }
         }
+
+
+class CandleData(BaseModel):
+    """Single candle data point."""
+
+    timestamp: datetime = Field(..., description="Candle timestamp")
+    open: str = Field(..., description="Open price")
+    high: str = Field(..., description="High price")
+    low: str = Field(..., description="Low price")
+    close: str = Field(..., description="Close price")
+    volume: str = Field(..., description="Trading volume")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "timestamp": "2025-01-01T00:00:00Z",
+                "open": "42000.50",
+                "high": "42100.75",
+                "low": "41950.25",
+                "close": "42050.00",
+                "volume": "125.45"
+            }
+        }

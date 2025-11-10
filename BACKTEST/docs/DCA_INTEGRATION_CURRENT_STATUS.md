@@ -15,7 +15,7 @@
 {
     "pyramiding_enabled": True,           # DCA 활성화 여부
     "pyramiding_limit": 3,                # 최대 추가 진입 횟수 (1-10)
-    "entry_multiplier": 0.5,              # 추가 진입 시 규모 배율 (0.1-1.0)
+    "entry_multiplier": 1.6,              # 추가 진입 시 규모 배율 (0.1-10.0, 기본값: 1.6)
     "pyramiding_entry_type": "퍼센트 기준", # '퍼센트 기준' | '금액 기준' | 'ATR 기준'
     "pyramiding_value": 3.0,              # DCA 레벨 간격 값
     "entry_criterion": "평균 단가",        # '평균 단가' | '최근 진입가'
@@ -304,7 +304,7 @@ request_data = {
 
 async with httpx.AsyncClient() as client:
     response = await client.post(
-        "http://localhost:8013/api/v1/backtest/run",
+        "http://localhost:8013/backtest/run",
         json=request_data
     )
     result = response.json()

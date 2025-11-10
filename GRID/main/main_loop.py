@@ -16,7 +16,7 @@ import redis.asyncio as aioredis
 
 from GRID import telegram_message
 from GRID.database import redis_database
-from GRID.database.redis_database import RedisConnectionManager
+from GRID.trading.redis_connection_manager import RedisConnectionManager
 from GRID.main import periodic_analysis
 from GRID.repositories.symbol_repository import (
     add_symbols,

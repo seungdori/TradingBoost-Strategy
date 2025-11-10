@@ -313,7 +313,7 @@ async def should_enter_with_trend(
 
     Args:
         settings: User settings containing 'use_trend_logic' flag
-        current_state: Current trend state (-2 to +2)
+        current_state: Current trend state (PineScript 3-level: -2, 0, 2)
         side: Position side to check ("long" or "short")
 
     Returns:
@@ -326,12 +326,10 @@ async def should_enter_with_trend(
         >>> if not should_enter:
         ...     print(f"Entry blocked: {reason}")
 
-    Trend States:
-        -2: Strong downtrend (blocks long entries if trend logic enabled)
-        -1: Downtrend
-         0: Neutral
-         1: Uptrend
-         2: Strong uptrend (blocks short entries if trend logic enabled)
+    Trend States (PineScript 3-level system):
+        -2: Extreme downtrend (blocks long entries if trend logic enabled)
+         0: Neutral (allows all entries)
+         2: Extreme uptrend (blocks short entries if trend logic enabled)
     """
     use_trend_logic = settings.get('use_trend_logic', True)
 

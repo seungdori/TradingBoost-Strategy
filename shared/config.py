@@ -123,6 +123,14 @@ class Settings(BaseSettings):
     TIMESCALE_USER: str = os.getenv("TIMESCALE_USER", "")
     TIMESCALE_PASSWORD: str = os.getenv("TIMESCALE_PASSWORD", "")
 
+    # CandlesDB 설정 (OHLCV market data)
+    CANDLES_HOST: str = os.getenv("CANDLES_HOST", "158.247.251.34")
+    CANDLES_PORT: int = int(os.getenv("CANDLES_PORT", "5432"))
+    CANDLES_DATABASE: str = os.getenv("CANDLES_DATABASE", "candlesdb")
+    CANDLES_USER: str = os.getenv("CANDLES_USER", "tradeuser")
+    CANDLES_PASSWORD: str = os.getenv("CANDLES_PASSWORD", "SecurePassword123")
+    CANDLES_SCHEMA: str = os.getenv("CANDLES_SCHEMA", "public")
+
 
 @lru_cache()
 def get_settings():

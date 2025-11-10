@@ -641,3 +641,44 @@ def get_circuit_breaker() -> RedisCircuitBreaker:
     if _global_circuit_breaker is None:
         _global_circuit_breaker = RedisCircuitBreaker()
     return _global_circuit_breaker
+
+
+# ==================== 편의 함수 (하위 호환성) ====================
+
+async def ping_redis() -> bool:
+    """
+    Redis 연결 상태 확인 (편의 함수)
+    
+    Returns:
+        bool: 연결 성공 여부
+        
+    Note:
+        이 함수는 하위 호환성을 위해 제공됩니다.
+        새로운 코드에서는 RedisConnectionManager().ping() 또는 get_redis().ping()을 사용하세요.
+    """
+    try:
+        redis = await get_redis()
+        return await redis.ping()
+    except Exception as e:
+        logger.error(f"Redis ping failed: {e}")
+        return False
+
+
+async def reconnect_redis() -> bool:
+    """
+    Redis 재연결 시도 (편의 함수)
+    
+    Returns:
+        bool: 재연결 성공 여부
+        
+    Note:
+        이 함수는 하위 호환성을 위해 제공됩니다.
+        새로운 코드에서는 RedisConnectionManager().reconnect()를 사용하세요.
+    """
+    try:
+        manager = RedisConnectionManager()
+        await manager.reconnect()
+        return await manager.ping()
+    except Exception as e:
+        logger.error(f"Redis reconnect failed: {e}")
+        return False

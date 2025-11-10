@@ -280,16 +280,36 @@ class OrderManager:
                                     closed_list.append(json.dumps(order_json))
 
                         except Exception as e:
-                            logger.error(f"알고주문 조회 실패: {str(e)}")
-                            new_open_list.append(data)  # 조회 실패 시 기존 데이터 유지
+                            error_message = str(e)
+                            # OKX 에러 코드 51603: 주문이 존재하지 않음 (이미 체결되었거나 삭제됨)
+                            if '"code":"51603"' in error_message or "Order does not exist" in error_message:
+                                logger.warning(f"[{user_id}] 알고주문 {order_id} 존재하지 않음 - closed_list로 이동")
+                                # 주문을 closed 상태로 마킹하여 closed_list로 이동
+                                order_json['status'] = 'closed'
+                                order_json['update_time'] = datetime.now().isoformat()
+                                closed_list.append(json.dumps(order_json))
+                            else:
+                                # 기타 에러는 일시적인 문제일 수 있으므로 유지
+                                logger.error(f"알고주문 조회 실패 (일시적 에러): {error_message}")
+                                new_open_list.append(data)
                             continue  # 다음 주문으로 넘어감
                     else:
                         try:
                             # 일반 주문 조회
                             latest = await self.trading_service.client.fetch_order(order_id, symbol)
                         except Exception as e:
-                            logger.error(f"일반 주문 조회 실패: {str(e)}")
-                            new_open_list.append(data)  # 조회 실패 시 기존 데이터 유지
+                            error_message = str(e)
+                            # OKX 에러 코드 51603: 주문이 존재하지 않음 (이미 체결되었거나 삭제됨)
+                            if '"code":"51603"' in error_message or "Order does not exist" in error_message:
+                                logger.warning(f"[{user_id}] 주문 {order_id} 존재하지 않음 - closed_list로 이동")
+                                # 주문을 closed 상태로 마킹하여 closed_list로 이동
+                                order_json['status'] = 'closed'
+                                order_json['update_time'] = datetime.now().isoformat()
+                                closed_list.append(json.dumps(order_json))
+                            else:
+                                # 기타 에러는 일시적인 문제일 수 있으므로 유지
+                                logger.error(f"일반 주문 조회 실패 (일시적 에러): {error_message}")
+                                new_open_list.append(data)
                             continue  # 다음 주문으로 넘어감
                 except Exception as e:
                     logger.error(f"주문 조회 실패: {str(e)}")

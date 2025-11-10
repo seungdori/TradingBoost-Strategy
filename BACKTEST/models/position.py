@@ -272,8 +272,8 @@ class Position(BaseModel):
             # Check TP2
             if self.use_tp2 and not self.tp2_filled and self.tp2_price and current_price >= self.tp2_price:
                 return True, "tp2", 2
-            # Check TP3
-            if self.use_tp3 and not self.tp3_filled and self.tp3_price and current_price >= self.tp3_price:
+            # Check TP3 (skip if trailing stop is active - trailing stop replaces TP3)
+            if self.use_tp3 and not self.tp3_filled and self.tp3_price and not self.trailing_stop_activated and current_price >= self.tp3_price:
                 return True, "tp3", 3
 
         else:  # SHORT
@@ -283,8 +283,8 @@ class Position(BaseModel):
             # Check TP2
             if self.use_tp2 and not self.tp2_filled and self.tp2_price and current_price <= self.tp2_price:
                 return True, "tp2", 2
-            # Check TP3
-            if self.use_tp3 and not self.tp3_filled and self.tp3_price and current_price <= self.tp3_price:
+            # Check TP3 (skip if trailing stop is active - trailing stop replaces TP3)
+            if self.use_tp3 and not self.tp3_filled and self.tp3_price and not self.trailing_stop_activated and current_price <= self.tp3_price:
                 return True, "tp3", 3
 
         return False, None, None

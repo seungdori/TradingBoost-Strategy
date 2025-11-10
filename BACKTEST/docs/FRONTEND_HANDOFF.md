@@ -10,7 +10,7 @@
 ### Endpoint
 
 ```http
-POST /backtest
+POST /backtest/run
 ```
 
 ### Request Body

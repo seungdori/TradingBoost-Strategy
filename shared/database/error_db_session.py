@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.pool import QueuePool
 
 from shared.config.settings import settings
 from shared.logging import get_logger
@@ -57,12 +56,14 @@ class ErrorDatabaseConfig:
             logger.info(f"Creating Error DB engine (separate pool): {error_db_url[:50]}...")
 
             # 에러 로깅용은 작은 pool로 충분
+            # Note: For async engines, poolclass should not be explicitly set
+            # create_async_engine automatically uses the appropriate async pool
             cls._engine = create_async_engine(
                 error_db_url,
                 echo=settings.DEBUG,
 
                 # 작은 pool 설정 (에러 로깅은 동시성 낮음)
-                poolclass=QueuePool,
+                # poolclass는 명시하지 않음 - create_async_engine이 자동으로 비동기 풀 사용
                 pool_size=3,  # 메인 DB보다 작게
                 max_overflow=5,
                 pool_timeout=10,  # 짧은 타임아웃

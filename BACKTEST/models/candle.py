@@ -37,6 +37,28 @@ class Candle(BaseModel):
     macd_signal: Optional[float] = Field(None, description="MACD signal line")
     macd_histogram: Optional[float] = Field(None, description="MACD histogram")
 
+    # PineScript-based Trend State (3-level system)
+    trend_state: Optional[int] = Field(
+        None,
+        description="PineScript-based trend state: -2=extreme down, 0=neutral, 2=extreme up",
+        ge=-2,
+        le=2
+    )
+
+    # PineScript Trend Components
+    CYCLE_Bull: Optional[bool] = Field(
+        None,
+        description="CYCLE Bull condition from PineScript (JMA/T3 + VIDYA analysis)"
+    )
+    CYCLE_Bear: Optional[bool] = Field(
+        None,
+        description="CYCLE Bear condition from PineScript (JMA/T3 + VIDYA analysis)"
+    )
+    BB_State: Optional[int] = Field(
+        None,
+        description="Bollinger Band Width state: -2=squeeze, 0=normal, 2=expansion"
+    )
+
     # Metadata
     data_source: str = Field(default="unknown", description="Data source")
     is_complete: bool = Field(default=True, description="Whether candle is complete")

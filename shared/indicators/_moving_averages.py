@@ -5,22 +5,29 @@ import math
 
 
 def calc_sma(series: list[float], length: int) -> list[float | None]:
-    """Simple Moving Average"""
+    """
+    Simple Moving Average - handles NaN values like Pine Script's ta.sma()
+
+    Pine Script's ta.sma() skips NaN values and only averages valid values in the window.
+    """
     n = len(series)
-    out: list[float | None] = [None]*n
+    out: list[float | None] = [math.nan]*n
     if length <= 0:
         return out
 
-    running_sum = 0.0
-    for i, val in enumerate(series):
-        running_sum += val
-        if i < length:
-            # 아직 length개 미만: (i+1)개 단순평균
-            out[i] = running_sum / (i+1)
+    for i in range(n):
+        # Get window: last 'length' values up to and including index i
+        start = max(0, i - length + 1)
+        window = series[start:i+1]
+
+        # Filter out NaN values (Pine Script behavior)
+        valid_values = [v for v in window if not (math.isnan(v) if isinstance(v, float) else False)]
+
+        if len(valid_values) > 0:
+            out[i] = sum(valid_values) / len(valid_values)
         else:
-            # length개 이상: 일반 SMA
-            running_sum -= series[i - length]
-            out[i] = running_sum / length
+            out[i] = math.nan
+
     return out
 
 

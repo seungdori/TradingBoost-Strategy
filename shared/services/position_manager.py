@@ -62,7 +62,7 @@ from shared.models.trading import (
     PositionSide,
     PositionStatus,
 )
-from shared.utils.retry import retry_async
+from shared.utils.async_helpers import retry_async, retry_decorator
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -225,7 +225,7 @@ class PositionManager:
         # For now, this requires additional index structure
         raise NotImplementedError("get_position_by_id requires position ID index")
 
-    @retry_async(max_attempts=3, delay=1.0, backoff=2.0)
+    @retry_decorator(max_retries=3, delay=1.0, backoff=2.0)
     async def open_position(
         self,
         user_id: str,

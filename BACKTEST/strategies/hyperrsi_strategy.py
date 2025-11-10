@@ -27,7 +27,7 @@ class HyperrsiStrategy(BaseStrategy):
     DCA / Pyramiding parameters (phase 1):
         pyramiding_enabled (bool): Master switch for additional entries
         pyramiding_limit (int): Max additional entries (0-10)
-        entry_multiplier (float): Scale factor per additional entry (0.1-1.0)
+        entry_multiplier (float): Scale factor per additional entry (0.1-10.0, default: 1.6)
         pyramiding_entry_type (str): '퍼센트 기준' | '금액 기준' | 'ATR 기준'
         pyramiding_value (float): Distance to next entry level
         entry_criterion (str): '평균 단가' | '최근 진입가'
@@ -79,7 +79,7 @@ class HyperrsiStrategy(BaseStrategy):
         # DCA / Pyramiding defaults
         "pyramiding_enabled": True,
         "pyramiding_limit": 3,
-        "entry_multiplier": 0.5,
+        "entry_multiplier": 1.6,
         "pyramiding_entry_type": "퍼센트 기준",
         "pyramiding_value": 3.0,
         "entry_criterion": "평균 단가",
@@ -452,15 +452,53 @@ class HyperrsiStrategy(BaseStrategy):
                 prev_closes = pd.Series([c.close for c in self.price_history[:-1]])
                 previous_rsi = self.signal_generator.calculate_rsi(prev_closes, self.signal_generator.rsi_period)
 
-        # Calculate trend state if using trend filter
+        # Get trend state from candle if available (DB value), otherwise calculate
         trend_state = None
         if self.use_trend_filter:
-            trend_state = self.signal_generator.calculate_trend_state(closes)
+            # ✅ Use DB trend_state if available (more reliable)
+            if hasattr(candle, 'trend_state') and candle.trend_state is not None:
+                trend_state = candle.trend_state
+                logger.debug(f"Using DB trend_state: {trend_state}")
+            else:
+                # Fallback: Calculate from price_history if DB value not available
+                candles_data = [{
+                    'timestamp': c.timestamp,
+                    'open': c.open,
+                    'high': c.high,
+                    'low': c.low,
+                    'close': c.close,
+                    'volume': c.volume
+                } for c in self.price_history]
+
+                candles_df = pd.DataFrame(candles_data)
+                candles_df.set_index('timestamp', inplace=True)
+
+                trend_state = self.signal_generator.calculate_trend_state(candles_df)
+                logger.debug(f"Calculated trend_state from price_history: {trend_state}")
+
+        # Debug logging for '돌파' mode
+        if self.rsi_entry_option == "돌파":
+            prev_rsi_str = f"{previous_rsi:.2f}" if previous_rsi is not None else "None"
+            logger.debug(
+                f"[돌파 CHECK] time={candle.timestamp}, price={candle.close:.2f}, "
+                f"rsi={rsi:.2f}, prev_rsi={prev_rsi_str}, "
+                f"trend={trend_state}, direction={self.direction}"
+            )
 
         # Check long signal (if direction allows)
         if self.direction in ["long", "both"]:
             has_long, long_reason = self.signal_generator.check_long_signal(rsi, trend_state, previous_rsi)
+
+            # Debug logging for signal check result
+            if self.rsi_entry_option == "돌파":
+                logger.debug(f"[돌파 LONG] has_signal={has_long}, reason={long_reason}")
+
             if has_long:
+                prev_rsi_str = f"{previous_rsi:.2f}" if previous_rsi is not None else "None"
+                logger.info(
+                    f"LONG SIGNAL GENERATED: {long_reason}, "
+                    f"rsi={rsi:.2f}, prev_rsi={prev_rsi_str}, trend={trend_state}"
+                )
                 return TradingSignal(
                     side=TradeSide.LONG,
                     reason=long_reason,
@@ -717,7 +755,12 @@ class HyperrsiStrategy(BaseStrategy):
         if not self.trailing_stop_enabled:
             return False
 
-        # Activate trailing stop when in profit
+        # If any TP level is active, wait for trailing_start_point to trigger
+        # Trailing stop will be activated by TP partial exit logic
+        if self.use_tp1 or self.use_tp2 or self.use_tp3:
+            return False  # Wait for TP level to activate via trailing_start_point
+
+        # If no TP levels are active, activate trailing stop immediately when in profit
         return unrealized_pnl_percent >= 0
 
     def get_trailing_stop_params(
@@ -838,10 +881,10 @@ class HyperrsiStrategy(BaseStrategy):
                 f"pyramiding_limit must be integer between 1-10, got {pyramiding_limit}"
             )
 
-        entry_multiplier = params.get("entry_multiplier", 0.5)
-        if not isinstance(entry_multiplier, (int, float)) or entry_multiplier < 0.1 or entry_multiplier > 1.0:
+        entry_multiplier = params.get("entry_multiplier", 1.6)
+        if not isinstance(entry_multiplier, (int, float)) or entry_multiplier < 0.1 or entry_multiplier > 10.0:
             raise ValueError(
-                f"entry_multiplier must be between 0.1-1.0, got {entry_multiplier}"
+                f"entry_multiplier must be between 0.1-10.0, got {entry_multiplier}"
             )
 
         # 영어와 한국어 둘 다 허용

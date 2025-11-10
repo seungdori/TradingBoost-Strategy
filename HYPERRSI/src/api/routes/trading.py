@@ -792,23 +792,25 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
     try:
         symbol = None
         okx_uid = None
-        
+        print("⭐️user_id: ", user_id)
         # 1. 쿼리 파라미터에서 user_id 확인
         if user_id:
             okx_uid = user_id
+            print("⭐️okx_uid222: ", okx_uid)
         else:
             # 2. JSON 본문에서 okx_uid 확인 (기존 방식)
             try:
                 request_body = await request.json()
                 if "okx_uid" in request_body:
                     okx_uid = request_body["okx_uid"]
+                    print("⭐️okx_uid333: ", okx_uid)
             except (json.JSONDecodeError, ValueError, AttributeError):
                 pass
         
         # 3. 필수 파라미터 확인
         if not okx_uid:
             raise HTTPException(status_code=400, detail="user_id 또는 okx_uid가 필요합니다.")
-            
+        print("⭐️okx_uid444: ", okx_uid)
         logger.info(f"사용자 {okx_uid}의 트레이딩 태스크 중지 시도")
         
         # 텔레그램 ID인지 OKX UID인지 확인

@@ -9,7 +9,9 @@ from typing import Optional
 from BACKTEST.api.schemas import (
     BacktestRunRequest,
     BacktestDetailResponse,
-    ErrorResponse
+    ErrorResponse,
+    CandleDataRequest,
+    RecalculateIndicatorsRequest
 )
 from BACKTEST.engine import BacktestEngine
 from BACKTEST.data import TimescaleProvider
@@ -119,7 +121,7 @@ router = APIRouter()
 
 - **pyramiding_enabled** (bool): DCA 활성화 여부
 - **pyramiding_limit** (int, 1-10): 최대 추가 진입 횟수
-- **entry_multiplier** (float, 0.1-1.0): 진입 규모 배율
+- **entry_multiplier** (float, 0.1-10.0): 진입 규모 배율 (기본값: 1.6)
 - **pyramiding_entry_type** (str): 진입 기준 ("퍼센트 기준", "금액 기준", "ATR 기준")
 - **pyramiding_value** (float): 진입 간격 값
 - **entry_criterion** (str): 기준 가격 ("평균 단가", "최근 진입가")
@@ -968,3 +970,501 @@ async def validate_data_availability(
             status_code=500,
             detail=f"Failed to validate data: {str(e)}"
         )
+
+
+@router.post(
+    "/candles",
+    response_model=list,
+    summary="캔들 데이터 조회 (차트용)",
+    description="""
+# 캔들 데이터 조회 (차트용)
+
+백테스트 기간의 캔들 데이터를 조회하여 차트 표시에 사용합니다.
+
+## 요청 본문 (CandleDataRequest)
+
+- **symbol** (string, required): 거래 심볼
+  - 형식: "BTC/USDT:USDT", "ETH/USDT:USDT"
+  - 자동 변환: "BTC-USDT-SWAP" 형식도 지원
+
+- **timeframe** (string, required): 시간 프레임
+  - 지원: 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d
+
+- **start_date** (datetime, required): 시작 날짜
+  - ISO 8601 형식: "2025-01-01T00:00:00Z"
+
+- **end_date** (datetime, required): 종료 날짜
+  - ISO 8601 형식: "2025-01-31T23:59:59Z"
+
+## 동작 방식
+
+1. **심볼 정규화**: 입력 심볼을 TimescaleDB 형식으로 변환
+2. **데이터 조회**: TimescaleDB에서 지정 기간의 캔들 데이터 조회
+3. **응답 생성**: timestamp, open, high, low, close, volume 반환
+
+## 반환 데이터
+
+캔들 데이터 배열 (시간순 정렬):
+
+### 기본 OHLCV
+- **timestamp** (datetime): 캔들 시간
+- **open** (string): 시가
+- **high** (string): 고가
+- **low** (string): 저가
+- **close** (string): 종가
+- **volume** (string): 거래량
+
+### 기술적 지표
+- **rsi** (float, nullable): RSI 지표 (0-100)
+- **atr** (float, nullable): ATR (Average True Range)
+- **ema** (float, nullable): 지수이동평균 (EMA)
+- **sma** (float, nullable): 단순이동평균 (SMA)
+
+### PineScript 트렌드 상태
+- **trend_state** (int, nullable): 트렌드 상태 (-2=극단 하락, 0=중립, 2=극단 상승)
+- **CYCLE_Bull** (bool, nullable): 불 사이클 여부
+- **CYCLE_Bear** (bool, nullable): 베어 사이클 여부
+- **BB_State** (int, nullable): 볼린저밴드 상태
+
+## 사용 시나리오
+
+📊 **차트 표시**: 백테스트 기간의 가격 차트 렌더링
+📈 **트레이드 마커**: 진입/청산 포인트와 함께 표시
+🔍 **패턴 분석**: 가격 패턴 및 추세 확인
+
+## 예시 요청
+
+```json
+{
+  "symbol": "BTC/USDT:USDT",
+  "timeframe": "15m",
+  "start_date": "2025-01-01T00:00:00Z",
+  "end_date": "2025-01-31T23:59:59Z"
+}
+```
+
+## 예시 응답
+
+```json
+[
+  {
+    "timestamp": "2025-01-01T00:00:00Z",
+    "open": "42000.50",
+    "high": "42100.75",
+    "low": "41950.25",
+    "close": "42050.00",
+    "volume": "125.45",
+    "rsi": 45.2,
+    "atr": 125.5,
+    "ema": 42025.0,
+    "sma": 42010.0,
+    "trend_state": 0,
+    "CYCLE_Bull": true,
+    "CYCLE_Bear": false,
+    "BB_State": 0
+  },
+  {
+    "timestamp": "2025-01-01T00:15:00Z",
+    "open": "42050.00",
+    "high": "42200.00",
+    "low": "42030.00",
+    "close": "42180.50",
+    "volume": "142.30",
+    "rsi": 52.8,
+    "atr": 128.0,
+    "ema": 42100.0,
+    "sma": 42050.0,
+    "trend_state": 2,
+    "CYCLE_Bull": true,
+    "CYCLE_Bear": false,
+    "BB_State": 2
+  }
+]
+```
+""",
+    responses={
+        200: {
+            "description": "✅ 캔들 데이터 조회 성공",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "btc_15m": {
+                            "summary": "BTC 15분봉 데이터",
+                            "value": [
+                                {
+                                    "timestamp": "2025-01-01T00:00:00Z",
+                                    "open": "42000.50",
+                                    "high": "42100.75",
+                                    "low": "41950.25",
+                                    "close": "42050.00",
+                                    "volume": "125.45"
+                                },
+                                {
+                                    "timestamp": "2025-01-01T00:15:00Z",
+                                    "open": "42050.00",
+                                    "high": "42200.00",
+                                    "low": "42030.00",
+                                    "close": "42180.50",
+                                    "volume": "142.30"
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "❌ 잘못된 요청",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "invalid_dates": {
+                            "summary": "잘못된 날짜 범위",
+                            "value": {
+                                "detail": "end_date must be after start_date"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "❌ 데이터 없음",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "no_data": {
+                            "summary": "데이터 없음",
+                            "value": {
+                                "detail": "No candle data found for BTC-USDT-SWAP 15m"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "🚨 서버 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "server_error": {
+                            "summary": "서버 내부 오류",
+                            "value": {
+                                "detail": "Failed to fetch candle data: Database error"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
+async def get_candles_for_chart(request: CandleDataRequest):
+    """
+    백테스트 차트 표시용 캔들 데이터를 조회합니다.
+
+    TimescaleDB에서 지정된 기간의 OHLCV 데이터를 조회하여 반환합니다.
+    """
+    data_provider = TimescaleProvider()
+
+    try:
+        logger.info(
+            f"Fetching candle data: {request.symbol} {request.timeframe} "
+            f"from {request.start_date} to {request.end_date}"
+        )
+
+        # Fetch candles from TimescaleDB
+        candles = await data_provider.get_candles(
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            start_date=request.start_date,
+            end_date=request.end_date
+        )
+
+        if not candles:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No candle data found for {request.symbol} {request.timeframe}"
+            )
+
+        # Convert to response format (timestamp as datetime, prices as strings)
+        response_data = [
+            {
+                "timestamp": candle.timestamp,
+                "open": str(candle.open),
+                "high": str(candle.high),
+                "low": str(candle.low),
+                "close": str(candle.close),
+                "volume": str(candle.volume),
+                # Technical indicators
+                "rsi": candle.rsi,
+                "atr": candle.atr,
+                "ema": candle.ema,
+                "sma": candle.sma,
+                # PineScript-based trend state
+                "trend_state": candle.trend_state,
+                "CYCLE_Bull": candle.CYCLE_Bull,
+                "CYCLE_Bear": candle.CYCLE_Bear,
+                "BB_State": candle.BB_State
+            }
+            for candle in candles
+        ]
+
+        logger.info(f"Successfully fetched {len(response_data)} candles")
+
+        return response_data
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.error(f"Validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to fetch candle data: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch candle data: {str(e)}"
+        )
+    finally:
+        await data_provider.close()
+
+
+@router.post(
+    "/recalculate-indicators",
+    summary="지표 재계산 (trend_state, CYCLE, BB_State)",
+    description="""
+# 지표 및 trend_state 재계산
+
+TimescaleDB에 저장된 캔들 데이터의 trend_state와 PineScript 지표들을 재계산합니다.
+
+## MTF (Multi-Timeframe) 로직 적용
+
+- **res_ (CYCLE)**: 타임프레임에 따라 자동 선택 (≤3m→15m, ≤30m→30m, <240m→60m, else→480m)
+- **bb_mtf (BB_State_MTF)**: 타임프레임에 따라 자동 선택 (≤3m→5m, ≤15m→15m, else→60m)
+- **cycle_2nd (CYCLE_2nd)**: 항상 240m(4h)
+
+## 재계산 항목
+
+- **trend_state**: PineScript 기반 트렌드 상태 (-2, 0, 2)
+- **CYCLE_Bull**: JMA/T3 + VIDYA 기반 상승 사이클 조건
+- **CYCLE_Bear**: JMA/T3 + VIDYA 기반 하락 사이클 조건
+- **BB_State**: Bollinger Band Width 상태 (-2=squeeze, 0=normal, 2=expansion)
+
+## 동작 방식
+
+1. TimescaleDB에서 캔들 데이터 조회 (최소 200개 필요)
+2. `compute_all_indicators()`로 MTF 로직 적용하여 지표 재계산
+3. 재계산된 값을 DB에 업데이트 (trend_state, cycle_bull, cycle_bear, bb_state)
+
+## 주의사항
+
+- 최소 200개 캔들이 필요 (MA 계산 + rational_quadratic buffer)
+- 처리 시간이 오래 걸릴 수 있음 (대량 데이터)
+- start_date/end_date를 지정하여 범위 제한 권장
+    """,
+    responses={
+        200: {
+            "description": "✅ 재계산 성공",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "success",
+                        "message": "Successfully recalculated indicators",
+                        "symbol": "BTC-USDT-SWAP",
+                        "timeframe": "15m",
+                        "candles_processed": 5000,
+                        "start_date": "2025-01-01T00:00:00Z",
+                        "end_date": "2025-01-31T23:59:59Z"
+                    }
+                }
+            }
+        },
+        400: {"description": "❌ 잘못된 요청"},
+        404: {"description": "❌ 데이터 없음"},
+        500: {"description": "❌ 서버 오류"}
+    }
+)
+async def recalculate_indicators(request: RecalculateIndicatorsRequest):
+    """
+    Recalculate indicators and trend_state for candles in TimescaleDB.
+
+    Uses MTF (Multi-Timeframe) logic from compute_all_indicators to properly
+    calculate trend_state based on higher timeframe data.
+    """
+    from shared.database.session import DatabaseConfig
+    from sqlalchemy import text
+    from shared.indicators import compute_all_indicators
+    from shared.utils.time_helpers import parse_timeframe
+    from datetime import datetime, timezone
+
+    logger.info(
+        f"Recalculating indicators: symbol={request.symbol}, "
+        f"timeframe={request.timeframe}, start={request.start_date}, end={request.end_date}"
+    )
+
+    data_provider = None
+
+    try:
+        # Initialize data provider
+        session_factory = DatabaseConfig.get_session_factory()
+        session = session_factory()
+        data_provider = TimescaleProvider(session=session)
+
+        # Determine date range
+        if request.start_date is None:
+            # Get earliest available data
+            table_name = f"okx_candles_{request.timeframe}"
+            normalized_symbol = TimescaleProvider._normalize_symbol(request.symbol)
+
+            query_str = f"""
+                SELECT MIN(time) as min_time, MAX(time) as max_time
+                FROM {table_name}
+                WHERE symbol = :symbol
+            """
+            result = await session.execute(
+                text(query_str),
+                {"symbol": normalized_symbol}
+            )
+            row = result.fetchone()
+
+            if not row or not row.min_time:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No data found for {request.symbol} {request.timeframe}"
+                )
+
+            start_date = row.min_time
+            end_date = request.end_date or row.max_time or datetime.now(timezone.utc)
+        else:
+            start_date = request.start_date
+            end_date = request.end_date or datetime.now(timezone.utc)
+
+        # Fetch candles (need extra data for indicators)
+        # Load 200 extra candles before start_date for MA calculation
+        from datetime import timedelta
+        from shared.utils.time_helpers import timeframe_to_timedelta
+        tf_delta = timeframe_to_timedelta(request.timeframe)
+        buffer_start = start_date - (tf_delta * 200)
+
+        logger.info(
+            f"Loading candles: {buffer_start} to {end_date} "
+            f"(with 200-candle buffer for indicators)"
+        )
+
+        candles = await data_provider.get_candles(
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            start_date=buffer_start,
+            end_date=end_date
+        )
+
+        if len(candles) < 200:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient data: {len(candles)} candles (minimum 200 required)"
+            )
+
+        # Convert candles to dict list for compute_all_indicators
+        candles_dict = [{
+            "timestamp": int(candle.timestamp.timestamp()),
+            "open": float(candle.open),
+            "high": float(candle.high),
+            "low": float(candle.low),
+            "close": float(candle.close),
+            "volume": float(candle.volume)
+        } for candle in candles]
+
+        # Get current_timeframe_minutes
+        timeframe_unit, timeframe_value = parse_timeframe(request.timeframe)
+        if timeframe_unit == 'hours':
+            current_timeframe_minutes = timeframe_value * 60
+        elif timeframe_unit == 'days':
+            current_timeframe_minutes = timeframe_value * 1440
+        else:  # minutes
+            current_timeframe_minutes = timeframe_value
+
+        logger.info(
+            f"Calculating indicators with MTF logic: "
+            f"timeframe={request.timeframe} ({current_timeframe_minutes}m)"
+        )
+
+        # Recalculate indicators with MTF logic
+        candles_with_indicators = compute_all_indicators(
+            candles_dict,
+            rsi_period=14,
+            atr_period=14,
+            current_timeframe_minutes=current_timeframe_minutes
+        )
+
+        # Update database (only candles within original date range)
+        table_name = f"okx_candles_{request.timeframe}"
+        normalized_symbol = TimescaleProvider._normalize_symbol(request.symbol)
+
+        update_count = 0
+        for i, candle_with_ind in enumerate(candles_with_indicators):
+            original_candle = candles[i]
+
+            # Skip candles before start_date (buffer candles)
+            if original_candle.timestamp < start_date:
+                continue
+
+            # Extract PineScript indicators
+            trend_state = candle_with_ind.get('trend_state')
+            cycle_bull = candle_with_ind.get('CYCLE_Bull')
+            cycle_bear = candle_with_ind.get('CYCLE_Bear')
+            bb_state = candle_with_ind.get('BB_State')
+
+            # Update query
+            update_query = f"""
+                UPDATE {table_name}
+                SET
+                    trend_state = :trend_state,
+                    cycle_bull = :cycle_bull,
+                    cycle_bear = :cycle_bear,
+                    bb_state = :bb_state
+                WHERE symbol = :symbol
+                  AND time = :time
+            """
+
+            await session.execute(
+                text(update_query),
+                {
+                    "symbol": normalized_symbol,
+                    "time": original_candle.timestamp,
+                    "trend_state": trend_state,
+                    "cycle_bull": cycle_bull,
+                    "cycle_bear": cycle_bear,
+                    "bb_state": bb_state
+                }
+            )
+            update_count += 1
+
+        # Commit changes
+        await session.commit()
+
+        logger.info(
+            f"Successfully updated {update_count} candles with recalculated indicators"
+        )
+
+        return {
+            "status": "success",
+            "message": "Successfully recalculated indicators",
+            "symbol": request.symbol,
+            "timeframe": request.timeframe,
+            "candles_processed": update_count,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to recalculate indicators: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to recalculate indicators: {str(e)}"
+        )
+    finally:
+        if data_provider:
+            await data_provider.close()

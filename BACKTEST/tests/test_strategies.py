@@ -12,7 +12,7 @@ def test_hyperrsi_strategy_applies_default_dca_params() -> None:
 
     assert strategy.params["pyramiding_enabled"] is True
     assert strategy.params["pyramiding_limit"] == 3
-    assert strategy.params["entry_multiplier"] == 0.5
+    assert strategy.params["entry_multiplier"] == 1.6
     assert strategy.params["pyramiding_entry_type"] == "퍼센트 기준"
     assert strategy.params["pyramiding_value"] == 3.0
     assert strategy.params["entry_criterion"] == "평균 단가"

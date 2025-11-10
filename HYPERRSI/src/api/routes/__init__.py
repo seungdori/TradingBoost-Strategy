@@ -1,10 +1,37 @@
-# __init__.py 파일을 수정하여 settings 모듈을 추가합니다.
-# 기존 파일이 비어있는 경우 새로운 내용을 추가하고, 기존 내용이 있으면 settings 모듈만 추가합니다.
+"""HYPERRSI API Routes Package"""
 
-# settings 모듈을 추가합니다.
+from HYPERRSI.src.api.routes import (
+    account,
+    chart,
+    examples,
+    okx,
+    # okx_test,  # Excluded - uses external okx library
+    order,
+    order_backend_client,
+    position,
+    settings,
+    stats,
+    status,
+    telegram,
+    trading,
+    trading_log,
+    user,
+)
 
-# stats 모듈을 추가합니다. 
-
-# status 모듈을 추가합니다. 
-
-# okx 모듈을 추가합니다. 
+__all__ = [
+    "account",
+    "chart",
+    "examples",
+    "okx",
+    # "okx_test",  # Excluded - uses external okx library
+    "order",
+    "order_backend_client",
+    "position",
+    "settings",
+    "stats",
+    "status",
+    "telegram",
+    "trading",
+    "trading_log",
+    "user",
+]

@@ -6,16 +6,17 @@ All functions are re-exported from trading_data_service_pg for backward compatib
 
 import time
 
-from GRID.services import trading_data_service_pg
+from GRID.services.trading_data_service_pg import (
+    ensure_database_exists,
+    create_database,
+    update_entry_data,
+    update_tp_data,
+    update_sl_data,
+    save_win_rates_to_db,
+)
 
 # =============================================================================
 # PostgreSQL Re-exports for Backward Compatibility
 # =============================================================================
 
-# Re-export all functions from PostgreSQL service
-ensure_database_exists = trading_data_service_pg.ensure_database_exists
-create_database = trading_data_service_pg.create_database
-update_entry_data = trading_data_service_pg.update_entry_data
-update_tp_data = trading_data_service_pg.update_tp_data
-update_sl_data = trading_data_service_pg.update_sl_data
-save_win_rates_to_db = trading_data_service_pg.save_win_rates_to_db
+# Functions are imported directly above

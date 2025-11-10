@@ -180,86 +180,84 @@ class SignalGenerator:
 
     def calculate_trend_state(
         self,
-        closes: pd.Series,
-        highs: Optional[pd.Series] = None,
-        lows: Optional[pd.Series] = None,
-        ma20_period: int = 20,
-        ma60_period: int = 60,
-        bb_period: int = 20,
-        bb_std: float = 2.0,
-        momentum_period: int = 20
+        candles_df: pd.DataFrame,
+        use_longer_trend: bool = False,
+        use_custom_length: bool = False,
+        custom_length: int = 10,
+        current_timeframe_minutes: Optional[int] = None
     ) -> int:
         """
-        Calculate trend state matching HYPERRSI's 5-level system.
+        Calculate PineScript-based trend state using shared indicators.
 
-        Uses Bollinger Bands, moving averages, and momentum to determine:
-        - +2: Strong uptrend (price > BB upper, momentum > 0)
-        - +1: Uptrend (price > MA20 > MA60, momentum > 0)
-        -  0: Neutral (price within BB)
-        - -1: Downtrend (price < MA20 < MA60, momentum < 0)
-        - -2: Strong downtrend (price < BB lower, momentum < 0)
+        Uses the same logic as HYPERRSI production system:
+        - JMA/T3 + VIDYA moving averages
+        - Rational quadratic smoothing
+        - Bollinger Band Width (BBW) analysis
+        - CYCLE_Bull/CYCLE_Bear conditions
+        - State persistence (PineScript 'var' behavior)
 
-        Mirrors HYPERRSI/src/api/trading/trend_state_calculator.py:analyze_market_state_from_redis()
+        Returns 3-level system:
+        - +2: Extreme uptrend (CYCLE_Bull + BB_State=2)
+        - 0: Neutral
+        - -2: Extreme downtrend (CYCLE_Bear + BB_State=-2)
 
         Args:
-            closes: Series of close prices (minimum 21 periods)
-            highs: Series of high prices (for BB calculation, optional)
-            lows: Series of low prices (for BB calculation, optional)
-            ma20_period: MA20 period (default: 20)
-            ma60_period: MA60 period (default: 60)
-            bb_period: Bollinger Band period (default: 20)
-            bb_std: Bollinger Band standard deviation multiplier (default: 2.0)
-            momentum_period: Momentum calculation period (default: 20)
+            candles_df: DataFrame with columns: timestamp, open, high, low, close, volume
+            use_longer_trend: Use longer timeframe trend (T3 20,40,120)
+            use_custom_length: Use custom MA lengths
+            custom_length: Custom MA base length
 
         Returns:
-            Trend state: -2, -1, 0, 1, or 2
+            Trend state: -2, 0, or 2
         """
-        required_periods = max(ma60_period, bb_period, momentum_period) + 1
-        if len(closes) < required_periods:
-            logger.debug(f"Insufficient data for trend calculation: {len(closes)} < {required_periods}")
+        from shared.indicators import compute_all_indicators
+
+        # Minimum data requirement (based on longest MA + rational_quadratic lookback)
+        min_required = 200  # Safe buffer for all calculations
+        if len(candles_df) < min_required:
+            logger.debug(f"Insufficient data for PineScript trend calculation: {len(candles_df)} < {min_required}")
             return 0
 
-        # Current price and historical price for momentum
-        current_price = closes.iloc[-1]
+        # Convert DataFrame to candle dict list
+        candles = []
+        for idx, row in candles_df.iterrows():
+            candles.append({
+                "timestamp": int(row.name.timestamp()) if isinstance(row.name, pd.Timestamp) else int(idx),
+                "open": float(row['open']),
+                "high": float(row['high']),
+                "low": float(row['low']),
+                "close": float(row['close']),
+                "volume": float(row['volume'])
+            })
 
-        # Calculate 20-period momentum: (current - price_20_ago) / price_20_ago
-        if len(closes) >= momentum_period + 1:
-            price_20_ago = closes.iloc[-(momentum_period + 1)]
-            momentum = (current_price - price_20_ago) / price_20_ago
-        else:
-            momentum = 0
+        # Calculate indicators using PineScript logic
+        try:
+            candles_with_indicators = compute_all_indicators(
+                candles,
+                rsi_period=14,
+                atr_period=14,
+                use_longer_trend=use_longer_trend,
+                use_custom_length=use_custom_length,
+                custom_length=custom_length,
+                current_timeframe_minutes=current_timeframe_minutes
+            )
 
-        # Calculate moving averages
-        ma20 = closes.rolling(window=ma20_period).mean().iloc[-1]
-        ma60 = closes.rolling(window=ma60_period).mean().iloc[-1]
+            # Get the last candle's trend_state
+            last_candle = candles_with_indicators[-1]
+            trend_state = last_candle.get('trend_state', 0)
 
-        # Calculate Bollinger Bands
-        bb_middle = closes.rolling(window=bb_period).mean().iloc[-1]
-        bb_std_val = closes.rolling(window=bb_period).std().iloc[-1]
-        upper_band = bb_middle + (bb_std_val * bb_std)
-        lower_band = bb_middle - (bb_std_val * bb_std)
+            logger.debug(
+                f"PineScript trend state calculated: state={trend_state}, "
+                f"CYCLE_Bull={last_candle.get('CYCLE_Bull')}, "
+                f"CYCLE_Bear={last_candle.get('CYCLE_Bear')}, "
+                f"BB_State={last_candle.get('BB_State')}"
+            )
 
-        # Determine trend state (matching HYPERRSI logic exactly)
-        extreme_state = 0  # Default: neutral
+            return trend_state
 
-        if current_price > upper_band and momentum > 0:
-            extreme_state = 2  # Strong uptrend
-        elif current_price > ma20 and ma20 > ma60 and momentum > 0:
-            extreme_state = 1  # Uptrend
-        elif current_price >= lower_band and current_price <= upper_band:
-            extreme_state = 0  # Neutral
-        elif current_price < ma20 and ma20 < ma60 and momentum < 0:
-            extreme_state = -1  # Downtrend
-        elif current_price < lower_band and momentum < 0:
-            extreme_state = -2  # Strong downtrend
-
-        logger.debug(
-            f"Trend state calculated: state={extreme_state}, price={current_price:.2f}, "
-            f"BB=[{lower_band:.2f}, {upper_band:.2f}], MA20={ma20:.2f}, MA60={ma60:.2f}, "
-            f"momentum={momentum:.4f}"
-        )
-
-        return extreme_state
+        except Exception as e:
+            logger.error(f"Error calculating PineScript trend state: {e}")
+            return 0
 
     @staticmethod
     def calculate_rsi(closes: pd.Series, period: int = 14) -> Optional[float]:

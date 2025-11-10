@@ -75,6 +75,55 @@ class BacktestEngine:
             f"fee={fee_rate*100}%, slippage={slippage_percent}%"
         )
 
+    def _get_fallback_symbol_specs(self, base_currency: str) -> dict:
+        """
+        Get fallback symbol specifications based on base currency.
+
+        These are approximate values used when API fails to load symbol info.
+        Real values from OKX API should be used whenever possible.
+
+        Args:
+            base_currency: Base currency symbol (e.g., "BTC", "ETH", "SOL")
+
+        Returns:
+            dict with min_size, contract_size, tick_size
+        """
+        # Symbol-specific fallback mapping (OKX USDT-SWAP typical values)
+        # Source: https://www.okx.com/trade-market/info/swap
+        fallback_map = {
+            # Tier 1: High-value coins
+            'BTC': {'min_size': 1, 'contract_size': 0.001, 'tick_size': 0.1},
+            'ETH': {'min_size': 1, 'contract_size': 0.01, 'tick_size': 0.01},
+
+            # Tier 2: Mid-value coins
+            'SOL': {'min_size': 1, 'contract_size': 1, 'tick_size': 0.001},
+            'BNB': {'min_size': 1, 'contract_size': 0.1, 'tick_size': 0.01},
+            'ADA': {'min_size': 1, 'contract_size': 10, 'tick_size': 0.0001},
+            'AVAX': {'min_size': 1, 'contract_size': 1, 'tick_size': 0.001},
+            'MATIC': {'min_size': 1, 'contract_size': 10, 'tick_size': 0.0001},
+            'DOT': {'min_size': 1, 'contract_size': 1, 'tick_size': 0.001},
+            'LINK': {'min_size': 1, 'contract_size': 1, 'tick_size': 0.001},
+
+            # Tier 3: Lower-value coins
+            'DOGE': {'min_size': 1, 'contract_size': 100, 'tick_size': 0.00001},
+            'SHIB': {'min_size': 1, 'contract_size': 1000000, 'tick_size': 0.0000001},
+            'XRP': {'min_size': 1, 'contract_size': 10, 'tick_size': 0.0001},
+        }
+
+        # Return mapped value or generic default
+        if base_currency in fallback_map:
+            return fallback_map[base_currency]
+        else:
+            # Generic fallback for unknown symbols
+            logger.warning(
+                f"No fallback specs for {base_currency}, using generic default"
+            )
+            return {
+                'min_size': 1,
+                'contract_size': 1,  # Generic: 1 coin per contract
+                'tick_size': 0.001
+            }
+
     async def run(
         self,
         user_id: UUID,
@@ -107,6 +156,7 @@ class BacktestEngine:
 
         # Store symbol and strategy params for access in methods
         self.symbol = symbol
+        self.timeframe = timeframe
         # Use strategy executor's params (already mapped Korean → English)
         self.strategy_params = strategy_executor.params
         self.strategy_executor = strategy_executor
@@ -126,16 +176,21 @@ class BacktestEngine:
                 f"tick_size={self.symbol_info.get('tick_size')}"
             )
         else:
+            # Use symbol-specific fallback values
+            base_currency = symbol.split('-')[0] if '-' in symbol else 'BTC'
+            fallback_specs = self._get_fallback_symbol_specs(base_currency)
+
             logger.warning(
                 f"Failed to load symbol specifications for {symbol}, "
-                f"using defaults (min_size=1)"
+                f"using fallback: min_size={fallback_specs['min_size']} contract, "
+                f"contract_size={fallback_specs['contract_size']} {base_currency}"
             )
             self.symbol_info = {
                 'symbol': symbol,
-                'min_size': 1.0,
-                'contract_size': 0.01,
-                'tick_size': 0.01,
-                'base_currency': symbol.split('-')[0]
+                'min_size': fallback_specs['min_size'],
+                'contract_size': fallback_specs['contract_size'],
+                'tick_size': fallback_specs['tick_size'],
+                'base_currency': base_currency
             }
 
         # Set data provider on strategy for on-demand historical data loading
@@ -314,7 +369,15 @@ class BacktestEngine:
             # No position - check for entry signal from strategy
             signal = await strategy_executor.generate_signal(candle)
 
+            # Debug logging for signal result
+            logger.debug(
+                f"Signal check result: side={signal.side}, reason={signal.reason}, "
+                f"indicators={signal.indicators}"
+            )
+
             if signal.side:  # Has entry signal (long or short)
+                logger.info(f"✅ Entry signal detected: {signal.side.value}, reason: {signal.reason}")
+
                 # Calculate position size
                 quantity, leverage = strategy_executor.calculate_position_size(
                     signal,
@@ -326,6 +389,26 @@ class BacktestEngine:
                 quantity = self.order_simulator.round_to_precision(
                     quantity, precision=0.001, symbol=self.symbol
                 )
+
+                # Check minimum order size (following project pattern: min_size * contract_size)
+                min_size_contracts = self.symbol_info.get('min_size', 1) if self.symbol_info else 1
+                contract_size = self.symbol_info.get('contract_size', 0.001) if self.symbol_info else 0.001
+                base_currency = self.symbol_info.get('base_currency', 'BTC') if self.symbol_info else 'BTC'
+                minimum_qty = min_size_contracts * contract_size  # e.g., 1 * 0.001 = 0.001 BTC
+
+                if quantity <= 0 or quantity < minimum_qty:
+                    logger.warning(
+                        f"Entry signal skipped: {quantity:.6f} {base_currency} < minimum {minimum_qty:.6f} {base_currency} "
+                        f"(min_size={min_size_contracts} contracts, contract_size={contract_size})"
+                    )
+                    # Skip this entry and continue to next candle
+                    self.balance_tracker.add_snapshot(
+                        timestamp=candle.timestamp,
+                        position_side=None,
+                        position_size=0.0,
+                        unrealized_pnl=0.0
+                    )
+                    return
 
                 # Calculate TP/SL levels
                 take_profit, stop_loss = strategy_executor.calculate_tp_sl(
@@ -467,14 +550,46 @@ class BacktestEngine:
 
         position = self.position_manager.get_position()
 
+        # Update trailing stop FIRST (before any exit checks)
+        # This ensures trailing stop tracks price even if TP/SL hit on same candle
+        if position.trailing_stop_activated:
+            position.update_hyperrsi_trailing_stop(candle.close)
+
         # Check trend reversal exit first (highest priority)
         if self.strategy_executor and hasattr(self.strategy_executor, 'use_trend_close'):
             if self.strategy_executor.use_trend_close:
+                logger.info(f"[TREND_EXIT] use_trend_close=True, calling _check_trend_reversal_exit")
                 should_exit_trend = await self._check_trend_reversal_exit(candle, position)
                 if should_exit_trend:
+                    logger.info(f"[TREND_EXIT] Position closed by trend reversal at {candle.timestamp}")
                     return  # Position already closed by trend reversal
+            else:
+                logger.info(f"[TREND_EXIT] use_trend_close=False, skipping trend exit check")
 
-        # Check partial exits first (TP1/TP2/TP3)
+        # Check HYPERRSI-style trailing stop BEFORE TP3 (when active)
+        # Trailing stop is a protective exit that takes priority over aggressive TP3
+        # Always check with order simulator (uses candle low/high) instead of just close
+        if position.trailing_stop_activated and position.trailing_stop_price:
+            hit, filled_price = self.order_simulator.check_trailing_stop_hit(
+                candle, position.trailing_stop_price, position.side
+            )
+            if hit and filled_price:
+                trade = self.position_manager.close_position(
+                    exit_price=filled_price,
+                    timestamp=candle.timestamp,
+                    exit_reason=ExitReason.TRAILING_STOP
+                )
+                if trade:
+                    self.balance_tracker.update_balance(trade.pnl, trade.total_fees)
+                    if self.event_logger:
+                        self.event_logger.log_event(
+                            event_type=EventType.TRAILING_STOP_HIT,
+                            message=f"Trailing stop hit @ {filled_price:.2f}",
+                            data={"pnl": trade.pnl}
+                        )
+                return
+
+        # Check partial exits (TP1/TP2/TP3)
         should_exit_partial, exit_reason, tp_level = position.should_exit_partial(candle.close)
 
         if should_exit_partial and tp_level:
@@ -506,11 +621,17 @@ class BacktestEngine:
                     partial_quantity, precision=0.001, symbol=self.symbol
                 )
 
-                # Skip partial exit if rounded quantity is 0 or negative
-                if rounded_quantity <= 0:
+                # Check minimum order size (following project pattern: min_size * contract_size)
+                min_size_contracts = self.symbol_info.get('min_size', 1) if self.symbol_info else 1
+                contract_size = self.symbol_info.get('contract_size', 0.001) if self.symbol_info else 0.001
+                base_currency = self.symbol_info.get('base_currency', 'BTC') if self.symbol_info else 'BTC'
+                minimum_qty = min_size_contracts * contract_size  # e.g., 1 * 0.001 = 0.001 BTC
+
+                # Skip partial exit if below minimum
+                if rounded_quantity <= 0 or rounded_quantity < minimum_qty:
                     logger.warning(
-                        f"TP{tp_level} partial exit skipped: rounded quantity {rounded_quantity:.6f} "
-                        f"is too small (original: {partial_quantity:.6f})"
+                        f"TP{tp_level} partial exit skipped: {rounded_quantity:.6f} {base_currency} < minimum {minimum_qty:.6f} {base_currency} "
+                        f"(original: {partial_quantity:.6f} {base_currency}, min_size={min_size_contracts} contracts, contract_size={contract_size})"
                     )
                     return
 
@@ -652,16 +773,42 @@ class BacktestEngine:
                         )
                 return
 
-        # Check stop loss
+        # Check stop loss (distinguish break-even from regular stop loss)
         if position.stop_loss_price:
+            # Determine if this is break-even or regular stop loss
+            avg_entry = position.get_average_entry_price()
+            is_break_even = False
+
+            if position.side == TradeSide.LONG:
+                # LONG: break-even if SL >= entry price
+                is_break_even = position.stop_loss_price >= avg_entry
+            else:
+                # SHORT: break-even if SL <= entry price
+                is_break_even = position.stop_loss_price <= avg_entry
+
+            # Skip regular stop loss check if use_sl=False
+            # But always check break-even (independent of use_sl setting)
+            if not is_break_even:
+                # Regular stop loss - only check if enabled
+                if not (self.strategy_executor and hasattr(self.strategy_executor, 'use_sl') and self.strategy_executor.use_sl):
+                    return  # Skip regular stop loss check
+
+            # Check if stop loss hit
             hit, filled_price = self.order_simulator.check_stop_hit(
                 candle, position.stop_loss_price, position.side
             )
+
             if hit and filled_price:
+                # For break-even, use exact stop_loss_price (no slippage)
+                if is_break_even:
+                    filled_price = position.stop_loss_price
+
+                exit_reason = ExitReason.BREAK_EVEN if is_break_even else ExitReason.STOP_LOSS
+
                 trade = self.position_manager.close_position(
                     exit_price=filled_price,
                     timestamp=candle.timestamp,
-                    exit_reason=ExitReason.STOP_LOSS
+                    exit_reason=exit_reason
                 )
                 if trade:
                     self.balance_tracker.update_balance(trade.pnl, trade.total_fees)
@@ -674,34 +821,6 @@ class BacktestEngine:
                         )
                 return
 
-        # Check HYPERRSI-style trailing stop
-        if position.trailing_stop_activated:
-            # Update trailing stop price using HYPERRSI logic
-            position.update_hyperrsi_trailing_stop(candle.close)
-
-            # Check if trailing stop hit
-            if position.check_hyperrsi_trailing_stop_hit(candle.close):
-                # Verify with order simulator for realistic fill
-                if position.trailing_stop_price:
-                    hit, filled_price = self.order_simulator.check_trailing_stop_hit(
-                        candle, position.trailing_stop_price, position.side
-                    )
-                    if hit and filled_price:
-                        trade = self.position_manager.close_position(
-                            exit_price=filled_price,
-                            timestamp=candle.timestamp,
-                            exit_reason=ExitReason.TRAILING_STOP
-                        )
-                        if trade:
-                            self.balance_tracker.update_balance(trade.pnl, trade.total_fees)
-                            if self.event_logger:
-                                self.event_logger.log_event(
-                                    event_type=EventType.TRAILING_STOP_HIT,
-                                    message=f"Trailing stop hit @ {filled_price:.2f}",
-                                    data={"pnl": trade.pnl}
-                                )
-                        return
-
     async def _check_dca_conditions(self, candle: Candle) -> None:
         """
         Check if DCA entry should be triggered.
@@ -710,34 +829,69 @@ class BacktestEngine:
             candle: Current candle
         """
         if not self.position_manager.has_position():
+            logger.debug(f"[DCA] No position - skipping DCA check")
             return
 
         position = self.position_manager.get_position()
 
+        logger.debug(
+            f"[DCA] Checking DCA conditions: "
+            f"timestamp={candle.timestamp}, "
+            f"price={candle.close:.2f}, "
+            f"side={position.side.value}, "
+            f"dca_count={position.dca_count}, "
+            f"entry_price={position.get_average_entry_price():.2f}"
+        )
+
         # Check if pyramiding enabled
-        if not self.strategy_params.get('pyramiding_enabled', True):
+        pyramiding_enabled = self.strategy_params.get('pyramiding_enabled', True)
+        if not pyramiding_enabled:
+            logger.debug(f"[DCA] Pyramiding disabled - skipping DCA")
             return
 
         # Check if DCA limit reached
         pyramiding_limit = self.strategy_params.get('pyramiding_limit', 3)
         if position.dca_count >= pyramiding_limit:
+            logger.debug(
+                f"[DCA] DCA limit reached: "
+                f"count={position.dca_count}, limit={pyramiding_limit}"
+            )
             return
 
         # Check if DCA levels exist
         if not position.dca_levels:
             logger.warning(
-                f"No DCA levels set for position, skipping DCA check"
+                f"[DCA] No DCA levels set for position, skipping DCA check"
             )
             return
 
+        logger.debug(
+            f"[DCA] DCA levels: {[f'{level:.2f}' for level in position.dca_levels]}, "
+            f"next level: {position.dca_levels[0]:.2f}"
+        )
+
         # Check price condition
-        if not check_dca_condition(
+        price_check_result = check_dca_condition(
             current_price=candle.close,
             dca_levels=position.dca_levels,
             side=position.side.value,
             use_check_DCA_with_price=self.strategy_params.get('use_check_DCA_with_price', True)
-        ):
+        )
+
+        if not price_check_result:
+            logger.debug(
+                f"[DCA] Price condition NOT met: "
+                f"current={candle.close:.2f}, "
+                f"next_dca_level={position.dca_levels[0]:.2f}, "
+                f"side={position.side.value}, "
+                f"use_check_DCA_with_price={self.strategy_params.get('use_check_DCA_with_price', True)}"
+            )
             return  # Price hasn't reached DCA level
+
+        logger.info(
+            f"[DCA] ✅ Price condition MET: "
+            f"current={candle.close:.2f} reached DCA level {position.dca_levels[0]:.2f}"
+        )
 
         # Check RSI condition (if enabled)
         rsi = candle.rsi if hasattr(candle, 'rsi') else None
@@ -747,22 +901,32 @@ class BacktestEngine:
             if hasattr(self.strategy_executor, 'calculate_rsi_from_history'):
                 rsi = await self.strategy_executor.calculate_rsi_from_history(candle)
                 if rsi is not None:
-                    logger.info(f"Calculated RSI={rsi:.2f} from historical data for DCA check")
+                    logger.info(f"[DCA] Calculated RSI={rsi:.2f} from historical data for DCA check")
                 else:
-                    logger.debug(f"Failed to calculate RSI for DCA check")
+                    logger.debug(f"[DCA] Failed to calculate RSI for DCA check")
 
-        if not check_rsi_condition_for_dca(
+        use_rsi_with_pyramiding = self.strategy_params.get('use_rsi_with_pyramiding', True)
+        rsi_check_result = check_rsi_condition_for_dca(
             rsi=rsi,
             side=position.side.value,
             rsi_oversold=self.strategy_params.get('rsi_oversold', 30),
             rsi_overbought=self.strategy_params.get('rsi_overbought', 70),
-            use_rsi_with_pyramiding=self.strategy_params.get('use_rsi_with_pyramiding', True)
-        ):
+            use_rsi_with_pyramiding=use_rsi_with_pyramiding
+        )
+
+        if not rsi_check_result:
             logger.debug(
-                f"DCA blocked by RSI condition: RSI={rsi}, "
-                f"side={position.side.value}"
+                f"[DCA] RSI condition NOT met: "
+                f"RSI={rsi}, "
+                f"side={position.side.value}, "
+                f"use_rsi_with_pyramiding={use_rsi_with_pyramiding}"
             )
             return
+        else:
+            logger.debug(
+                f"[DCA] ✅ RSI condition MET: "
+                f"RSI={rsi}, use_rsi_with_pyramiding={use_rsi_with_pyramiding}"
+            )
 
         # Check trend condition (if enabled)
         # Note: Using sma and ema fields from Candle model
@@ -774,21 +938,35 @@ class BacktestEngine:
             if hasattr(self.strategy_executor, 'calculate_trend_indicators'):
                 ema_value, sma_value = await self.strategy_executor.calculate_trend_indicators(candle)
                 if ema_value and sma_value:
-                    logger.info(f"Calculated EMA={ema_value:.2f}, SMA={sma_value:.2f} for DCA check")
+                    logger.info(f"[DCA] Calculated EMA={ema_value:.2f}, SMA={sma_value:.2f} for DCA check")
 
-        if not check_trend_condition_for_dca(
+        use_trend_logic = self.strategy_params.get('use_trend_logic', True)
+        trend_check_result = check_trend_condition_for_dca(
             ema=ema_value,
             sma=sma_value,
             side=position.side.value,
-            use_trend_logic=self.strategy_params.get('use_trend_logic', True)
-        ):
+            use_trend_logic=use_trend_logic
+        )
+
+        if not trend_check_result:
             logger.debug(
-                f"DCA blocked by trend condition: SMA={sma_value}, "
-                f"EMA={ema_value}, side={position.side.value}"
+                f"[DCA] Trend condition NOT met: "
+                f"SMA={sma_value}, "
+                f"EMA={ema_value}, "
+                f"side={position.side.value}, "
+                f"use_trend_logic={use_trend_logic}"
             )
             return
+        else:
+            logger.debug(
+                f"[DCA] ✅ Trend condition MET: "
+                f"EMA={ema_value}, SMA={sma_value}, use_trend_logic={use_trend_logic}"
+            )
 
         # All conditions met - execute DCA entry
+        logger.info(
+            f"[DCA] 🎯 ALL CONDITIONS MET - Executing DCA entry at price {candle.close:.2f}"
+        )
         await self._execute_dca_entry(candle, position)
 
     async def _execute_dca_entry(self, candle: Candle, position: Position) -> None:
@@ -799,15 +977,29 @@ class BacktestEngine:
             candle: Current candle
             position: Current position
         """
+        logger.info(
+            f"[DCA] 📍 Starting DCA execution: "
+            f"current_price={candle.close:.2f}, "
+            f"avg_entry={position.get_average_entry_price():.2f}, "
+            f"current_dca_count={position.dca_count}"
+        )
+
         # Calculate DCA entry size
         initial_contracts = position.entry_history[0]['quantity'] if position.entry_history else position.quantity
         investment, contracts = calculate_dca_entry_size(
             initial_investment=position.initial_investment,
             initial_contracts=initial_contracts,
             dca_count=position.dca_count + 1,  # Next DCA count (1-indexed)
-            entry_multiplier=self.strategy_params.get('entry_multiplier', 0.5),
+            entry_multiplier=self.strategy_params.get('entry_multiplier', 1.6),
             current_price=candle.close,
             leverage=position.leverage
+        )
+
+        logger.debug(
+            f"[DCA] Calculated DCA size: "
+            f"investment={investment:.2f} USDT, "
+            f"contracts={contracts:.6f} BTC, "
+            f"entry_multiplier={self.strategy_params.get('entry_multiplier', 1.6)}"
         )
 
         # ✅ Round DCA quantity to 0.001 precision (BTC unit)
@@ -815,13 +1007,24 @@ class BacktestEngine:
             contracts, precision=0.001, symbol=self.symbol
         )
 
-        # Skip DCA entry if rounded quantity is 0 or negative
-        if contracts <= 0:
+        # Get minimum order size (following project pattern: min_size * contract_size)
+        min_size_contracts = self.symbol_info.get('min_size', 1) if self.symbol_info else 1
+        contract_size = self.symbol_info.get('contract_size', 0.001) if self.symbol_info else 0.001
+        base_currency = self.symbol_info.get('base_currency', 'BTC') if self.symbol_info else 'BTC'
+        minimum_qty = min_size_contracts * contract_size  # e.g., 1 * 0.001 = 0.001 BTC
+
+        # Skip DCA entry if below minimum
+        if contracts <= 0 or contracts < minimum_qty:
             logger.warning(
-                f"DCA entry #{position.dca_count + 1} skipped: rounded quantity {contracts:.6f} "
-                f"is too small (calculated investment: {investment:.2f} USDT)"
+                f"[DCA] ❌ DCA entry #{position.dca_count + 1} SKIPPED: {contracts:.6f} {base_currency} < minimum {minimum_qty:.6f} {base_currency} "
+                f"(min_size={min_size_contracts} contracts, contract_size={contract_size}, calculated investment: {investment:.2f} USDT)"
             )
             return
+
+        logger.debug(
+            f"[DCA] ✅ Size check passed: "
+            f"{contracts:.6f} {base_currency} >= minimum {minimum_qty:.6f} {base_currency}"
+        )
 
         # Simulate order execution
         filled_price = self.order_simulator.simulate_market_order(
@@ -873,12 +1076,18 @@ class BacktestEngine:
         )
         updated_position.dca_levels = new_dca_levels
 
+        logger.debug(
+            f"[DCA] Recalculated DCA levels: "
+            f"new_avg_price={updated_position.entry_price:.2f}, "
+            f"new_dca_levels={[f'{level:.2f}' for level in new_dca_levels]}"
+        )
+
         # Recalculate TP levels from new average price
         if self.strategy_executor and hasattr(self.strategy_executor, 'calculate_tp_levels'):
             atr_value = candle.atr if hasattr(candle, 'atr') else None
 
             logger.info(
-                f"Recalculating TP levels after DCA: new_avg={updated_position.entry_price:.2f}, "
+                f"[DCA] Recalculating TP levels after DCA: new_avg={updated_position.entry_price:.2f}, "
                 f"side={updated_position.side.value}"
             )
 
@@ -894,19 +1103,19 @@ class BacktestEngine:
             updated_position.tp3_price = tp3
 
             logger.info(
-                f"TP levels updated after DCA: "
+                f"[DCA] TP levels updated after DCA: "
                 f"TP1={tp1 if updated_position.use_tp1 else 'disabled'}, "
                 f"TP2={tp2 if updated_position.use_tp2 else 'disabled'}, "
                 f"TP3={tp3 if updated_position.use_tp3 else 'disabled'}"
             )
 
         logger.info(
-            f"DCA entry #{updated_position.dca_count} executed: "
+            f"[DCA] ✅ DCA entry #{updated_position.dca_count} EXECUTED: "
             f"price={filled_price:.2f}, qty={contracts:.4f}, "
             f"investment={investment:.2f} USDT, fee={entry_fee:.2f}, "
             f"new_avg_price={updated_position.entry_price:.2f}, "
             f"new_total_qty={updated_position.quantity:.4f}, "
-            f"next_dca_levels={new_dca_levels}"
+            f"next_dca_levels={[f'{level:.2f}' for level in new_dca_levels]}"
         )
 
     async def _check_trend_reversal_exit(self, candle: Candle, position: Position) -> bool:
@@ -926,15 +1135,66 @@ class BacktestEngine:
         """
         # Calculate current trend state
         if hasattr(self.strategy_executor, 'signal_generator'):
-            # Get price history from strategy
-            closes = pd.Series([c.close for c in self.strategy_executor.price_history])
-
-            if len(closes) < 20:  # Need at least 20 candles for SMA20
-                return False
-
-            trend_state = self.strategy_executor.signal_generator.calculate_trend_state(closes)
+            # Use cached trend_state from candle if available (from TimescaleDB)
+            trend_state = getattr(candle, 'trend_state', None)
 
             if trend_state is None:
+                # Fallback: Calculate trend_state if not in DB
+                logger.info("[TREND_EXIT] trend_state not found in candle, calculating...")
+
+                # Get price history from strategy and convert to DataFrame
+                price_history = self.strategy_executor.price_history
+
+                if len(price_history) < 20:  # Need at least 20 candles for SMA20
+                    logger.info(f"[TREND_EXIT] Insufficient price history: {len(price_history)} < 20")
+                    return False
+
+                # Build DataFrame with OHLCV columns
+                candles_df = pd.DataFrame([{
+                    'timestamp': c.timestamp,
+                    'open': c.open,
+                    'high': c.high,
+                    'low': c.low,
+                    'close': c.close,
+                    'volume': c.volume
+                } for c in price_history])
+                candles_df = candles_df.set_index('timestamp')
+
+                # Convert timeframe string to minutes
+                from shared.utils.time_helpers import parse_timeframe
+                timeframe_unit, timeframe_value = parse_timeframe(self.timeframe)
+                if timeframe_unit == 'hours':
+                    current_timeframe_minutes = timeframe_value * 60
+                elif timeframe_unit == 'days':
+                    current_timeframe_minutes = timeframe_value * 1440
+                else:  # minutes
+                    current_timeframe_minutes = timeframe_value
+
+                logger.info(
+                    f"[TREND_EXIT] Checking trend reversal: time={candle.timestamp}, "
+                    f"side={position.side.value}, price={candle.close:.2f}, "
+                    f"history_len={len(candles_df)}, timeframe={self.timeframe} ({current_timeframe_minutes}m)"
+                )
+
+                trend_state = self.strategy_executor.signal_generator.calculate_trend_state(
+                    candles_df,
+                    current_timeframe_minutes=current_timeframe_minutes
+                )
+            else:
+                logger.info(
+                    f"[TREND_EXIT] Using cached trend_state from DB: time={candle.timestamp}, "
+                    f"side={position.side.value}, price={candle.close:.2f}, "
+                    f"trend_state={trend_state}"
+                )
+
+            logger.info(
+                f"[TREND_EXIT] trend_state={trend_state}, side={position.side.value}, "
+                f"entry_price={position.entry_price:.2f}, current_price={candle.close:.2f}, "
+                f"unrealized_pnl={((candle.close - position.entry_price) / position.entry_price * 100 * (1 if position.side == TradeSide.LONG else -1)):.2f}%"
+            )
+
+            if trend_state is None:
+                logger.info("[TREND_EXIT] trend_state is None, skipping")
                 return False
 
             # Check if strong trend reversal against position
@@ -943,10 +1203,17 @@ class BacktestEngine:
                 # Long position in strong downtrend
                 should_exit = True
                 reason = "Strong downtrend reversal (state=-2)"
+                logger.info(f"[TREND_EXIT] ✅ LONG exit condition met: trend_state={trend_state}")
             elif position.side == TradeSide.SHORT and trend_state == 2:
                 # Short position in strong uptrend
                 should_exit = True
                 reason = "Strong uptrend reversal (state=+2)"
+                logger.info(f"[TREND_EXIT] ✅ SHORT exit condition met: trend_state={trend_state}")
+            else:
+                logger.info(
+                    f"[TREND_EXIT] No exit condition met: side={position.side.value}, "
+                    f"trend_state={trend_state}"
+                )
 
             if should_exit:
                 logger.info(

@@ -77,6 +77,10 @@ last_check_times: dict[str, float] = {}
 
 from shared.utils.time_helpers import align_timestamp, calculate_update_interval, is_bar_end
 
+# CandlesDB Writer
+from HYPERRSI.src.data_collector.candlesdb_writer import get_candlesdb_writer
+candlesdb_writer = get_candlesdb_writer()
+
 
 def fetch_latest_candles(symbol, timeframe, limit=POLLING_CANDLES, include_current=False):
     """
@@ -512,12 +516,12 @@ def update_candle_data(symbol, timeframe, new_candles, warm_up_count=0):
 def save_candles_with_indicators(symbol, tf_str, candles_with_ind):
     """인디케이터가 포함된 캔들 데이터 저장"""
     key = f"candles_with_indicators:{symbol}:{tf_str}"
-    
+
     try:
         # 기존 데이터 가져오기
         existing_list = redis_client.lrange(key, 0, -1)
         candle_map = {}
-        
+
         for item in existing_list:
             try:
                 obj = json.loads(item)
@@ -525,18 +529,18 @@ def save_candles_with_indicators(symbol, tf_str, candles_with_ind):
                     candle_map[obj["timestamp"]] = obj
             except Exception as e:
                 pass
-        
+
         # 새 데이터 병합 (기존 데이터는 덮어쓰지 않음 - warm-up으로 계산된 정확한 데이터 보존)
         for cndl in candles_with_ind:
             ts = cndl["timestamp"]
             if ts not in candle_map:  # 새로운 timestamp만 추가
                 candle_map[ts] = cndl
-        
+
         # 정렬 후 저장 (최대 MAX_CANDLE_LEN개만 유지)
         sorted_ts = sorted(candle_map.keys())
         if len(sorted_ts) > MAX_CANDLE_LEN:
             sorted_ts = sorted_ts[-MAX_CANDLE_LEN:]
-        
+
         # Redis에 저장
         with redis_client.pipeline() as pipe:
             pipe.delete(key)
@@ -544,12 +548,24 @@ def save_candles_with_indicators(symbol, tf_str, candles_with_ind):
                 row_json = json.dumps(candle_map[ts])
                 pipe.rpush(key, row_json)
             pipe.execute()
-        
+
+        # CandlesDB에도 저장 (비동기적으로, 실패해도 Redis는 영향 없음)
+        if candlesdb_writer.enabled:
+            try:
+                # timeframe 변환 (tf_str: "1m", "15m", "1h" 등 → minutes)
+                timeframe_minutes = REVERSE_TF_MAP.get(tf_str, 1)  # 기본값 1분
+
+                # 새로 추가된 캔들만 CandlesDB에 저장
+                new_candles = [candle_map[ts] for ts in sorted_ts]
+                candlesdb_writer.upsert_candles(symbol, timeframe_minutes, new_candles)
+            except Exception as db_e:
+                logger.warning(f"CandlesDB 저장 실패 (Redis는 성공): {symbol} {tf_str} - {db_e}")
+
         ## 최신 캔들 따로 저장 #<-- 이건, 지표를 계산하니 필요할지 모르겠다. 그러나, 일단은, latest는 웹소켓에서만 다루는걸로.
         #latest_key = f"latest:{symbol}:{tf_str}"
         #latest_ts = sorted_ts[-1]
         #redis_client.set(latest_key, json.dumps(candle_map[latest_ts]))
-    
+
     except Exception as e:
         logger.error(f"인디케이터 포함 캔들 저장 중 오류: {symbol} {tf_str} - {e}", exc_info=True)
 
@@ -750,16 +766,24 @@ def update_current_candle_with_indicators(symbol, timeframe, current_candle):
         
         # 현재 캔들의 인디케이터 값 찾기
         current_with_ind = candle_ind_map.get(current_ts)
-        
+
         if current_with_ind:
             # 현재 캔들 별도 저장
             current_ind_key = f"current_candle_with_indicators:{symbol}:{tf_str}"
             redis_client.set(current_ind_key, json.dumps(current_with_ind))
-            
+
             # 최신 캔들 키도 업데이트
             latest_ind_key = f"latest_with_indicators:{symbol}:{tf_str}"
             redis_client.set(latest_ind_key, json.dumps(current_with_ind))
-            
+
+            # CandlesDB에도 현재 캔들 업데이트 (실시간 upsert)
+            if candlesdb_writer.enabled:
+                try:
+                    timeframe_minutes = REVERSE_TF_MAP.get(tf_str, 1)
+                    candlesdb_writer.upsert_single_candle(symbol, timeframe_minutes, current_with_ind)
+                except Exception as db_e:
+                    logger.debug(f"CandlesDB 현재 캔들 업데이트 실패: {symbol} {tf_str} - {db_e}")
+
             logger.debug(f"현재 진행 캔들 인디케이터 업데이트 완료: {symbol} {tf_str}")
         else:
             logger.warning(f"현재 캔들의 인디케이터 계산 결과를 찾을 수 없음: {symbol} {tf_str}")
@@ -785,8 +809,67 @@ def polling_worker():
                 key = f"{symbol}:{tf_str}"
                 last_check_times[key] = 0
 
+        # Health Check 타이머
+        last_health_check = time.time()
+        health_check_interval = 300  # 5분마다 health check
+        stats_log_interval = 600  # 10분마다 통계 로그
+
+        # Redis 모니터링 카운터
+        redis_success_count = 0
+        redis_failure_count = 0
+        redis_last_failure_time = None
+
         while not shutdown_event.is_set():
             current_time = time.time()
+
+            # Health Check (5분마다)
+            if current_time - last_health_check >= health_check_interval:
+                # CandlesDB Health Check
+                logger.debug("🏥 CandlesDB health check 실행...")
+                candlesdb_writer.health_check()
+
+                # Redis Health Check
+                logger.debug("🏥 Redis health check 실행...")
+                try:
+                    if redis_manager.ping_sync():
+                        redis_success_count += 1
+                        logger.debug("✅ Redis health check: OK")
+                    else:
+                        redis_failure_count += 1
+                        redis_last_failure_time = current_time
+                        logger.warning("⚠️ Redis health check failed: ping returned False")
+                        # 재연결 시도
+                        logger.info("🔄 Redis 재연결 시도...")
+                        global redis_client
+                        redis_client = redis_manager.get_connection()
+                except Exception as e:
+                    redis_failure_count += 1
+                    redis_last_failure_time = current_time
+                    logger.error(f"❌ Redis health check failed: {e}")
+                    # 재연결 시도
+                    try:
+                        logger.info("🔄 Redis 재연결 시도...")
+                        redis_client = redis_manager.get_connection()
+                        if redis_manager.ping_sync():
+                            logger.info("✅ Redis 재연결 성공!")
+                    except Exception as reconnect_e:
+                        logger.error(f"❌ Redis 재연결 실패: {reconnect_e}")
+
+                last_health_check = current_time
+
+                # 통계 로그 (10분마다)
+                if current_time % stats_log_interval < health_check_interval:
+                    candlesdb_writer.log_stats()
+
+                    # Redis 통계 로그
+                    total_checks = redis_success_count + redis_failure_count
+                    success_rate = (redis_success_count / total_checks * 100) if total_checks > 0 else 0.0
+                    logger.info(
+                        f"📊 Redis Stats: "
+                        f"success={redis_success_count}, "
+                        f"failure={redis_failure_count}, "
+                        f"rate={success_rate:.1f}%"
+                    )
             
             for symbol in SYMBOLS:
                 for timeframe in TIMEFRAMES:

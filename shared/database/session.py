@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.pool import NullPool, QueuePool
+from sqlalchemy.pool import NullPool
 
 from shared.config.settings import settings
 from shared.database.pool_monitor import PoolMonitor
@@ -48,7 +48,10 @@ class DatabaseConfig:
         """
         if cls._engine is None:
             # Determine pool class based on environment
-            pool_class = NullPool if settings.ENVIRONMENT == "test" else QueuePool  # type: ignore[comparison-overlap]
+            # Note: For async engines, poolclass should not be explicitly set
+            # create_async_engine automatically uses the appropriate async pool
+            # Only use NullPool for test environment to avoid connection pooling issues
+            use_null_pool = settings.ENVIRONMENT == "test"
 
             # Use db_url property for proper URL construction
             db_url = settings.db_url
@@ -71,27 +74,28 @@ class DatabaseConfig:
                 }
                 isolation_level = "READ COMMITTED"  # PostgreSQL default
 
-            cls._engine = create_async_engine(
-                db_url,
-                echo=settings.DEBUG,
+            # Build engine kwargs
+            engine_kwargs = {
+                "url": db_url,
+                "echo": settings.DEBUG,
+                "pool_size": settings.DB_POOL_SIZE,
+                "max_overflow": settings.DB_MAX_OVERFLOW,
+                "pool_timeout": settings.DB_POOL_TIMEOUT,
+                "pool_recycle": settings.DB_POOL_RECYCLE,
+                "pool_pre_ping": settings.DB_POOL_PRE_PING,
+                "connect_args": connect_args,
+                "echo_pool": settings.DEBUG,
+            }
 
-                # Pool configuration
-                poolclass=pool_class,
-                pool_size=settings.DB_POOL_SIZE,
-                max_overflow=settings.DB_MAX_OVERFLOW,
-                pool_timeout=settings.DB_POOL_TIMEOUT,
-                pool_recycle=settings.DB_POOL_RECYCLE,
-                pool_pre_ping=settings.DB_POOL_PRE_PING,
+            # Only set poolclass for test environment (NullPool)
+            if use_null_pool:
+                engine_kwargs["poolclass"] = NullPool
 
-                # Connection arguments
-                connect_args=connect_args,
+            # Add isolation_level for PostgreSQL
+            if isolation_level:
+                engine_kwargs["isolation_level"] = isolation_level
 
-                # Logging
-                echo_pool=settings.DEBUG,
-
-                # Performance (only for PostgreSQL)
-                **({"isolation_level": isolation_level} if isolation_level else {}),
-            )
+            cls._engine = create_async_engine(**engine_kwargs)
 
             logger.info(
                 "Database engine created",

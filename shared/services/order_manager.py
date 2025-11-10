@@ -49,7 +49,7 @@ from shared.database import RedisConnectionManager
 from shared.database.redis_schemas import RedisKeys, RedisSerializer
 from shared.logging import get_logger
 from shared.models.trading import Exchange, Order, OrderSide, OrderStatus, OrderType, TradeFee
-from shared.utils.retry import retry_async
+from shared.utils.async_helpers import retry_async
 
 logger = get_logger(__name__)
 settings = get_settings()

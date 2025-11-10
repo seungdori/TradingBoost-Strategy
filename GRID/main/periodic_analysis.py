@@ -40,7 +40,7 @@ from GRID.data import (
     get_ttl_for_timeframe,
     set_cache,
 )
-from GRID.database.redis_database import RedisConnectionManager
+from GRID.trading.redis_connection_manager import RedisConnectionManager
 from GRID.indicators import (
     atr,
     crossover,

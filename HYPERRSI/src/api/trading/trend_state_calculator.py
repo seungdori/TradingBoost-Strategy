@@ -330,67 +330,73 @@ class TrendStateCalculator:
         return extreme_state
 
     async def analyze_market_state_from_redis(self, symbol: str, timeframe: str) -> Dict:
-        """시장 상태 분석
-        
+        """시장 상태 분석 (저장된 PineScript 기반 trend_state 사용)
+
         Args:
-            prices (pd.Series): 종가 시계열 데이터
-            
+            symbol: 심볼 (예: BTC-USDT-SWAP)
+            timeframe: 타임프레임 (예: 15m, 1h)
+
         Returns:
             Dict: 분석 결과를 담은 딕셔너리
+                - extreme_state: -2 (강한 하락), 0 (중립), 2 (강한 상승)
+                - CYCLE_Bull: 불 사이클 여부
+                - CYCLE_Bear: 베어 사이클 여부
+                - BB_State: BB 상태
+                - ma20, ma60, upper_band, lower_band: 참고용 지표
         """
         try:
             redis = await get_redis_client()
             tf_str = get_timeframe(timeframe)
             redis_key = f"candles_with_indicators:{symbol}:{tf_str}"
-            # 최근 21개 캔들 데이터 가져오기 (20기간 모멘텀 계산용)
-            candles = await redis.lrange(redis_key, -21, -1)
-            if not candles or len(candles) < 21:
-                logger.error(f"충분한 캔들 데이터를 찾을 수 없습니다: {redis_key}")
+
+            # 최신 캔들 데이터 가져오기
+            candles = await redis.lrange(redis_key, -1, -1)
+            if not candles:
+                logger.error(f"캔들 데이터를 찾을 수 없습니다: {redis_key}")
                 return self._get_empty_state()
+
             # 캔들 데이터 파싱
             try:
-                candles_data = [json.loads(candle) for candle in candles]
-                close_prices = [float(candle.get('close', 0)) for candle in candles_data]
-                
-                # 20기간 모멘텀 계산 (현재가격 - 20봉전 가격) / 20봉전 가격
-                current_price = close_prices[-1]
-                price_20_periods_ago = close_prices[0]
-                momentum = (current_price - price_20_periods_ago) / price_20_periods_ago
-                
-                # 최신 캔들의 다른 지표들 가져오기
-                latest_candle = candles_data[-1]
+                latest_candle = json.loads(candles[0])
+
+                # 저장된 PineScript 기반 trend_state 직접 사용
+                extreme_state = int(latest_candle.get('trend_state', 0))
+
+                # PineScript 기반 추가 정보
+                cycle_bull = latest_candle.get('CYCLE_Bull', False)
+                cycle_bear = latest_candle.get('CYCLE_Bear', False)
+                bb_state = int(latest_candle.get('BB_State', 0))
+
+                # 참고용 지표들
                 ma20 = float(latest_candle.get('sma20', 0))
                 ma60 = float(latest_candle.get('sma60', 0))
-                upper_band = float(latest_candle.get('bb_upper', ma20 + (float(latest_candle.get('bb_std', 0)) * 2)))
-                lower_band = float(latest_candle.get('bb_lower', ma20 - (float(latest_candle.get('bb_std', 0)) * 2)))
-                
-                # 상태 판단
-                extreme_state = 0  # 기본값 (중립)
-                
-                if current_price > upper_band and momentum > 0:
-                    extreme_state = 2  # 강한 상승
-                elif current_price > ma20 and ma20 > ma60 and momentum > 0:
-                    extreme_state = 1  # 약한 상승
-                elif current_price >= lower_band and current_price <= upper_band:
-                    extreme_state = 0  # 중립
-                elif current_price < ma20 and ma20 < ma60 and momentum < 0:
-                    extreme_state = -1  # 약한 하락
-                elif current_price < lower_band and momentum < 0:
-                    extreme_state = -2  # 강한 하락
+                upper_band = float(latest_candle.get('bb_upper', 0))
+                lower_band = float(latest_candle.get('bb_lower', 0))
+                current_price = float(latest_candle.get('close', 0))
+
+                logger.info(
+                    f"[PineScript Trend State] {symbol} {tf_str}: "
+                    f"extreme_state={extreme_state}, "
+                    f"CYCLE_Bull={cycle_bull}, CYCLE_Bear={cycle_bear}, "
+                    f"BB_State={bb_state}"
+                )
 
                 return {
+                    'extreme_state': extreme_state,
+                    'CYCLE_Bull': cycle_bull,
+                    'CYCLE_Bear': cycle_bear,
+                    'BB_State': bb_state,
                     'ma20': ma20,
                     'ma60': ma60,
-                    'momentum': momentum,
                     'upper_band': upper_band,
                     'lower_band': lower_band,
-                    'extreme_state': extreme_state
+                    'current_price': current_price
                 }
-                
+
             except (json.JSONDecodeError, ValueError) as e:
                 logger.error(f"캔들 데이터 파싱 중 오류 발생: {str(e)}")
                 return self._get_empty_state()
-                
+
         except Exception as e:
             logger.error(f"시장 상태 분석 중 오류 발생: {str(e)}")
             return self._get_empty_state()
@@ -470,13 +476,27 @@ class TrendStateCalculator:
         if not isinstance(data, pd.Series):
             raise TrendStateCalculatorException("입력은 pandas Series여야 합니다.")
 
-    def _calculate_volatility_thresholds(self, 
-                                           recent_high: float, 
+    def _calculate_volatility_thresholds(self,
+                                           recent_high: float,
                                            recent_low: float) -> Tuple[float, float]:
         """변동성 임계값 계산"""
         buzz = recent_high * 0.7
         squeeze = recent_low * (1/0.7)
         return buzz, squeeze
+
+    def _get_empty_state(self) -> Dict:
+        """빈 상태 반환 (기본값)"""
+        return {
+            'extreme_state': 0,
+            'CYCLE_Bull': False,
+            'CYCLE_Bear': False,
+            'BB_State': 0,
+            'ma20': 0.0,
+            'ma60': 0.0,
+            'upper_band': 0.0,
+            'lower_band': 0.0,
+            'current_price': 0.0
+        }
 
     async def get_candles_from_redis(symbol: str, timeframe: int) -> pd.DataFrame:
         """Redis에서 캔들 데이터를 가져와 DataFrame으로 변환"""

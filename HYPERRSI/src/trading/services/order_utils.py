@@ -463,6 +463,7 @@ async def try_send_order(
         
         # stop_trading API 호출하여 트레이딩 중지
         try:
+            print("⭐️user_id: ", user_id)
             async with httpx.AsyncClient() as client:
                 stop_url = f"{API_BASE_URL}/trading/stop"
                 response = await client.post(
@@ -670,7 +671,6 @@ async def try_send_order(
         margin_mode: str = str(position_mode.get('marginMode', 'cross'))
         #sprint(f"is_hedge_mode: {is_hedge_mode}")
         order_params: Dict[str, Any] = {
-            'leverage': leverage,
             'tdMode': margin_mode,
         }
         

@@ -134,7 +134,7 @@ export async function runBacktest(params: {
   end_date: string;
   strategy_params: StrategyParams;
 }) {
-  const response = await fetch('http://localhost:8013/api/v1/backtest/run', {
+  const response = await fetch('http://localhost:8013/backtest/run', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

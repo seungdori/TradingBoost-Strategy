@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from shared.services.timescale_service import TimescaleUserService
+from HYPERRSI.src.services.timescale_service import TimescaleUserService
 
 app = FastAPI()
 

@@ -149,3 +149,64 @@ class BacktestListRequest(BaseModel):
                 "offset": 0
             }
         }
+
+
+class CandleDataRequest(BaseModel):
+    """Request schema for fetching candle data for chart display."""
+
+    symbol: str = Field(..., description="Trading symbol", example="BTC/USDT:USDT")
+    timeframe: str = Field(..., description="Timeframe", example="15m")
+    start_date: datetime = Field(..., description="Start date (UTC)")
+    end_date: datetime = Field(..., description="End date (UTC)")
+
+    @validator("end_date")
+    def validate_dates(cls, v, values):
+        """Validate that end_date is after start_date."""
+        if "start_date" in values and v <= values["start_date"]:
+            raise ValueError("end_date must be after start_date")
+        return v
+
+    @validator("timeframe")
+    def validate_timeframe(cls, v):
+        """Validate timeframe format."""
+        valid_timeframes = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d"]
+        if v not in valid_timeframes:
+            raise ValueError(f"Invalid timeframe. Must be one of: {valid_timeframes}")
+        return v
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "symbol": "BTC/USDT:USDT",
+                "timeframe": "15m",
+                "start_date": "2025-01-01T00:00:00Z",
+                "end_date": "2025-01-31T23:59:59Z"
+            }
+        }
+
+
+class RecalculateIndicatorsRequest(BaseModel):
+    """Request schema for recalculating indicators and trend_state."""
+
+    symbol: str = Field(..., description="Trading symbol", example="BTC-USDT-SWAP")
+    timeframe: str = Field(..., description="Timeframe", example="15m")
+    start_date: Optional[datetime] = Field(None, description="Start date (UTC), if None recalculate all")
+    end_date: Optional[datetime] = Field(None, description="End date (UTC), if None use now")
+
+    @validator("timeframe")
+    def validate_timeframe(cls, v):
+        """Validate timeframe format."""
+        valid_timeframes = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d"]
+        if v not in valid_timeframes:
+            raise ValueError(f"Invalid timeframe. Must be one of: {valid_timeframes}")
+        return v
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "symbol": "BTC-USDT-SWAP",
+                "timeframe": "15m",
+                "start_date": "2025-01-01T00:00:00Z",
+                "end_date": "2025-01-31T23:59:59Z"
+            }
+        }
