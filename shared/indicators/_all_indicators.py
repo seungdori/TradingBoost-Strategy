@@ -8,7 +8,7 @@ import numpy as np
 from ._atr import calc_atr
 from ._bollinger import calc_bollinger_bands, calc_stddev
 from ._core import crossover, crossunder, dynamic_round, rising, falling, pivothigh, pivotlow, resample_candles
-from ._moving_averages import calc_jma, calc_sma, calc_t3, calc_vidya
+from ._moving_averages import calc_ema, calc_jma, calc_sma, calc_t3, calc_vidya
 from ._rsi import calc_rsi
 from ._trend import rational_quadratic
 
@@ -320,6 +320,13 @@ def compute_all_indicators(candles, rsi_period=14, atr_period=14,
     jma10  = calc_jma(closes, length=10, phase=50, power=2)
     jma20  = calc_jma(closes, length=20, phase=50, power=2)
 
+    # 2-1) EMA
+    ema5   = calc_ema(closes, 5)
+    ema7   = calc_ema(closes, 7)
+    ema14  = calc_ema(closes, 14)
+    ema20  = calc_ema(closes, 20)
+    ema200 = calc_ema(closes, 200)
+
     # 3) RSI
     # numpy 배열로 변환하여 RSI 계산
     closes_array = np.array(closes)
@@ -480,6 +487,12 @@ def compute_all_indicators(candles, rsi_period=14, atr_period=14,
         candles[i]["jma5"]   = dynamic_round(jma5[i])
         candles[i]["jma10"]  = dynamic_round(jma10[i])
         candles[i]["jma20"]  = dynamic_round(jma20[i])
+
+        candles[i]["ema5"]   = dynamic_round(ema5[i])
+        candles[i]["ema7"]   = dynamic_round(ema7[i])
+        candles[i]["ema14"]  = dynamic_round(ema14[i])
+        candles[i]["ema20"]  = dynamic_round(ema20[i])
+        candles[i]["ema200"] = dynamic_round(ema200[i])
 
         candles[i]["rsi"]    = dynamic_round(rsi14[i])
 

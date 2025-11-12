@@ -18,10 +18,6 @@ from numpy import minimum
 
 from HYPERRSI.src.api.dependencies import get_exchange_client as get_okx_client
 from HYPERRSI.src.api.dependencies import get_exchange_context
-from HYPERRSI.src.api.routes.order import (  # type: ignore[attr-defined]
-    cancel_algo_orders,
-    update_stop_loss_order,
-)
 
 # Redis, OKX client 등 (실제 경로/모듈명은 프로젝트에 맞게 조정)
 from shared.cache import TradingCache

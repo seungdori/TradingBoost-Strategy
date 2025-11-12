@@ -259,9 +259,9 @@ class CandlesDBWriter:
             Decimal(str(candle["close"])),
             Decimal(str(candle["volume"])),
             Decimal(str(candle.get("rsi", 0))) if candle.get("rsi") else None,  # rsi14
-            Decimal(str(candle.get("atr", 0))) if candle.get("atr") else None,  # atr
-            Decimal(str(candle.get("ma7", 0))) if candle.get("ma7") else None,  # ema7
-            Decimal(str(candle.get("ma20", 0))) if candle.get("ma20") else None,  # ma20
+            Decimal(str(candle.get("atr14", 0))) if candle.get("atr14") else None,  # atr
+            Decimal(str(candle.get("ema7", 0))) if candle.get("ema7") else None,  # ema7
+            Decimal(str(candle.get("sma20", 0))) if candle.get("sma20") else None,  # ma20
         )
 
     def _do_upsert(self, table_name: str, timeframe_str: str, rows: list[tuple]) -> bool:

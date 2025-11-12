@@ -51,46 +51,12 @@ from .services import AlgoOrderService, OrderService, PositionService, StopLossS
 order_backend_client = None
 
 async def init_user_position_data(user_id: str, symbol: str, side: str) -> None:
-    dual_side_position_key = f"user:{user_id}:{symbol}:dual_side_position"
-    position_state_key = f"user:{user_id}:position:{symbol}:position_state"
-    tp_data_key = f"user:{user_id}:position:{symbol}:{side}:tp_data"
-    ts_key = f"trailing:user:{user_id}:{symbol}:{side}"
-    dual_side_position_key = f"user:{user_id}:{symbol}:dual_side_position"
-    dca_count_key = f"user:{user_id}:position:{symbol}:{side}:dca_count"
-    dca_levels_key = f"user:{user_id}:position:{symbol}:{side}:dca_levels"
-    position_key = f"user:{user_id}:position:{symbol}:{side}"
-    min_size_key = f"user:{user_id}:position:{symbol}:min_sustain_contract_size"
-    #main_position_direction_key = f"user:{user_id}:position:{symbol}:main_position_direction"
-    tp_state = f"user:{user_id}:position:{symbol}:{side}:tp_state"
-    hedging_direction_key = f"user:{user_id}:position:{symbol}:hedging_direction"
-    entry_fail_count_key = f"user:{user_id}:entry_fail_count"
-    dual_side_count_key = f"user:{user_id}:{symbol}:dual_side_count"
-    initial_size_key = f"user:{user_id}:position:{symbol}:{side}:initial_size"
-    current_trade_key = f"user:{user_id}:current_trade:{symbol}:{side}"
-
-    # Use context manager with pipeline for batch deletes
+    """
+    포지션 데이터 초기화 - Wrapper 함수 (backward compatibility)
+    실제 비즈니스 로직은 PositionService.init_position_data에 위임
+    """
     async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
-        pipeline = redis.pipeline()
-        pipeline.delete(position_state_key)
-        pipeline.delete(dual_side_position_key)
-        pipeline.delete(tp_data_key)
-        pipeline.delete(ts_key)
-        pipeline.delete(dca_count_key)
-        pipeline.delete(dca_levels_key)
-        pipeline.delete(position_key)
-        pipeline.delete(min_size_key)
-        #pipeline.delete(main_position_direction_key)
-        pipeline.delete(tp_state)
-        pipeline.delete(entry_fail_count_key)
-        pipeline.delete(hedging_direction_key)
-        pipeline.delete(dual_side_count_key)
-        pipeline.delete(current_trade_key)
-        pipeline.delete(initial_size_key)
-
-        await asyncio.wait_for(
-            pipeline.execute(),
-            timeout=RedisTimeout.PIPELINE
-        )
+        await PositionService.init_position_data(user_id, symbol, side, redis)
     
 
 status_mapping = {

@@ -7,15 +7,17 @@
 import asyncio
 import traceback
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 from HYPERRSI.src.api.dependencies import get_exchange_context
-from HYPERRSI.src.api.routes.order import ClosePositionRequest, close_position
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 from shared.database.redis_helper import get_redis_client
 from shared.database.redis_migration import get_redis_context
 from shared.database.redis_patterns import RedisTimeout, scan_keys_pattern
 from shared.logging import get_logger, log_order
+
+if TYPE_CHECKING:
+    from HYPERRSI.src.api.routes.order import ClosePositionRequest, close_position
 
 from .position_validator import check_position_exists
 from .telegram_service import get_identifier, send_telegram_message
@@ -205,10 +207,13 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
 async def check_trailing_stop(user_id: str, symbol: str, direction: str, current_price: float):
     """
     트레일링 스탑 업데이트 및 체크
-    
+
     Args:
         user_id: 사용자 ID (텔레그램 ID 또는 OKX UID)
     """
+    # Lazy import to avoid circular dependency
+    from HYPERRSI.src.api.routes.order import ClosePositionRequest, close_position
+
     try:
         redis = await get_redis_client()
         # user_id를 OKX UID로 변환

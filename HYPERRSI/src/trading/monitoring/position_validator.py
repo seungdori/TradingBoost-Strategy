@@ -7,13 +7,16 @@
 import asyncio
 import json
 import traceback
-from typing import Dict, Tuple
+from typing import Dict, Tuple, TYPE_CHECKING
 
 from HYPERRSI.src.api.dependencies import get_exchange_context
-from HYPERRSI.src.api.routes.order import ClosePositionRequest, close_position
+from HYPERRSI.src.api.routes.order.services import PositionService
 from shared.database.redis_helper import get_redis_client
 from shared.database.redis_patterns import scan_keys_pattern
 from shared.logging import get_logger, log_order
+
+if TYPE_CHECKING:
+    from HYPERRSI.src.api.routes.order import ClosePositionRequest, close_position
 
 # Lazy imports to avoid circular dependencies - import at usage point
 from .telegram_service import get_identifier, send_telegram_message
@@ -254,10 +257,9 @@ async def handle_position_replacement(user_id: str, symbol: str, direction: str)
         
         if not alert_sent:
             await redis.set(closure_alert_key, "1", ex=3600)
-        
-        # 새 포지션을 위한 데이터 초기화
-        from HYPERRSI.src.api.routes.order import init_user_position_data
-        await init_user_position_data(user_id, symbol, direction)
+
+        # 새 포지션을 위한 데이터 초기화 - 서비스 직접 사용
+        await PositionService.init_position_data(user_id, symbol, direction, redis)
         
     except Exception as e:
         logger.error(f"포지션 교체 처리 중 오류: {str(e)}")

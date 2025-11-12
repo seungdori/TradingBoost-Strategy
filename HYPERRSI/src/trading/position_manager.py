@@ -340,7 +340,7 @@ class PositionStateManager:
 
         # transaction 실행 및 결과 저장
         try:
-            result = await redis.transaction(update_operation, position_key)
+            result = await run_with_retry([position_key], update_operation)
             is_valid = await self.validate_position_state(user_id, symbol, side)
 
             if not result or (isinstance(result, list) and len(result) == 0):

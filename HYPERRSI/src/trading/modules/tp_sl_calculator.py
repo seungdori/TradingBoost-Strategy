@@ -6,14 +6,16 @@ TP(익절)와 SL(손절) 가격 계산 및 업데이트 로직
 """
 
 import traceback
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, TYPE_CHECKING
 
-from HYPERRSI.src.api.routes.order import update_stop_loss_order
 from shared.cache import TradingCache
 from HYPERRSI.src.trading.models import UpdateStopLossRequest
 from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger
 from shared.utils import get_tick_size_from_redis, round_to_tick_size, safe_float
+
+if TYPE_CHECKING:
+    from HYPERRSI.src.api.routes.order import update_stop_loss_order
 
 logger = get_logger(__name__)
 
@@ -82,6 +84,9 @@ class TPSLCalculator:
                         raise ValueError("숏 포지션의 SL은 현재가보다 높아야 합니다")
 
                 # 3. 거래소 API로 SL 주문 업데이트
+                # Lazy import to avoid circular dependency
+                from HYPERRSI.src.api.routes.order import update_stop_loss_order
+
                 old_order_id = position.sl_order_id
                 try:
                     new_order = await update_stop_loss_order(

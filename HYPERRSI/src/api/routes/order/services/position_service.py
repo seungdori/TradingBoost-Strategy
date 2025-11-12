@@ -215,25 +215,42 @@ class PositionService(BaseService):
             redis_client: Redis 클라이언트
         """
         try:
-            # Redis 키 생성
+            # Redis 키 생성 - order.py의 init_user_position_data와 동일
             dual_side_position_key = f"user:{user_id}:{symbol}:dual_side_position"
             position_state_key = f"user:{user_id}:position:{symbol}:position_state"
             tp_data_key = f"user:{user_id}:position:{symbol}:{side}:tp_data"
             ts_key = f"trailing:user:{user_id}:{symbol}:{side}"
             dca_count_key = f"user:{user_id}:position:{symbol}:{side}:dca_count"
             dca_levels_key = f"user:{user_id}:position:{symbol}:{side}:dca_levels"
+            position_key = f"user:{user_id}:position:{symbol}:{side}"
+            min_size_key = f"user:{user_id}:position:{symbol}:min_sustain_contract_size"
+            tp_state = f"user:{user_id}:position:{symbol}:{side}:tp_state"
+            hedging_direction_key = f"user:{user_id}:position:{symbol}:hedging_direction"
+            entry_fail_count_key = f"user:{user_id}:entry_fail_count"
+            dual_side_count_key = f"user:{user_id}:{symbol}:dual_side_count"
+            initial_size_key = f"user:{user_id}:position:{symbol}:{side}:initial_size"
+            current_trade_key = f"user:{user_id}:current_trade:{symbol}:{side}"
 
-            # 기존 데이터 삭제
+            # Pipeline으로 batch 삭제
+            pipeline = redis_client.pipeline()
+            pipeline.delete(position_state_key)
+            pipeline.delete(dual_side_position_key)
+            pipeline.delete(tp_data_key)
+            pipeline.delete(ts_key)
+            pipeline.delete(dca_count_key)
+            pipeline.delete(dca_levels_key)
+            pipeline.delete(position_key)
+            pipeline.delete(min_size_key)
+            pipeline.delete(tp_state)
+            pipeline.delete(entry_fail_count_key)
+            pipeline.delete(hedging_direction_key)
+            pipeline.delete(dual_side_count_key)
+            pipeline.delete(current_trade_key)
+            pipeline.delete(initial_size_key)
+
             await asyncio.wait_for(
-                redis_client.delete(
-                    dual_side_position_key,
-                    position_state_key,
-                    tp_data_key,
-                    ts_key,
-                    dca_count_key,
-                    dca_levels_key
-                ),
-                timeout=RedisTimeout.FAST_OPERATION
+                pipeline.execute(),
+                timeout=RedisTimeout.PIPELINE
             )
 
             logger.info(f"포지션 데이터 초기화 완료: {user_id} - {symbol} {side}")
