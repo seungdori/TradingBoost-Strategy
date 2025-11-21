@@ -236,32 +236,45 @@ class TrendStateCalculator:
         
         return bbw_state
 
-    def calculate_extreme_state(self, data: pd.Series, use_longer_trend: bool = False) -> pd.Series:
+    def calculate_trend_state(self, data: pd.Series, use_longer_trend: bool = False) -> pd.Series:
         """
-        극단 상태(Extreme State) 계산 (2: 강한 상승, -2: 강한 하락, 0: 중립)
+        트렌드 상태(Trend State) 계산 - PineScript의 trend_state와 동일
+        (2: 강한 상승 트렌드, -2: 강한 하락 트렌드, 0: 중립)
+
+        PineScript 로직 (Line 364-374):
+        - Bull 조건: CYCLE_Bull and (use_longer_trend ? true : BB_State_MTF == 2)
+        - Bear 조건: CYCLE_Bear and (use_longer_trend ? true : BB_State_MTF == -2)
+        - 상태 유지: var 동작으로 이전 상태 유지
         """
-        trend_state = self.get_trend_state(data)
+        cycle_bull = self.get_trend_state(data) > 0
         bbw_state = self.calculate_bbw_state(data)
-        
-        extreme_state = pd.Series(0, index=data.index)
-        
+
+        trend_state = pd.Series(0, index=data.index)
+
         for i in range(len(data)):
-            bull_condition = trend_state.iloc[i] > 0 and (use_longer_trend or bbw_state.iloc[i] == 2)
-            bear_condition = trend_state.iloc[i] < 0 and (use_longer_trend or bbw_state.iloc[i] == -2)
-            prev_state = extreme_state.iloc[i-1] if i > 0 else 0
-            
+            # 이전 상태 (PineScript의 var 동작 모방)
+            prev_state = trend_state.iloc[i-1] if i > 0 else 0
+
+            # Bull 조건 (Line 364-365)
+            bull_condition = cycle_bull.iloc[i] and (use_longer_trend or bbw_state.iloc[i] == 2)
+            # Bear 조건 (Line 370-371)
+            bear_condition = not cycle_bull.iloc[i] and (use_longer_trend or bbw_state.iloc[i] == -2)
+
             if bull_condition:
-                extreme_state.iloc[i] = 2
+                trend_state.iloc[i] = 2
+            # Bull 종료 조건 (Line 367-368)
+            elif prev_state == 2 and not cycle_bull.iloc[i]:
+                trend_state.iloc[i] = 0
             elif bear_condition:
-                extreme_state.iloc[i] = -2
-            elif prev_state == 2 and trend_state.iloc[i] <= 0:
-                extreme_state.iloc[i] = 0
-            elif prev_state == -2 and trend_state.iloc[i] >= 0:
-                extreme_state.iloc[i] = 0
+                trend_state.iloc[i] = -2
+            # Bear 종료 조건 (Line 373-374)
+            elif prev_state == -2 and not (not cycle_bull.iloc[i]):
+                trend_state.iloc[i] = 0
             else:
-                extreme_state.iloc[i] = prev_state
-                
-        return extreme_state
+                # 상태 유지
+                trend_state.iloc[i] = prev_state
+
+        return trend_state
 
     def clear_cache(self):
         """캐시된 결과 정리"""
@@ -368,7 +381,7 @@ class TrendStateCalculator:
 
         Returns:
             Dict: 분석 결과
-                - extreme_state: -2 (강한 하락), 0 (중립), 2 (강한 상승)
+                - trend_state: -2 (강한 하락), 0 (중립), 2 (강한 상승)
                 - CYCLE_Bull: 불 사이클 여부
                 - CYCLE_Bear: 베어 사이클 여부
                 - BB_State: BB 상태
@@ -395,7 +408,7 @@ class TrendStateCalculator:
             latest_candle = trend_df.iloc[-1]
 
             # 저장된 PineScript 기반 trend_state 직접 사용
-            extreme_state = int(latest_candle.get('trend_state', 0))
+            trend_state = int(latest_candle.get('trend_state', 0))
 
             # PineScript 기반 추가 정보
             cycle_bull = latest_candle.get('CYCLE_Bull', False)
@@ -419,13 +432,13 @@ class TrendStateCalculator:
 
             logger.info(
                 f"[PineScript Trend State] {symbol} {trend_tf_str}: "
-                f"extreme_state={extreme_state}, "
+                f"trend_state={trend_state}, "
                 f"CYCLE_Bull={cycle_bull}, CYCLE_Bear={cycle_bear}, "
                 f"BB_State={bb_state}"
             )
 
             return {
-                'extreme_state': extreme_state,
+                'trend_state': trend_state,
                 'CYCLE_Bull': cycle_bull,
                 'CYCLE_Bear': cycle_bear,
                 'BB_State': bb_state,
@@ -446,7 +459,7 @@ class TrendStateCalculator:
         데이터가 없을 때 반환할 기본 상태 딕셔너리
         """
         return {
-            'extreme_state': 0,
+            'trend_state': 0,
             'CYCLE_Bull': False,
             'CYCLE_Bear': False,
             'BB_State': 0,

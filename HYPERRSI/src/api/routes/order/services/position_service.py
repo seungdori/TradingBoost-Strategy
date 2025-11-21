@@ -27,6 +27,7 @@ from HYPERRSI.src.api.routes.order.validators import validate_close_percent, val
 from HYPERRSI.src.core.logger import error_logger
 from shared.database.redis_patterns import RedisTimeout
 from shared.logging import get_logger
+from shared.utils.symbol_helpers import normalize_symbol
 
 logger = get_logger(__name__)
 
@@ -74,8 +75,11 @@ class PositionService(BaseService):
         if not validate_close_percent(close_percent):
             raise HTTPException(status_code=400, detail=INVALID_CLOSE_PERCENT)
 
+        # 심볼 정규화 (CCXT API는 ETH/USDT:USDT 형식 필요)
+        ccxt_symbol = normalize_symbol(symbol, target_format="ccxt")
+
         # 현재 포지션 조회
-        positions = await exchange.fetch_positions([symbol])
+        positions = await exchange.fetch_positions([ccxt_symbol])
 
         if not positions:
             raise HTTPException(status_code=404, detail=POSITION_NOT_FOUND)
@@ -170,7 +174,10 @@ class PositionService(BaseService):
         if not validate_symbol_format(symbol):
             raise HTTPException(status_code=400, detail=INVALID_SYMBOL_FORMAT)
 
-        positions = await exchange.fetch_positions([symbol])
+        # 심볼 정규화 (CCXT API는 ETH/USDT:USDT 형식 필요)
+        ccxt_symbol = normalize_symbol(symbol, target_format="ccxt")
+
+        positions = await exchange.fetch_positions([ccxt_symbol])
 
         if not positions:
             return None

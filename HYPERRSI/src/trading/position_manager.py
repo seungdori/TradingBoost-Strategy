@@ -107,19 +107,13 @@ class PositionStateManager:
             print("exchange_position: ", exchange_position)
             if exchange_position is None:
                 if stored_size > 0:
-                    print("================")
-                    print("stored_size: ", stored_size)
-                    print("================")
+                    print(f"================\nstored_size: {stored_size} \n================")
                     await self.cleanup_position_data(user_id, symbol, side)
                     logger.warning(f"[{user_id}] [validate_position_state] Redis>0 but no pos => cleanup.")
                     return False
             else:
                 position_qty = float(exchange_position.size)
-                print("================")
-                print("position_qty: ", position_qty)
-                print("================")
-                print("stored_size2: ", stored_size)
-                print("================")
+                print(f"================\nposition_qty: {position_qty} \nstored_size2: {stored_size} \n================")
                 # Redis의 포지션 정보를 실제 거래소 사이즈로 업데이트
                 if abs(stored_size - position_qty) > 1e-6:
                     print("호출")

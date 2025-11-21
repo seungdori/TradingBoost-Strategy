@@ -56,23 +56,32 @@ async def move_sl_to_break_even(user_id: str, symbol: str, side: str, break_even
         # user_id를 OKX UID로 변환
         okx_uid = await get_identifier(str(user_id))
 
-        # side가 long 또는 buy이면 order_side는 sell, side가 short 또는 sell이면 order_side는 buy
-        order_side = "sell"
-        if side == "long" or side == "buy":
-            order_side = "sell"
-        elif side == "short" or side == "sell":
+        # SL 주문의 side 결정: 포지션과 반대 방향
+        # short 포지션 -> buy SL, long 포지션 -> sell SL
+        position_side = side  # 포지션 방향 저장
+        if side.lower() in ["short", "sell"]:
             order_side = "buy"
+            position_side_normalized = "short"
+        elif side.lower() in ["long", "buy"]:
+            order_side = "sell"
+            position_side_normalized = "long"
+        else:
+            logger.error(f"알 수 없는 포지션 side: {side}")
+            order_side = "buy"
+            position_side_normalized = "short"
+
+        logger.info(f"[DEBUG] SL 주문 생성 - 포지션 side: {position_side_normalized}, SL order_side: {order_side}, 가격: {break_even_price}")
 
         result = await update_stop_loss_order(
                         new_sl_price=break_even_price,
                         symbol=symbol,
-                        side=side,
-                        order_side=order_side,
+                        side=position_side_normalized,  # ✅ 포지션 방향 (long/short)
+                        order_side=order_side,  # ✅ SL 주문 방향 (buy/sell)
                         contracts_amount=contracts_amount,
                         user_id=okx_uid,
                         is_hedge=is_hedge,
                         order_type="break_even"
-                    ),
+                    )
                 
         if isinstance(result, dict) and not result.get('success', True):
             logger.info(f"SL 업데이트 건너뜀: {result.get('message')}")
@@ -266,8 +275,12 @@ async def process_break_even_settings(user_id: str, symbol: str, order_type: str
         
         
         # 포지션 정보 가져오기
-        position_side = position_data.get('position_side', '')
-        contracts_amount = float(position_data.get('contracts_amount', '0'))
+        # WebSocket 데이터는 posSide 필드를 사용
+        position_side = position_data.get('posSide', position_data.get('position_side', ''))
+
+        # contracts_amount도 WebSocket 형식에 맞게 조정
+        # WebSocket: 'pos' 필드 사용, API: 'contracts_amount' 사용
+        contracts_amount = float(position_data.get('pos', position_data.get('contracts_amount', '0')))
         # position_data에서 진입가 확인 (avgPrice 키를 먼저 확인)
         entry_price_from_data = float(position_data.get('avgPrice', position_data.get('entry_price', '0')))
         
@@ -290,10 +303,20 @@ async def process_break_even_settings(user_id: str, symbol: str, order_type: str
             contracts_amount = float(full_position_data.get("contracts_amount", 0))
         
         # TP 데이터 가져오기
-        tp_data_str = full_position_data.get("tp_data", "{}")
+        tp_data_str = full_position_data.get("tp_data", "[]")
+
+        # bytes를 str로 변환
+        if isinstance(tp_data_str, bytes):
+            tp_data_str = tp_data_str.decode('utf-8')
+
         try:
             tp_data = json.loads(tp_data_str)
+            # 리스트가 아닌 경우 빈 리스트로 초기화
+            if not isinstance(tp_data, list):
+                logger.warning(f"⚠️ TP 데이터가 리스트가 아닙니다: {type(tp_data)} - 빈 리스트로 초기화")
+                tp_data = []
         except json.JSONDecodeError:
+            logger.error(f"❌ TP 데이터 JSON 파싱 실패: {tp_data_str}")
             tp_data = []
         # TP 레벨에 따른 브레이크이븐 적용
         
@@ -365,59 +388,87 @@ async def process_break_even_settings(user_id: str, symbol: str, order_type: str
         
         try:
             if tp_level == 1 and use_break_even_tp1:
-                #await send_telegram_message(f"TP1 브레이크이븐 확인. [DEBUG] TP1 체결: SL을 브레이크이븐({entry_price})으로 이동합니다.", user_id, debug = True)
                 # TP1 체결 시 진입가(브레이크이븐)으로 SL 이동
-                print(f"entry_price: {entry_price}, contracts_amount: {contracts_amount}")
+                logger.info(f"[DEBUG] TP1 브레이크이븐 체크 - entry_price: {entry_price}, contracts_amount: {contracts_amount}")
                 if entry_price > 0 and contracts_amount > 0:
-                    logger.info(f"TP1 체결: SL을 브레이크이븐({entry_price})으로 이동합니다.")
-                    asyncio.create_task(move_sl_to_break_even(
+                    logger.info(f"✅ TP1 체결: SL을 브레이크이븐({entry_price})으로 이동합니다.")
+                    # await로 직접 호출하여 에러를 즉시 확인
+                    await move_sl_to_break_even(
                         user_id=user_id,
                         symbol=symbol,
                         side=position_side,
                         break_even_price=entry_price,
                         contracts_amount=contracts_amount,
                         tp_index=tp_level,
-                    ))
-                #else:
-                #    await send_telegram_message(f"오류. {entry_price}, {contracts_amount}\n아마 포지션이 이미 없는 경우.", user_id, debug = True)
+                    )
+                    logger.info(f"✅ TP1 브레이크이븐 SL 이동 완료")
+                else:
+                    logger.warning(f"⚠️ 브레이크이븐 조건 미충족 - entry_price: {entry_price}, contracts_amount: {contracts_amount}")
+                    await send_telegram_message(
+                        f"⚠️ 브레이크이븐 실행 실패\n"
+                        f"진입가: {entry_price}\n"
+                        f"수량: {contracts_amount}\n"
+                        f"포지션이 없거나 데이터가 유효하지 않습니다.",
+                        user_id,
+                        debug=True
+                    )
                     
             elif tp_level == 2 and use_break_even_tp2:
                 # TP2 체결 시 TP1 가격으로 SL 이동
+                logger.info(f"[DEBUG] TP2 브레이크이븐 체크")
+                logger.info(f"[DEBUG] tp_data 내용: {tp_data}")
+                logger.info(f"[DEBUG] tp_data 타입: {type(tp_data)}, 길이: {len(tp_data) if isinstance(tp_data, list) else 'N/A'}")
                 if isinstance(tp_data, list):
-                    tp1_price = next((float(tp.get('price', 0)) for tp in tp_data 
+                    # 각 TP 데이터 출력
+                    for tp in tp_data:
+                        logger.info(f"[DEBUG] TP 항목: level={tp.get('level')} (type: {type(tp.get('level'))}), price={tp.get('price')}")
+
+                    tp1_price = next((float(tp.get('price', 0)) for tp in tp_data
                                 if tp.get('level') == 1), None)
+                    logger.info(f"[DEBUG] TP1 가격: {tp1_price}, contracts_amount: {contracts_amount}")
                     if tp1_price and tp1_price > 0 and contracts_amount > 0:
-                        logger.info(f"TP2 체결: SL을 TP1 가격({tp1_price})으로 이동합니다.")
-                        asyncio.create_task(move_sl_to_break_even(
+                        logger.info(f"✅ TP2 체결: SL을 TP1 가격({tp1_price})으로 이동합니다.")
+                        await move_sl_to_break_even(
                             user_id=user_id,
                             symbol=symbol,
                             side=position_side,
                             break_even_price=tp1_price,
                             contracts_amount=contracts_amount,
                             tp_index=tp_level
-                        ))
+                        )
+                        logger.info(f"✅ TP2 브레이크이븐 SL 이동 완료")
+                    else:
+                        logger.warning(f"⚠️ TP2 브레이크이븐 조건 미충족 - tp1_price: {tp1_price}, contracts_amount: {contracts_amount}")
+                else:
+                    logger.warning(f"⚠️ TP 데이터가 리스트가 아님: {type(tp_data)}")
                 
             elif tp_level == 3 and use_break_even_tp3:
                 # TP3 체결 시 TP2 가격으로 SL 이동
+                logger.info(f"[DEBUG] TP3 브레이크이븐 체크")
                 if isinstance(tp_data, list):
                     # TP1, TP2, TP3의 비율 합이 100%인지 확인
-                    #total_tp_ratio = sum(float(tp.get('ratio', 0)) for tp in tp_data if tp.get('level') in [1, 2, 3])
                     if total_tp_close_ratio >= 99:
-                        logger.info(f"TP1, TP2, TP3의 비율 합이 100% 이상이므로 브레이크이븐 로직을 실행하지 않습니다.")
+                        logger.info(f"⚠️ TP1, TP2, TP3의 비율 합이 100% 이상({total_tp_close_ratio}%)이므로 브레이크이븐 로직을 실행하지 않습니다.")
                         return False
-                        
-                    tp2_price = next((float(tp.get('price', 0)) for tp in tp_data 
+
+                    tp2_price = next((float(tp.get('price', 0)) for tp in tp_data
                                 if tp.get('level') == 2), None)
+                    logger.info(f"[DEBUG] TP2 가격: {tp2_price}, contracts_amount: {contracts_amount}")
                     if tp2_price and tp2_price > 0 and contracts_amount > 0:
-                        logger.info(f"TP3 체결: SL을 TP2 가격({tp2_price})으로 이동합니다.")
-                        asyncio.create_task(move_sl_to_break_even(
+                        logger.info(f"✅ TP3 체결: SL을 TP2 가격({tp2_price})으로 이동합니다.")
+                        await move_sl_to_break_even(
                             user_id=user_id,
                             symbol=symbol,
                             side=position_side,
                             break_even_price=tp2_price,
                             contracts_amount=contracts_amount,
                             tp_index=tp_level
-                        ))
+                        )
+                        logger.info(f"✅ TP3 브레이크이븐 SL 이동 완료")
+                    else:
+                        logger.warning(f"⚠️ TP3 브레이크이븐 조건 미충족 - tp2_price: {tp2_price}, contracts_amount: {contracts_amount}")
+                else:
+                    logger.warning(f"⚠️ TP 데이터가 리스트가 아님: {type(tp_data)}")
         except Exception as e:
             logger.error(f"브레이크이븐 처리 중 오류: {str(e)}")
             traceback.print_exc()

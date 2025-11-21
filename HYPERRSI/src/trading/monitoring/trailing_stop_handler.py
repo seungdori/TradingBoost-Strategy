@@ -63,20 +63,34 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
         if use_tp2_tp3_diff and tp_data:
             # TP2와 TP3 가격 차이로 오프셋 계산
             if user_id == 1709556958:
-                await send_telegram_message(f"[{user_id}] 트레일링 스탑 오프셋 값: {trailing_offset}", user_id, debug=True)
+                await send_telegram_message(f"[{user_id}] 트레일링 스탑 오프셋 값 (초기): {trailing_offset}", user_id, debug=True)
             if isinstance(tp_data, list):
-                tp2_price = next((float(tp.get('price', 0)) for tp in tp_data 
+                # 타입 안전한 레벨 비교 (정수로 통일)
+                tp2_price = next((float(tp.get('price', 0)) for tp in tp_data
                              if tp.get('level') == 2), None)
-                tp3_price = next((float(tp.get('price', 0)) for tp in tp_data 
+                tp3_price = next((float(tp.get('price', 0)) for tp in tp_data
                              if tp.get('level') == 3), None)
-                
-                if tp2_price and tp3_price:
+
+                if user_id == 1709556958:
+                    await send_telegram_message(f"[{user_id}] TP2 가격: {tp2_price}, TP3 가격: {tp3_price}", user_id, debug=True)
+
+                if tp2_price and tp3_price and tp2_price > 0 and tp3_price > 0:
                     if direction == "long":
                         trailing_offset = abs(tp3_price - tp2_price)
-                        
+
                     else:  # short
                         trailing_offset = abs(tp2_price - tp3_price)
                     logger.info(f"[{user_id}] TP2-TP3 가격 차이를 트레일링 스탑 오프셋으로 사용: {trailing_offset}")
+                    if user_id == 1709556958:
+                        await send_telegram_message(f"[{user_id}] 계산된 트레일링 오프셋: {trailing_offset}", user_id, debug=True)
+                else:
+                    # TP2, TP3를 찾지 못한 경우 퍼센트 기반으로 계산
+                    logger.warning(f"[{user_id}] TP2 또는 TP3 가격을 찾지 못해 퍼센트 기반 오프셋 사용")
+                    current_price = await get_current_price(symbol, "1m")
+                    if current_price > 0:
+                        trailing_offset = abs(current_price * trailing_offset_value * 0.01)
+                    if user_id == 1709556958:
+                        await send_telegram_message(f"[{user_id}] TP 데이터 없음. 퍼센트 기반 오프셋: {trailing_offset}", user_id, debug=True)
         else:
             current_price = await get_current_price(symbol, "1m")
             if current_price <= 0:
@@ -186,6 +200,9 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
                     f"심볼: {symbol}\n"
                     f"방향: {'🟢 롱' if direction == 'long' else '🔴 숏'}\n"
                     f"현재가: {current_price:.2f}\n"
+                    f"TP2: {tp2_price:.2f}\n"
+                    f"TP3: {tp3_price:.2f}\n"
+                    f"TP2-TP3 가격 차이: {abs(tp3_price - tp2_price):.2f}\n"
                     f"트레일링 오프셋: {trailing_offset:.2f}\n"
                     f"초기 스탑 가격: {trailing_stop_price:.2f}\n"
                 )

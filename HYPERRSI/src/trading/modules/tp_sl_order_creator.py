@@ -67,6 +67,7 @@ class TPSLOrderCreator:
         opposite_side = "sell" if side == "long" else "buy"
         fetched_contracts_amount = contracts_amount
         position_not_exist = False
+        pos_dict = None
        # print("중요!!!!!!!!!!! [position_size]가 계약 수량인지 position_qty인지 확인해야 함!!!!!!!!!!!!!!!!!!1")
         #print("일단 amount인걸로 추측됨. ")
         try:
@@ -292,17 +293,25 @@ class TPSLOrderCreator:
                     except Exception as e:
                         logger.error(f"contracts_amount 파싱 실패: {str(e)}")
                         fetched_contracts_amount = contracts_amount
-            # DCA일 때, TP 계산 로직
-            if is_DCA and not is_hedge:
-                position_avg_price = float(pos_dict.get(side, {}).get('avgPrice', 0.0)) or current_price
-                if position_avg_price == 0.0:
-                    current_price = await self.trading_service._get_current_price(symbol)
-                else:
-                    current_price = position_avg_price
+            # 신규 진입 또는 DCA 모두 TP 재계산 필요 여부 확인
+            should_recalculate_tp = not is_hedge and (is_DCA or not position.tp_prices)
+            if should_recalculate_tp:
+                price_for_tp = position.entry_price or current_price or 0.0
+                if pos_dict and side in pos_dict:
+                    avg_price = float(pos_dict.get(side, {}).get('avgPrice', 0.0)) or 0.0
+                    if avg_price > 0:
+                        price_for_tp = avg_price
+                if price_for_tp == 0.0:
+                    price_for_tp = current_price or await self.trading_service._get_current_price(symbol)
 
-                print(f"[DEBUG] DCA - TP 계산용 current_price: {current_price}")
-
-                tp_prices = await self.trading_service.calculate_tp_prices(user_id = user_id, current_price = current_price,settings= settings, side= side, symbol=symbol, atr_value=atr_value)
+                tp_prices = await self.trading_service.calculate_tp_prices(
+                    user_id=user_id,
+                    current_price=price_for_tp,
+                    settings=settings,
+                    side=side,
+                    symbol=symbol,
+                    atr_value=atr_value
+                )
                 print(f"[DEBUG] calculate_tp_prices 결과: {tp_prices}")
 
                 if tp_prices:
@@ -442,7 +451,7 @@ class TPSLOrderCreator:
                             price=tp_price,
                             leverage=position.leverage,
                             order_type="take_profit",
-                            trigger_price=tp_price,
+                            trigger_price=None,
                             direction=position.side
                         )
                         # 주문 성공
@@ -491,6 +500,31 @@ class TPSLOrderCreator:
                         if "You don't have any positions" in str(e):
                             position_not_exist = True
 
+                        # 에러 DB에 로깅
+                        try:
+                            from HYPERRSI.src.database.hyperrsi_error_db import log_hyperrsi_error
+                            await log_hyperrsi_error(
+                                error=e,
+                                error_type="TP_ORDER_CREATION_ERROR",
+                                user_id=user_id,
+                                telegram_id=int(user_id) if user_id.isdigit() else None,
+                                severity="ERROR",
+                                module="tp_sl_order_creator",
+                                function_name="_create_tp_sl_orders",
+                                symbol=symbol,
+                                side=position.side,
+                                order_type=f"take_profit_tp{i+1}",
+                                position_info={
+                                    "tp_level": i+1,
+                                    "tp_price": str(tp_price),
+                                    "tp_size": str(tp_size),
+                                    "contracts_amount": str(contracts_amount_value)
+                                },
+                                metadata={"error_message": error_msg}
+                            )
+                        except Exception as log_error:
+                            logger.error(f"에러 로깅 실패: {str(log_error)}")
+
                 # TP 주문 결과를 Redis에 업데이트
                 tp_data = {
                     "tp_prices": ",".join(str(p) for p in position.tp_prices),  # 모든 TP 가격 저장
@@ -510,7 +544,7 @@ class TPSLOrderCreator:
                         size=contracts_amount,
                         price=hedge_tp_price,
                         order_type="take_profit",
-                        trigger_price=hedge_tp_price,
+                        trigger_price=None,
                         direction=position.side
                     )
                     try:
@@ -653,6 +687,30 @@ class TPSLOrderCreator:
                         logger.error(f"SL 주문 생성 실패: {str(e)}")
                         await send_telegram_message((f"⚠️ 손절 주문 생성 실패\n"f"━━━━━━━━━━━━━━━\n"f"{error_msg}\n"f"가격: {position.sl_price:.2f}\n"f"수량: {position.position_qty}"),okx_uid=user_id,debug=True)
                         sl_order_id = None
+
+                        # 에러 DB에 로깅
+                        try:
+                            from HYPERRSI.src.database.hyperrsi_error_db import log_hyperrsi_error
+                            await log_hyperrsi_error(
+                                error=e,
+                                error_type="SL_ORDER_CREATION_ERROR",
+                                user_id=user_id,
+                                telegram_id=int(user_id) if user_id.isdigit() else None,
+                                severity="ERROR",
+                                module="tp_sl_order_creator",
+                                function_name="_create_tp_sl_orders",
+                                symbol=symbol,
+                                side=position.side,
+                                order_type="stop_loss",
+                                position_info={
+                                    "sl_price": str(position.sl_price),
+                                    "contracts_amount": str(sl_contracts_amount),
+                                    "position_qty": str(position.position_qty)
+                                },
+                                metadata={"error_message": error_msg}
+                            )
+                        except Exception as log_error:
+                            logger.error(f"에러 로깅 실패: {str(log_error)}")
             if is_hedge and (hedge_sl_price is not None):
                 dual_side_settings_key = f"user:{user_id}:dual_side"
                 dual_side_settings = await redis.hgetall(dual_side_settings_key)

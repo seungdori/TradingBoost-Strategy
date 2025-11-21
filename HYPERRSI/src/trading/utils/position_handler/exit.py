@@ -7,7 +7,7 @@ Includes position closing, stats update, and Redis cleanup.
 
 import traceback
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any
 
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.logger import setup_error_logger
@@ -214,7 +214,9 @@ async def _update_stats_on_close(
         # Calculate PnL
         size = current_position.size
         entry_price = current_position.entry_price
-        current_price = current_position.mark_price or current_position.entry_price
+
+        # Use mark_price from Position object, or fallback to entry_price
+        current_price = current_position.mark_price if current_position.mark_price is not None else entry_price
 
         if side == "long":
             pnl = size * (current_price - float(entry_price))

@@ -174,7 +174,7 @@ async def update_contract_specifications(user_id: str):
                         specs_dict[instrument['instId']] = {
                             'contractSize': safe_float(instrument.get('ctVal'), 1.0),
                             'tickSize': safe_float(instrument.get('tickSz'), 0.01),
-                            'minSize': safe_float(instrument.get('minSz'), 1.0),
+                            'minSize': safe_float(instrument.get('minSz'), 0.01),
                             'ctType': instrument.get('ctType', ''),
                             'quoteCcy': instrument.get('quoteCcy', ''),
                             'baseCcy': instrument.get('baseCcy', ''),
@@ -1406,3 +1406,148 @@ async def get_monthly_volume_from_orders(
                 raise HTTPException(status_code=400, detail=f"거래소 오류: {str(e)}")
             else:
                 raise HTTPException(status_code=500, detail="거래량 조회 중 오류가 발생했습니다")
+
+
+@router.delete(
+    "/margin/unblock",
+    summary="마진 차단 해제",
+    description="""
+# 마진 차단 해제 API
+
+자금 부족으로 인해 차단된 심볼의 거래를 수동으로 해제합니다.
+
+## 쿼리 파라미터
+
+- **user_id** (string, required): 사용자 ID
+- **symbol** (string, required): 심볼 (예: "ETH-USDT-SWAP")
+
+## 동작 방식
+
+1. Redis에서 차단 키 확인 (`margin_block:{user_id}:{symbol}`)
+2. 차단 키가 존재하면 삭제
+3. 재시도 카운트 키도 함께 삭제 (`margin_retry:{user_id}:{symbol}`)
+4. 삭제 결과 반환
+
+## 자동 차단 해제 조건
+
+현재는 **TTL 만료(10분)만** 자동 해제 조건입니다:
+- 차단 설정 시 600초(10분) TTL로 Redis 키 생성
+- 10분 후 자동으로 키가 만료되어 차단 해제
+- 잔고 증가나 성공적인 거래는 자동 해제 조건이 아님
+
+## 사용 시나리오
+
+- 🔓 잔고를 추가 입금한 후 즉시 거래 재개
+- 🔄 시스템 오류로 인한 잘못된 차단 해제
+- ⚡ 긴급한 거래가 필요한 경우 10분 대기 없이 즉시 해제
+
+## 예시 URL
+
+```
+DELETE /account/margin/unblock?user_id=586156710277369942&symbol=ETH-USDT-SWAP
+```
+""",
+    responses={
+        200: {
+            "description": "차단 해제 성공",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "unblocked": {
+                            "summary": "차단 해제됨",
+                            "value": {
+                                "success": True,
+                                "message": "ETH-USDT-SWAP 심볼의 마진 차단이 해제되었습니다",
+                                "user_id": "586156710277369942",
+                                "symbol": "ETH-USDT-SWAP",
+                                "keys_deleted": 2
+                            }
+                        },
+                        "not_blocked": {
+                            "summary": "차단되지 않음",
+                            "value": {
+                                "success": True,
+                                "message": "ETH-USDT-SWAP 심볼은 차단되지 않았습니다",
+                                "user_id": "586156710277369942",
+                                "symbol": "ETH-USDT-SWAP",
+                                "keys_deleted": 0
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "서버 오류",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "server_error": {
+                            "summary": "Redis 연결 오류",
+                            "value": {
+                                "detail": "차단 해제 중 오류가 발생했습니다"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
+async def unblock_margin(
+    user_id: str = Query(..., description="사용자 ID"),
+    symbol: str = Query(..., description="심볼 (예: ETH-USDT-SWAP)")
+):
+    """
+    # 마진 차단 수동 해제 API
+
+    자금 부족으로 차단된 심볼의 거래를 즉시 해제합니다.
+
+    - **user_id**: 사용자 식별자
+    - **symbol**: 차단 해제할 심볼
+    - **반환 정보**:
+        - `success`: 성공 여부
+        - `message`: 결과 메시지
+        - `keys_deleted`: 삭제된 Redis 키 개수
+    """
+    try:
+        redis = await get_redis_client()
+
+        # 차단 관련 키들
+        block_key = f"margin_block:{user_id}:{symbol}"
+        retry_key = f"margin_retry:{user_id}:{symbol}"
+
+        # 키 삭제
+        deleted_count = 0
+
+        # 차단 키 확인 및 삭제
+        if await redis.exists(block_key):
+            await redis.delete(block_key)
+            deleted_count += 1
+            logger.info(f"[{user_id}] ✅ 마진 차단 키 삭제: {block_key}")
+
+        # 재시도 카운트 키 확인 및 삭제
+        if await redis.exists(retry_key):
+            await redis.delete(retry_key)
+            deleted_count += 1
+            logger.info(f"[{user_id}] ✅ 재시도 카운트 키 삭제: {retry_key}")
+
+        # 결과 메시지
+        if deleted_count > 0:
+            message = f"{symbol} 심볼의 마진 차단이 해제되었습니다"
+            logger.info(f"[{user_id}] 🔓 {message} (삭제된 키: {deleted_count}개)")
+        else:
+            message = f"{symbol} 심볼은 차단되지 않았습니다"
+            logger.info(f"[{user_id}] ℹ️ {message}")
+
+        return {
+            "success": True,
+            "message": message,
+            "user_id": user_id,
+            "symbol": symbol,
+            "keys_deleted": deleted_count
+        }
+
+    except Exception as e:
+        logger.error(f"[{user_id}] ❌ 차단 해제 실패 - symbol: {symbol}, error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="차단 해제 중 오류가 발생했습니다")

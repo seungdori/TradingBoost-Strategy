@@ -116,13 +116,13 @@ class MarketDataService:
             rsi_oversold = rsi_settings['rsi_oversold']
             rsi_overbought = rsi_settings['rsi_overbought']
 
-            # 디버깅: RSI 설정 로그
-            logger.info(f"🔍 RSI 신호 체크:")
-            logger.info(f"  - entry_option: '{entry_option}'")
-            logger.info(f"  - rsi_oversold: {rsi_oversold}")
-            logger.info(f"  - rsi_overbought: {rsi_overbought}")
-            logger.info(f"  - previous_rsi: {previous_rsi:.3f}")
-            logger.info(f"  - current_rsi: {current_rsi:.3f}")
+            ## 디버깅: RSI 설정 로그
+            #logger.info(f"🔍 RSI 신호 체크:")
+            #logger.info(f"  - entry_option: '{entry_option}'")
+            #logger.info(f"  - rsi_oversold: {rsi_oversold}")
+            #logger.info(f"  - rsi_overbought: {rsi_overbought}")
+            #logger.info(f"  - previous_rsi: {previous_rsi:.3f}")
+            #logger.info(f"  - current_rsi: {current_rsi:.3f}")
 
             is_oversold = False
             is_overbought = False
@@ -159,16 +159,12 @@ class MarketDataService:
                 is_overbought = current_rsi > rsi_overbought
 
             # 디버깅: 결과 로그
-            logger.info(f"🎯 RSI 신호 결과:")
-            logger.info(f"  - is_oversold: {is_oversold}")
-            logger.info(f"  - is_overbought: {is_overbought}")
+            logger.info(f"🎯 RSI 신호 결과: is_oversold: {is_oversold}, is_overbought: {is_overbought}")
             if entry_option == '돌파':
-                logger.info(f"  - '돌파' 조건:")
-                logger.info(f"    롱(oversold): prev({previous_rsi:.3f}) > {rsi_oversold} and curr({current_rsi:.3f}) <= {rsi_oversold}")
+                logger.info(f"  - '돌파' 조건: 롱(oversold): prev({previous_rsi:.3f}) > {rsi_oversold} and curr({current_rsi:.3f}) <= {rsi_oversold}")
                 logger.info(f"    숏(overbought): prev({previous_rsi:.3f}) < {rsi_overbought} and curr({current_rsi:.3f}) >= {rsi_overbought}")
             elif entry_option == '변곡돌파':
-                logger.info(f"  - '변곡돌파' 조건:")
-                logger.info(f"    롱(oversold): curr({current_rsi:.3f}) < {rsi_oversold} and prev({previous_rsi:.3f}) >= {rsi_oversold}")
+                logger.info(f"  - '변곡돌파': 롱(oversold): curr({current_rsi:.3f}) < {rsi_oversold} and prev({previous_rsi:.3f}) >= {rsi_oversold}")
                 logger.info(f"    숏(overbought): curr({current_rsi:.3f}) > {rsi_overbought} and prev({previous_rsi:.3f}) <= {rsi_overbought}")
 
             return {
@@ -262,13 +258,19 @@ class MarketDataService:
             if size_usdt is None or size_usdt <= 0:
                 contracts_amount = 0
             else:
+                import math
                 contract_size = float(contract_size)
                 size_usdt = float(size_usdt)
 
                 contracts_amount = (size_usdt * leverage) / (contract_size * current_price)
-                contracts_amount = max(min_size, safe_float(contracts_amount))
-                # minSize 단위로 내림 처리 (이중 반올림 방지)
-                contracts_amount = (contracts_amount // min_size) * min_size
+
+                # minSize 단위로 내림 처리 (math.floor 사용)
+                contracts_amount = math.floor(contracts_amount / min_size) * min_size
+
+                # 최소 수량 미만이면 최소 수량으로 설정
+                if contracts_amount < min_size:
+                    contracts_amount = min_size
+
                 # 소수점 정밀도 유지 (최대 8자리)
                 contracts_amount = round(contracts_amount, 8)
 

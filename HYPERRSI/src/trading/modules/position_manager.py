@@ -26,6 +26,7 @@ from shared.utils import (
     round_to_qty,
     safe_float,
 )
+from shared.utils.symbol_helpers import normalize_symbol
 
 logger = get_logger(__name__)
 
@@ -106,8 +107,7 @@ class PositionManager:
             try:
                 async with asyncio.timeout(20) as _:  # 타임아웃을 20초로 증가
                     try:
-                        positions = await self.trading_service.okx_fetcher.fetch_okx_position(user_id, symbol, debug_entry_number=1)
-                        print(f"[{user_id}] positions: {str(positions)[:50]}...")
+                        positions = await self.trading_service.okx_fetcher.fetch_okx_position(user_id, symbol, side=pos_side, debug_entry_number=1)
                     except Exception as e:
                         logger.error(f"거래소 포지션 조회 실패: {str(e)}")
                         if attempt < max_retries - 1:
@@ -122,8 +122,21 @@ class PositionManager:
                     # positions는 {side: {...}} 형식이므로 pos_side를 직접 확인
                     if pos_side in positions:
                         pos_data = positions[pos_side]
-                        # symbol 일치 여부 확인
-                        if pos_data.get("symbol") == symbol:
+
+                        # symbol 일치 여부 확인 (두 가지 형식 모두 체크)
+                        # pos_data["symbol"]은 "ETH/USDT:USDT" 또는 "ETH-USDT-SWAP" 가능
+                        pos_symbol = pos_data.get("symbol", "")
+
+                        # 정규화해서 비교 (상단에서 import 완료)
+                        try:
+                            normalized_input = normalize_symbol(symbol, target_format="ccxt")
+                            normalized_pos = normalize_symbol(pos_symbol, target_format="ccxt")
+                            symbol_match = (normalized_input == normalized_pos)
+                        except Exception:
+                            # 정규화 실패 시 직접 비교
+                            symbol_match = (pos_symbol == symbol)
+
+                        if symbol_match:
                             position = Position(
                                 symbol=pos_data["symbol"],
                                 side=pos_data["side"],
@@ -235,6 +248,11 @@ class PositionManager:
         print(f"direction: {direction}, size: {size}, leverage: {leverage}, size : {size}")
         contracts_amount = size
         position_qty = await self.contract_size_to_qty(user_id, symbol, contracts_amount)
+
+        # 이번 진입 수량 보관 (텔레그램 메시지용)
+        entry_size = size
+        entry_qty = position_qty
+
         tp_data: List[Any] = []
         try:
             if direction not in ['long', 'short']:
@@ -283,7 +301,13 @@ class PositionManager:
             # DCA시 기존 tp/sl주문 삭제
             if is_DCA:
                 try:
-                    await self.trading_service.order_manager.cancel_all_open_orders(self.trading_service.client, symbol, user_id, side=direction)
+                    # direction을 order side로 변환 (long -> sell, short -> buy)
+                    # TP/SL은 포지션과 반대 방향으로 걸림
+                    cancel_side = "sell" if direction == "long" else "buy"
+                    await self.trading_service.order_manager.cancel_all_open_orders(
+                        self.trading_service.client, symbol, user_id, side=cancel_side
+                    )
+                    logger.info(f"✅ DCA 진입 전 기존 TP/SL 주문 취소 완료: user={user_id}, symbol={symbol}, side={cancel_side}")
                 except Exception as e:
                     logger.error(f"기존 TP/SL 삭제 실패: {str(e)}")
                     traceback.print_exc()
@@ -332,12 +356,13 @@ class PositionManager:
                 "posSide": posSide,
             }
 
-            # 주문 전송
+            # 주문 전송 (DCA일 때는 추가 진입 수량만 주문, 아닐 때는 전체 수량)
+            order_size = entry_size  # 이번 진입 수량
             order_state = await self.trading_service.order_manager._try_send_order(
                 user_id=user_id,
                 symbol=symbol,
                 side=order_side,  # "buy" or "sell"
-                size=position_qty,
+                size=order_size,
                 order_type="market",
                 direction=direction,  # long or short - correct parameter name
                 leverage=leverage
@@ -349,11 +374,23 @@ class PositionManager:
                 raise ValueError(f"주문 생성 실패: {error_detail}")
 
             # Position 객체 생성
+            filled_contracts = safe_float(order_state.filled_size)
+            if filled_contracts == 0.0:
+                filled_contracts = safe_float(order_state.size) or entry_size
+            filled_position_qty = await self.contract_size_to_qty(user_id, symbol, filled_contracts)
+
+            # DCA일 때는 총 포지션 수량을 계산 (기존 + 이번 진입)
+            # TP/SL은 총 포지션에 대해 걸어야 함
+            if is_DCA and existing:
+                total_position_size = safe_float(existing.size) + filled_contracts
+            else:
+                total_position_size = filled_contracts
+
             position = Position(
                 symbol=symbol,
                 side=direction,
-                size=contracts_amount,
-                contracts_amount=contracts_amount,
+                size=total_position_size,  # 총 포지션 수량
+                contracts_amount=total_position_size,
                 entry_price=safe_float(order_state.avg_fill_price),
                 leverage=leverage,
                 order_id=order_state.order_id,
@@ -361,15 +398,16 @@ class PositionManager:
                 sl_price=None,
                 tp_order_ids=[],
                 tp_prices=[],
-                last_filled_price=safe_float(order_state.avg_fill_price)  # 체결 가격 설정
+                last_filled_price=safe_float(order_state.avg_fill_price),  # 체결 가격 설정
+                position_qty=filled_position_qty
             )
 
-            # TP/SL 주문 생성
+            # TP/SL 주문 생성 (총 포지션 수량 사용)
             await self.trading_service.tp_sl_creator._create_tp_sl_orders(
                 user_id=user_id,
                 symbol=symbol,
                 position=position,
-                contracts_amount=contracts_amount,
+                contracts_amount=total_position_size,  # 총 포지션 수량
                 side=direction,
                 is_DCA=is_DCA,
                 atr_value=None,
@@ -388,55 +426,69 @@ class PositionManager:
                 user_id=str(user_id),
                 symbol=symbol,
                 side=direction,
-                size=contracts_amount,
+                size=filled_contracts,
                 entry_price=safe_float(order_state.avg_fill_price),
                 leverage=leverage,
                 order_id=order_state.order_id or "",
                 last_filled_price=safe_float(order_state.avg_fill_price)
             )
 
-            # 텔레그램 포지션 오픈 성공 알림
-            try:
-                # Redis에서 최신 TP/SL 정보 조회
-                position_key = f"user:{user_id}:position:{symbol}:{direction}"
-                position_data = await redis.hgetall(position_key)
+            # 텔레그램 포지션 오픈 성공 알림 (백그라운드 태스크로 실행)
+            async def _send_position_open_notification():
+                """포지션 오픈 알림을 전송하는 백그라운드 태스크"""
+                try:
+                    logger.info(f"📤 [{user_id}] 포지션 오픈 알림 전송 시작...")
 
-                tp_prices_str = position_data.get("tp_prices", "")
-                sl_price = position_data.get("sl_price", "N/A")
+                    # Redis에서 최신 TP/SL 정보 조회
+                    position_key = f"user:{user_id}:position:{symbol}:{direction}"
+                    position_data = await redis.hgetall(position_key)
+                    logger.debug(f"📋 [{user_id}] Redis position_data keys: {list(position_data.keys())}")
 
-                # TP 가격 포맷팅
-                if tp_prices_str:
-                    tp_prices = [float(p) for p in tp_prices_str.split(",") if p]
-                    tp_text = "\n".join([f"  TP{i+1}: {price:.2f}" for i, price in enumerate(tp_prices)])
-                else:
-                    tp_text = "  설정 안 됨"
+                    tp_prices_str = position_data.get("tp_prices", "")
+                    sl_price = position_data.get("sl_price", "N/A")
+                    logger.debug(f"📊 [{user_id}] TP prices string: {tp_prices_str}, SL price: {sl_price}")
 
-                # SL 가격 포맷팅
-                sl_text = f"{float(sl_price):.2f}" if sl_price != "N/A" else "설정 안 됨"
+                    # TP 가격 포맷팅
+                    if tp_prices_str:
+                        tp_prices = [float(p) for p in tp_prices_str.split(",") if p]
+                        tp_text = "\n".join([f"  TP{i+1}: {price:.2f}" for i, price in enumerate(tp_prices)])
+                        logger.debug(f"💰 [{user_id}] TP formatted: {tp_text}")
+                    else:
+                        tp_text = "  설정 안 됨"
+                        logger.warning(f"⚠️ [{user_id}] TP prices not set")
 
-                direction_emoji = "🟢" if direction == "long" else "🔴"
-                telegram_content = (
-                    f"{direction_emoji} 포지션 오픈 완료\n"
-                    f"━━━━━━━━━━━━━━━\n"
-                    f"심볼: {symbol}\n"
-                    f"방향: {direction.upper()}\n"
-                    f"수량: {contracts_amount}\n"
-                    f"진입가: {safe_float(order_state.avg_fill_price):.2f}\n"
-                    f"레버리지: {leverage}x\n"
-                    f"━━━━━━━━━━━━━━━\n"
-                    f"익절(TP):\n{tp_text}\n"
-                    f"손절(SL): {sl_text}\n"
-                    f"━━━━━━━━━━━━━━━\n"
-                    f"주문ID: {order_state.order_id}"
-                )
+                    # SL 가격 포맷팅
+                    sl_text = f"{float(sl_price):.2f}" if sl_price != "N/A" else "설정 안 됨"
+                    logger.debug(f"🛡️ [{user_id}] SL formatted: {sl_text}")
 
-                await send_telegram_message(
-                    message=telegram_content,
-                    okx_uid=str(user_id)
-                )
-                logger.info(f"포지션 오픈 알림 전송 완료: user={user_id}, symbol={symbol}, direction={direction}")
-            except Exception as e:
-                logger.error(f"텔레그램 포지션 오픈 알림 전송 실패: {str(e)}")
+                    direction_emoji = "🟢" if direction == "long" else "🔴"
+                    telegram_content = (
+                        f"{direction_emoji} 포지션 오픈 완료\n"
+                        f"━━━━━━━━━━━━━━━\n"
+                        f"심볼: {symbol}\n"
+                        f"방향: {direction.upper()}\n"
+                        f"수량: {entry_qty:.6f} ({entry_size:.2f} 계약)\n"
+                        f"진입가: {safe_float(order_state.avg_fill_price):.2f}\n"
+                        f"레버리지: {leverage}x\n"
+                        f"━━━━━━━━━━━━━━━\n"
+                        f"익절(TP):\n{tp_text}\n"
+                        f"손절(SL): {sl_text}\n"
+                        f"━━━━━━━━━━━━━━━\n"
+                        f"주문ID: {order_state.order_id}"
+                    )
+                    logger.debug(f"📝 [{user_id}] Telegram message prepared (length: {len(telegram_content)})")
+
+                    await send_telegram_message(
+                        message=telegram_content,
+                        okx_uid=str(user_id)
+                    )
+                    logger.info(f"✅ 포지션 오픈 알림 전송 완료: user={user_id}, symbol={symbol}, direction={direction}")
+                except Exception as e:
+                    logger.error(f"❌ [{user_id}] 텔레그램 포지션 오픈 알림 전송 실패: {str(e)}")
+                    traceback.print_exc()
+
+            # 백그라운드에서 알림 전송 (메인 로직 블로킹 방지)
+            asyncio.create_task(_send_position_open_notification())
 
             return position
 
@@ -493,24 +545,17 @@ class PositionManager:
 
             # 3) 청산할 수량 결정
             if size is None:
-                size = position.size  # 전체 청산
+                size = position.size  # 전체 청산 (contracts)
             else:
-                size = min(size, position.size)  # 부분 청산
+                size = min(size, position.size)  # 부분 청산 (contracts)
 
-            # 4) 계약 수량을 실제 거래 수량으로 변환
-            close_qty = await self.contract_size_to_qty(user_id, symbol, size)
+            # 4) 사용자 알림용 실제 수량 계산 (주문 전송은 contracts 기준)
+            close_qty_display = await self.contract_size_to_qty(user_id, symbol, size)
+            close_qty_display = round(close_qty_display, 8)
 
-            # 최소 주문 수량 반올림
-            minimum_qty = await get_minimum_qty(symbol)
-            perpetual_instruments = await get_perpetual_instruments()
-            if perpetual_instruments is None:
-                raise ValueError("Failed to get perpetual instruments")
-            lot_sizes = get_lot_sizes(perpetual_instruments)
-            close_qty = float(await round_to_qty(symbol, close_qty, lot_sizes))
-
-            if close_qty < minimum_qty:
-                logger.error(f"[{user_id}] 청산 수량이 최소 주문 수량보다 작습니다: {close_qty} < {minimum_qty}")
-                return False
+            # 청산 주문(reduceOnly=True)은 최소 주문 수량 제한을 받지 않음
+            # 포지션 전체를 청산하는 경우 거래소가 자동으로 처리
+            logger.info(f"[{user_id}] 청산 수량: {close_qty_display} (계약: {size})")
 
             # 5) 청산 주문 생성
             order_side = "sell" if side == "long" else "buy"
@@ -523,14 +568,14 @@ class PositionManager:
 
             logger.info(
                 f"[{user_id}] 청산 주문 생성 - symbol={symbol}, side={order_side}, "
-                f"qty={close_qty}, pos_side={side}"
+                f"contracts={size}, pos_side={side}"
             )
 
             order_state = await self.trading_service.order_manager._try_send_order(
                 user_id=user_id,
                 symbol=symbol,
                 side=order_side,
-                size=close_qty,
+                size=size,
                 order_type="market",
                 direction=side  # long or short - correct parameter name
             )
@@ -569,7 +614,7 @@ class PositionManager:
                     f"사용자: {user_id}\n"
                     f"심볼: {symbol}\n"
                     f"방향: {side}\n"
-                    f"청산 수량: {size}\n"
+                    f"청산 수량: {close_qty_display} ({size:.2f} 계약)\n"
                     f"청산 가격: {order_state.avg_fill_price}\n"
                     f"사유: {reason}"
                 )
@@ -586,5 +631,3 @@ class PositionManager:
         except Exception as e:
             logger.error(f"Position close failed - user={user_id}, symbol={symbol}, error={str(e)}")
             raise
-
-

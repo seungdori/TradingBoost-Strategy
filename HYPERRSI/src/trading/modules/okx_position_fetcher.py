@@ -48,7 +48,6 @@ class OKXPositionFetcher:
         """
         try:
             redis = await get_redis_client()
-            api_key_format = f"user:{user_id}:api:keys"
             api_keys = await redis.hgetall(f"user:{user_id}:api:keys")
             if not api_keys:
                 raise HTTPException(status_code=404, detail="API keys not found in Redis")
@@ -95,7 +94,7 @@ class OKXPositionFetcher:
         (포지션이 없으면 Redis에서 삭제 후, 빈 dict 반환)
         Args:
             user_id (str): 사용자 ID
-            symbol (str): 심볼 (예: 'BTC/USDT:USDT')
+            symbol (str): 심볼 (예: 'BTC/USDT:USDT' 또는 'BTC-USDT-SWAP')
 
         Returns:
             dict: 포지션 정보. 포지션이 없으면 빈 딕셔너리 반환
@@ -105,6 +104,15 @@ class OKXPositionFetcher:
         exchange = None
         fail_to_fetch_position = False
         fetched_redis_position = False
+
+        # 심볼 형식 정규화 (공용 함수 사용)
+        from shared.utils.symbol_helpers import normalize_symbol as norm_sym
+        try:
+            normalized_symbol = norm_sym(symbol, target_format="ccxt")
+        except Exception as e:
+            logger.warning(f"심볼 정규화 실패, 원본 사용: {symbol}, 에러: {e}")
+            normalized_symbol = symbol
+
         try:
             api_keys = await self.get_user_api_keys(user_id)
             # ✅ OrderWrapper 사용 (ORDER_BACKEND 자동 감지)
@@ -121,7 +129,7 @@ class OKXPositionFetcher:
 
             # 1) 실제 포지션 가져오기
             try:
-                positions = await self.fetch_with_retry(exchange, symbol)
+                positions = await self.fetch_with_retry(exchange, normalized_symbol)
                 if exchange is not None:
                     await exchange.close()
             except ccxt.OnMaintenance as e:
@@ -184,7 +192,9 @@ class OKXPositionFetcher:
             result = {}
             active_positions = [pos for pos in positions if float(pos.get('info', {}).get('pos', 0)) > 0]
             for pos in active_positions:
-                if pos['info']['instId'] != symbol:
+                # 심볼 매칭 시 정규화된 심볼 사용
+                pos_symbol = pos['info']['instId']
+                if pos_symbol != normalized_symbol and pos_symbol != symbol:
                     continue
                 side = (pos.get('info', {}).get('posSide') or '').lower()
                 if side == 'net':
@@ -208,27 +218,24 @@ class OKXPositionFetcher:
                 try:
                     if contracts > 0:
                         position_key = f"user:{user_id}:position:{symbol}:{side}"
-                        if dca_count == "1":
+                        existing_data = await redis.hgetall(position_key)
+                        previous_contracts = safe_float(existing_data.get('contracts_amount')) if existing_data.get('contracts_amount') else None
+                        previous_last_entry = safe_float(existing_data.get('last_entry_size')) if existing_data.get('last_entry_size') else None
+
+                        dca_count_int = int(dca_count) if dca_count else 0
+                        if dca_count_int <= 1:
                             last_entry_size = contracts_amount
                         else:
-                            # DCA 진입이 2회 이상인 경우, 가장 최근 진입 크기 계산
-                            # 1) Redis에서 이전 포지션 크기 가져오기
-                            previous_contracts = await redis.hget(position_key, 'contracts_amount')
-                            if previous_contracts:
-                                previous_contracts = safe_float(previous_contracts)
-                                # 현재 포지션에서 이전 포지션을 빼서 최근 추가된 물량 계산
-                                last_entry_size = contracts_amount - previous_contracts
-                                if last_entry_size <= 0:
-                                    # 음수이거나 0인 경우, DCA 배수로 추정 계산
-                                    previous_last_entry = await redis.hget(position_key, 'last_entry_size')
-                                    if previous_last_entry:
-                                        scale = 0.5  # 기본 DCA 배수
-                                        last_entry_size = safe_float(previous_last_entry) * scale
-                                    else:
-                                        # 데이터가 없으면 현재 포지션을 DCA 횟수로 나눈 평균값 사용
-                                        last_entry_size = contracts_amount / max(safe_float(dca_count or 1), 1)
+                            delta = 0.0
+                            if previous_contracts is not None:
+                                delta = contracts_amount - previous_contracts
+                            if delta > 0:
+                                last_entry_size = delta
+                            elif previous_last_entry and previous_last_entry > 0:
+                                # 이전 스냅샷이라도 유효하면 그대로 유지
+                                last_entry_size = previous_last_entry
                             else:
-                                # 이전 데이터가 없으면 entry_multiplier를 사용해서 역산으로 계산
+                                # 이전 정보가 없으면 entry_multiplier 기반 추정
                                 if user_settings is None:
                                     settings_str = await redis.get(f"user:{user_id}:settings")
                                     if settings_str:
@@ -239,27 +246,24 @@ class OKXPositionFetcher:
                                     else:
                                         user_settings = {}
                                 entry_multiplier = safe_float(user_settings.get('entry_multiplier', 0.5))
-                                dca_count_int = int(dca_count) if dca_count else 1
-
-                                # n회차의 last_entry_size = 초기진입 * entry_multiplier * (n-1)
-                                # 총 포지션 = 초기진입 * (1 + entry_multiplier * (n-1)*n/2)
-
                                 arithmetic_sum = 1 + entry_multiplier * (dca_count_int - 1) * dca_count_int / 2
-                                initial_entry = contracts_amount / arithmetic_sum
-
-                                # n회차의 진입 크기 = 초기진입 * entry_multiplier * (n-1)
+                                initial_entry = contracts_amount / arithmetic_sum if arithmetic_sum else contracts_amount
                                 if dca_count_int == 1:
                                     last_entry_size = initial_entry
-                                elif dca_count_int > 1:
-                                    last_entry_size = initial_entry * entry_multiplier * (dca_count_int - 1)
                                 else:
-                                    last_entry_size = 0
+                                    last_entry_size = initial_entry * entry_multiplier * (dca_count_int - 1)
 
                         leverage = safe_float(pos['leverage'])
                         # 기존 tp_data와 sl_data 보존
-                        existing_data = await redis.hgetall(position_key)
                         existing_tp_data = existing_data.get('tp_data')
                         existing_sl_data = existing_data.get('sl_data')
+
+                        # 기존 last_entry_size가 있고 새로 계산된 값이 0 이하라면 기존 값을 유지
+                        if (last_entry_size is None or last_entry_size <= 0) and existing_data.get('last_entry_size'):
+                            try:
+                                last_entry_size = safe_float(existing_data.get('last_entry_size'))
+                            except Exception:
+                                last_entry_size = 0.0
 
                         mapping = {
                             'symbol': pos['symbol'],

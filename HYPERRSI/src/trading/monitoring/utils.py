@@ -61,10 +61,13 @@ async def get_user_settings(user_id: str) -> dict:
     사용자 설정을 가져옵니다.
 
     Note: 하위 호환성을 위한 래퍼 함수입니다.
-    shared.utils.get_user_settings를 사용하세요.
+    shared.utils.redis_utils.get_user_settings를 사용하세요.
     """
-    from shared.utils import get_user_settings as _get_user_settings
-    result = await _get_user_settings(user_id)
+    from shared.database.redis_helper import get_redis_client
+    from shared.utils.redis_utils import get_user_settings as _get_user_settings
+
+    redis_client = await get_redis_client()
+    result = await _get_user_settings(redis_client, user_id)
     return dict(result) if result else {}
 
 

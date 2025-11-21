@@ -92,6 +92,21 @@ async def cancel_order(
 
     except Exception as e:
         logger.error(f"Failed to cancel order {order_id}: {str(e)}")
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import async_log_error_to_db
+        await async_log_error_to_db(
+            error=e,
+            user_id=user_id,
+            severity="ERROR",
+            symbol=symbol,
+            side=side,
+            order_type=order_type,
+            metadata={
+                "order_id": order_id,
+                "algo_type": algo_type,
+                "component": "cancel_order"
+            }
+        )
         raise
     finally:
         if exchange is not None:
@@ -379,6 +394,12 @@ async def try_send_order(
         )
 
     # ===== 🔍 디버깅: 실제 계좌 잔고 조회 =====
+    # 잔고 정보를 저장할 변수 초기화
+    free_usdt = 0.0
+    total_usdt = 0.0
+    required_margin = 0.0
+    current_price = 0.0
+
     try:
         # Exchange 객체 준비 (잔고 조회용)
         need_close_for_balance = False
@@ -420,39 +441,96 @@ async def try_send_order(
     # 자금 부족 차단 상태 확인
     is_blocked: bool = await check_margin_block(user_id, symbol)
     if is_blocked:
-        # 재시도 횟수 확인
-        current_retry_count = await get_margin_retry_count(user_id, symbol)
-        block_msg: str = f"⛔️ 자금 부족으로 인해 현재 {symbol} 거래가 차단되어 있습니다. (재시도: {current_retry_count}/{max_retries})"
-        await send_telegram_message(block_msg, user_id, debug=True)
-        logger.warning(f"[{user_id}] {block_msg}")
-        now: datetime.datetime = datetime.datetime.now()
-        return OrderStatus(
-            order_id="margin_blocked",
-            symbol=symbol,
-            side=side,
-            size=size,
-            filled_size=0.0,
-            status='rejected',
-            avg_fill_price=price or 0.0,
-            create_time=now,
-            update_time=now,
-            order_type=order_type,
-            posSide=direction or "net",
-        )
+        # 실제 잔고 확인 - 충분하면 차단 자동 해제
+        shortage = required_margin - free_usdt if required_margin > free_usdt else 0.0
+
+        if shortage <= 0.0:
+            # 🎉 잔고가 충분함 - 차단 자동 해제
+            logger.info(f"[{user_id}] 💰 잔고가 충분하여 {symbol} 차단을 자동 해제합니다.")
+            logger.info(f"[{user_id}]   사용 가능: {free_usdt:.2f} USDT >= 필요 마진: {required_margin:.2f} USDT")
+
+            # Redis에서 차단 관련 키 모두 삭제
+            redis = await get_redis_client()
+            block_key = f"margin_block:{user_id}:{symbol}"
+            retry_key = f"margin_retry_count:{user_id}:{symbol}"
+
+            deleted_count = 0
+            if await redis.exists(block_key):
+                await redis.delete(block_key)
+                deleted_count += 1
+            if await redis.exists(retry_key):
+                await redis.delete(retry_key)
+                deleted_count += 1
+
+            unblock_msg = (
+                f"🔓 {symbol} 차단이 자동 해제되었습니다!\n\n"
+                f"💰 자금 상태:\n"
+                f"  • 사용 가능: {free_usdt:.2f} USDT\n"
+                f"  • 필요 마진: {required_margin:.2f} USDT\n"
+                f"  • 여유 자금: {free_usdt - required_margin:.2f} USDT\n\n"
+                f"✅ 정상 거래를 계속 진행합니다."
+            )
+            await send_telegram_message(unblock_msg, user_id, debug=True)
+            logger.info(f"[{user_id}] 🔓 차단 해제 완료 (삭제된 키: {deleted_count}개)")
+
+            # 차단이 해제되었으므로 정상 진행
+        else:
+            # 여전히 자금 부족 - 차단 유지
+            current_retry_count = await get_margin_retry_count(user_id, symbol)
+            block_msg: str = (
+                f"⛔️ 자금 부족으로 인해 현재 {symbol} 거래가 차단되어 있습니다.\n"
+                f"(재시도: {current_retry_count}/{max_retries})\n\n"
+                f"💰 자금 상태:\n"
+                f"  • 사용 가능: {free_usdt:.2f} USDT\n"
+                f"  • 필요 마진: {required_margin:.2f} USDT\n"
+                f"  • 부족 금액: {shortage:.2f} USDT"
+            )
+            await send_telegram_message(block_msg, user_id, debug=True)
+            logger.warning(f"[{user_id}] {block_msg}")
+            now: datetime.datetime = datetime.datetime.now()
+            return OrderStatus(
+                order_id="margin_blocked",
+                symbol=symbol,
+                side=side,
+                size=size,
+                filled_size=0.0,
+                status='rejected',
+                avg_fill_price=price or 0.0,
+                create_time=now,
+                update_time=now,
+                order_type=order_type,
+                posSide=direction or "net",
+            )
 
     # Redis에서 현재 재시도 횟수 가져오기
     current_retry_count: int = await get_margin_retry_count(user_id, symbol)
     
     # 재시도 횟수 확인
     if current_retry_count >= max_retries:
-        error_msg = f"⛔️ 최대 재시도 횟수({max_retries}회)를 초과했습니다. 더 이상 주문을 시도하지 않습니다."
+        # 부족한 자금 계산
+        shortage = required_margin - free_usdt if required_margin > free_usdt else 0.0
+
+        # 상세한 자금 정보와 함께 에러 메시지 생성
+        error_msg = (
+            f"⛔️ 최대 재시도 횟수({max_retries}회)를 초과했습니다.\n"
+            f"더 이상 주문을 시도하지 않습니다.\n\n"
+            f"💰 자금 상태:\n"
+            f"  • 사용 가능 자금: {free_usdt:.2f} USDT\n"
+            f"  • 필요한 마진: {required_margin:.2f} USDT\n"
+            f"  • 부족한 자금: {shortage:.2f} USDT\n"
+            f"  • 현재가: ${current_price:,.2f}\n"
+            f"  • 주문 수량: {size} 계약 (레버리지 {leverage}x)"
+        )
         await send_telegram_message(error_msg, user_id, debug=True)
         logger.error(error_msg)
         # 자금 부족이 지속될 경우 차단 상태 설정 (10분)
         await set_margin_block(user_id, symbol, 600)
-        
+
         # 알림 로그 기록
-        error_message = f"자금 부족으로 인해 {symbol} 거래가 일시적으로 차단되었습니다 (10분)"
+        error_message = (
+            f"자금 부족으로 인해 {symbol} 거래가 일시적으로 차단되었습니다 (10분)\n"
+            f"사용 가능: {free_usdt:.2f} USDT, 필요: {required_margin:.2f} USDT, 부족: {shortage:.2f} USDT"
+        )
         log_bot_error(
             user_id=user_id,
             symbol=symbol,
@@ -473,15 +551,37 @@ async def try_send_order(
                 if response.status_code == 200:
                     logger.info(f"자금 부족으로 인해 트레이딩이 자동 중지되었습니다. user_id: {user_id}")
                     # 텔레그램 메시지 전송
-                    stop_msg = f"⚠️ 자금 부족이 24회 이상 지속되어 거래가 자동 중지되었습니다.\n\n계좌에 충분한 자금을 입금한 후 다시 시작해주세요."
+                    stop_msg = (
+                        f"⚠️ 자금 부족이 {max_retries}회 이상 지속되어 거래가 자동 중지되었습니다.\n\n"
+                        f"💰 추가 입금 필요:\n"
+                        f"  • 최소 {shortage:.2f} USDT 이상 입금하세요\n"
+                        f"  • 현재 사용 가능: {free_usdt:.2f} USDT\n\n"
+                        f"입금 후 거래를 다시 시작해주세요."
+                    )
                     await send_telegram_message(stop_msg, user_id)
                 else:
                     logger.error(f"자금 부족으로 인한 트레이딩 중지 API 호출 실패: {response.status_code} - {response.text}")
         except Exception as e:
             logger.error(f"자금 부족으로 인한 트레이딩 중지 API 호출 중 오류: {str(e)}")
-        
+            # errordb 로깅
+            from HYPERRSI.src.utils.error_logger import async_log_error_to_db
+            await async_log_error_to_db(
+                error=e,
+                user_id=user_id,
+                severity="CRITICAL",
+                symbol=symbol,
+                metadata={
+                    "shortage": shortage,
+                    "free_usdt": free_usdt,
+                    "component": "insufficient_margin_auto_stop"
+                }
+            )
+
         # 특별한 예외를 발생시켜 상위 호출자에게 알림
-        raise InsufficientMarginError(f"자금 부족으로 인해 {symbol} 거래가 일시적으로 차단되었습니다.")
+        raise InsufficientMarginError(
+            f"자금 부족으로 인해 {symbol} 거래가 일시적으로 차단되었습니다. "
+            f"(사용 가능: {free_usdt:.2f} USDT, 필요: {required_margin:.2f} USDT, 부족: {shortage:.2f} USDT)"
+        )
     
     debug_order_params: Dict[str, Any] = {
         'symbol': symbol,
@@ -678,7 +778,6 @@ async def try_send_order(
             if not price_str:
                 raise ValueError("TP 주문에는 가격이 필요합니다")
             order_params.update({
-                'price': price_str,
                 'orderType': 'limit',
                 'reduceOnly': True
             })
@@ -694,7 +793,6 @@ async def try_send_order(
             if not price_str:
                 raise ValueError("지정가 주문에는 가격이 필요합니다")
             order_params.update({
-                'price': price_str,
                 'orderType': 'limit'
             })
         if is_hedge_mode:
@@ -806,40 +904,98 @@ async def try_send_order(
                 traceback.print_exc()
                 error_str: str = str(e)
 
-                # 자금 부족 오류 감지
-                if "Insufficient USDT margin" in error_str or "Insufficient" in error_str:
-                    # Redis에 재시도 횟수 증가
-                    current_retry_count = await increment_margin_retry_count(user_id, symbol)
+                # 자금 부족 오류 감지 (더 구체적으로 검사)
+                is_margin_error = (
+                    "Insufficient USDT margin" in error_str or
+                    "Insufficient margin" in error_str or
+                    "insufficient balance" in error_str.lower() or
+                    ("insufficient" in error_str.lower() and "margin" in error_str.lower())
+                )
 
-                    # 🔍 디버깅: 실제 잔고 다시 조회
+                # 실제 자금 부족인지 확인
+                if is_margin_error:
+                    # 🔍 디버깅: 실제 잔고 확인하여 진짜 자금 부족인지 검증
+                    error_free_usdt = 0.0
+                    error_total_usdt = 0.0
+                    error_used_usdt = 0.0
+                    error_required_margin = 0.0
+                    error_shortage = 0.0
+                    error_current_price = 0.0
+                    is_actually_insufficient = False
+
                     try:
                         balance = await exchange.fetch_balance() if exchange else {}
                         usdt_balance = balance.get('USDT', {})
-                        free_usdt = safe_float(usdt_balance.get('free', 0))
-                        total_usdt = safe_float(usdt_balance.get('total', 0))
-                        used_usdt = safe_float(usdt_balance.get('used', 0))
+                        error_free_usdt = safe_float(usdt_balance.get('free', 0))
+                        error_total_usdt = safe_float(usdt_balance.get('total', 0))
+                        error_used_usdt = safe_float(usdt_balance.get('used', 0))
 
-                        logger.error(f"🔴 [{user_id}] 자금 부족 에러 발생 (재시도: {current_retry_count}/15):")
-                        logger.error(f"   💰 총 USDT: {total_usdt:.2f}")
-                        logger.error(f"   ✅ 사용 가능: {free_usdt:.2f}")
-                        logger.error(f"   🔒 사용 중: {used_usdt:.2f}")
-                        logger.error(f"   📊 주문 시도 수량: {contracts_amount} 계약")
-                        logger.error(f"   📈 심볼: {symbol}")
+                        # 현재가 조회 및 필요 마진 계산
+                        error_current_price = await get_current_price(symbol)
+                        # contracts_amount는 문자열이므로 float 변환 필요
+                        contracts_amount_float = float(contracts_amount) if isinstance(contracts_amount, str) else safe_float(contracts_amount)
+                        error_required_margin = (contracts_amount_float * error_current_price) / (leverage or 1.0)
+                        error_shortage = error_required_margin - error_free_usdt if error_required_margin > error_free_usdt else 0.0
+
+                        # 실제로 자금이 부족한지 확인 (약간의 버퍼 고려)
+                        is_actually_insufficient = error_free_usdt < (error_required_margin * 1.01)  # 1% 버퍼
+
+                        logger.error(f"🔴 [{user_id}] 자금 부족 에러 발생 (실제 부족 여부: {is_actually_insufficient}):")
+                        logger.error(f"   💰 총 USDT: {error_total_usdt:.2f}")
+                        logger.error(f"   ✅ 사용 가능: {error_free_usdt:.2f}")
+                        logger.error(f"   🔒 사용 중: {error_used_usdt:.2f}")
+                        logger.error(f"   📊 주문 시도 수량: {contracts_amount_float} 계약")
+                        logger.error(f"   📈 심볼: {symbol} (현재가: ${error_current_price:,.2f})")
                         logger.error(f"   ⚖️  레버리지: {leverage}x")
+                        logger.error(f"   💎 필요 마진: {error_required_margin:.2f} USDT")
+                        logger.error(f"   ❌ 부족 금액: {error_shortage:.2f} USDT")
+                        logger.error(f"   ⚠️  실제 에러 메시지: {error_str[:200]}")
                     except Exception as balance_error:
                         logger.error(f"[{user_id}] 자금 부족 에러 발생 시 잔고 재조회 실패: {str(balance_error)}")
+                        is_actually_insufficient = True  # 잔고 조회 실패 시 안전하게 부족으로 간주
+
+                    # 실제로 자금이 충분한데 에러가 발생한 경우 (다른 이유일 수 있음)
+                    if not is_actually_insufficient:
+                        logger.warning(f"[{user_id}] ⚠️ 자금은 충분하지만 '{error_str[:100]}'... 에러 발생. 다른 이유로 간주하고 재시도 카운트 증가 안 함.")
+                        # 자금 부족이 아니므로 일반 에러로 처리
+                        raise e
+
+                    # Redis에 재시도 횟수 증가 (실제 자금 부족인 경우만)
+                    current_retry_count = await increment_margin_retry_count(user_id, symbol)
 
                     # 자금 부족 알림을 제한 (처음, 5회, 10회, 15회에만 알림)
                     should_notify: bool = current_retry_count in [1, 5, 10, 15]
 
                     if should_notify:
                         insufficient_msg: str = ""
+                        # 실제 에러 메시지 요약 (너무 길면 잘라냄)
+                        error_summary = error_str[:100] if len(error_str) > 100 else error_str
+
                         if current_retry_count == 1:
-                            insufficient_msg = f"💰 자금 부족: 계좌에 USDT 마진이 부족합니다.\n{symbol} 주문 재시도 중...\n사용 가능: {free_usdt:.2f} USDT"
+                            insufficient_msg = (
+                                f"💰 자금 부족: 계좌에 USDT 마진이 부족합니다.\n"
+                                f"{symbol} 주문 재시도 중...\n\n"
+                                f"💵 사용 가능: {error_free_usdt:.2f} USDT\n"
+                                f"💎 필요 마진: {error_required_margin:.2f} USDT\n"
+                                f"❌ 부족 금액: {error_shortage:.2f} USDT\n\n"
+                                f"🔍 에러: {error_summary}"
+                            )
                         elif current_retry_count == 15:
-                            insufficient_msg = f"⚠️ 자금 부족이 15회 지속되어 {symbol} 거래를 10분간 일시 중단합니다.\n사용 가능: {free_usdt:.2f} USDT"
+                            insufficient_msg = (
+                                f"⚠️ 자금 부족이 15회 지속되어 {symbol} 거래를 10분간 일시 중단합니다.\n\n"
+                                f"💵 사용 가능: {error_free_usdt:.2f} USDT\n"
+                                f"💎 필요 마진: {error_required_margin:.2f} USDT\n"
+                                f"❌ 부족 금액: {error_shortage:.2f} USDT\n\n"
+                                f"최소 {error_shortage:.2f} USDT 이상 입금이 필요합니다.\n\n"
+                                f"🔍 에러: {error_summary}"
+                            )
                         else:
-                            insufficient_msg = f"💰 자금 부족 지속 중 ({current_retry_count}/15회)\n사용 가능: {free_usdt:.2f} USDT"
+                            insufficient_msg = (
+                                f"💰 자금 부족 지속 중 ({current_retry_count}/15회)\n\n"
+                                f"💵 사용 가능: {error_free_usdt:.2f} USDT\n"
+                                f"💎 필요 마진: {error_required_margin:.2f} USDT\n"
+                                f"❌ 부족 금액: {error_shortage:.2f} USDT"
+                            )
 
                         await send_telegram_message(insufficient_msg, user_id, debug=True)
                     
@@ -847,9 +1003,12 @@ async def try_send_order(
                     if current_retry_count >= 15:
                         # 즉시 차단 설정 (10분)
                         await set_margin_block(user_id, symbol, 600)
-                        
+
                         # 특별한 예외를 발생시켜 상위 호출자에게 알림
-                        raise InsufficientMarginError(f"자금 부족으로 인해 {symbol} 거래가 일시적으로 차단되었습니다.")
+                        raise InsufficientMarginError(
+                            f"자금 부족으로 인해 {symbol} 거래가 일시적으로 차단되었습니다. "
+                            f"(사용 가능: {error_free_usdt:.2f} USDT, 필요: {error_required_margin:.2f} USDT, 부족: {error_shortage:.2f} USDT)"
+                        )
                     else:
                         # 조용히 재시도 (메시지 없이)
                         await asyncio.sleep(5)  # 5초 대기 후 재시도

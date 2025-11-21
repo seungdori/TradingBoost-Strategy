@@ -4,16 +4,22 @@ Core utility functions for technical indicators
 from datetime import datetime, timezone
 
 
-def resample_candles(candles, target_minutes):
+def resample_candles(candles, target_minutes, is_backtest=True):
     """
     PineScript의 request.security() 동작 모방: 캔들을 더 높은 타임프레임으로 리샘플링
 
     Args:
         candles: 캔들 리스트 [{"timestamp": ..., "open": ..., "high": ..., "low": ..., "close": ..., "volume": ...}, ...]
         target_minutes: 목표 타임프레임 (분 단위, 예: 5, 15, 30, 60, 240, 480, 1440)
+        is_backtest: 백테스트 모드 여부 (True: 1개 offset shift 적용, False: 실시간 모드)
 
     Returns:
         리샘플링된 캔들 리스트 (원본과 동일한 길이, forward fill)
+
+    Note:
+        Pine Script의 request.security() offset 로직 구현:
+        - is_backtest=True: [barstate.isrealtime ? 0 : 1] offset 적용 (lookahead bias 방지)
+        - is_backtest=False: [barstate.isrealtime ? 0 : 0] 실시간 모드
     """
     if not candles or target_minutes <= 0:
         return candles
@@ -102,6 +108,28 @@ def resample_candles(candles, target_minutes):
 
         result.append(result_candle)
 
+    # Pine Script offset 적용: is_backtest=True일 때 1개 shift
+    # request.security(...)[barstate.isrealtime ? 0 : 1] 로직 구현
+    if is_backtest and len(result) > 0:
+        # 첫 번째 캔들에는 None 값 사용 (데이터 없음)
+        # 나머지는 1개씩 shift (이전 MTF 값 사용)
+        shifted_result = []
+        for i in range(len(result)):
+            if i == 0:
+                # 첫 캔들: 원본 유지 (MTF 데이터 없음)
+                shifted_result.append(candles[i].copy())
+            else:
+                # 이전 MTF 값 사용 (1개 shift)
+                shifted_candle = candles[i].copy()
+                prev_mtf = result[i - 1]
+                shifted_candle["open"] = prev_mtf["open"]
+                shifted_candle["high"] = prev_mtf["high"]
+                shifted_candle["low"] = prev_mtf["low"]
+                shifted_candle["close"] = prev_mtf["close"]
+                shifted_candle["volume"] = prev_mtf["volume"]
+                shifted_result.append(shifted_candle)
+        return shifted_result
+
     return result
 
 
@@ -179,8 +207,11 @@ def pivothigh(series, left_bars, right_bars):
     """
     PineScript의 ta.pivothigh(source, leftbars, rightbars) 구현.
 
-    각 인덱스에서, 좌측 left_bars개와 우측 right_bars개 범위에서
-    해당 값이 최대값이면 그 값을 반환, 아니면 None.
+    PineScript 방식:
+    - 인덱스 i에서 호출 시, i-leftbars 위치를 pivot 후보로 봄
+    - 좌측 비교: series[i-leftbars-leftbars] ~ series[i-leftbars-1]
+    - 우측 비교: series[i-leftbars+1] ~ series[i-leftbars+rightbars]
+    - pivot이 확정되면 인덱스 i에 저장 (i-leftbars의 값)
 
     Args:
         series: 값 리스트
@@ -189,19 +220,25 @@ def pivothigh(series, left_bars, right_bars):
 
     Returns:
         list: 각 인덱스의 pivot high 값 (없으면 None)
+              인덱스 i의 값은 i-leftbars 위치의 pivot을 나타냄
     """
     result = [None] * len(series)
 
-    for i in range(left_bars, len(series) - right_bars):
-        current = series[i]
+    # i >= left_bars + right_bars 필요 (충분한 데이터)
+    for i in range(left_bars + right_bars, len(series)):
+        # pivot 후보: i - left_bars
+        pivot_idx = i - left_bars
+        current = series[pivot_idx]
 
         # NaN 체크
         if current is None or (isinstance(current, float) and current != current):
             continue
 
-        # 좌측 비교
+        # 좌측 비교: pivot_idx - left_bars ~ pivot_idx - 1
         is_pivot = True
-        for j in range(i - left_bars, i):
+        for j in range(pivot_idx - left_bars, pivot_idx):
+            if j < 0:
+                break
             if series[j] is None:
                 continue
             if series[j] >= current:
@@ -211,8 +248,8 @@ def pivothigh(series, left_bars, right_bars):
         if not is_pivot:
             continue
 
-        # 우측 비교
-        for j in range(i + 1, i + right_bars + 1):
+        # 우측 비교: pivot_idx + 1 ~ pivot_idx + right_bars
+        for j in range(pivot_idx + 1, min(pivot_idx + right_bars + 1, len(series))):
             if series[j] is None:
                 continue
             if series[j] >= current:
@@ -220,7 +257,7 @@ def pivothigh(series, left_bars, right_bars):
                 break
 
         if is_pivot:
-            result[i] = current
+            result[i] = current  # i 위치에 저장 (pivot_idx의 값)
 
     return result
 
@@ -229,8 +266,11 @@ def pivotlow(series, left_bars, right_bars):
     """
     PineScript의 ta.pivotlow(source, leftbars, rightbars) 구현.
 
-    각 인덱스에서, 좌측 left_bars개와 우측 right_bars개 범위에서
-    해당 값이 최소값이면 그 값을 반환, 아니면 None.
+    PineScript 방식:
+    - 인덱스 i에서 호출 시, i-leftbars 위치를 pivot 후보로 봄
+    - 좌측 비교: series[i-leftbars-leftbars] ~ series[i-leftbars-1]
+    - 우측 비교: series[i-leftbars+1] ~ series[i-leftbars+rightbars]
+    - pivot이 확정되면 인덱스 i에 저장 (i-leftbars의 값)
 
     Args:
         series: 값 리스트
@@ -239,19 +279,25 @@ def pivotlow(series, left_bars, right_bars):
 
     Returns:
         list: 각 인덱스의 pivot low 값 (없으면 None)
+              인덱스 i의 값은 i-leftbars 위치의 pivot을 나타냄
     """
     result = [None] * len(series)
 
-    for i in range(left_bars, len(series) - right_bars):
-        current = series[i]
+    # i >= left_bars + right_bars 필요 (충분한 데이터)
+    for i in range(left_bars + right_bars, len(series)):
+        # pivot 후보: i - left_bars
+        pivot_idx = i - left_bars
+        current = series[pivot_idx]
 
         # NaN 체크
         if current is None or (isinstance(current, float) and current != current):
             continue
 
-        # 좌측 비교
+        # 좌측 비교: pivot_idx - left_bars ~ pivot_idx - 1
         is_pivot = True
-        for j in range(i - left_bars, i):
+        for j in range(pivot_idx - left_bars, pivot_idx):
+            if j < 0:
+                break
             if series[j] is None:
                 continue
             if series[j] <= current:
@@ -261,8 +307,8 @@ def pivotlow(series, left_bars, right_bars):
         if not is_pivot:
             continue
 
-        # 우측 비교
-        for j in range(i + 1, i + right_bars + 1):
+        # 우측 비교: pivot_idx + 1 ~ pivot_idx + right_bars
+        for j in range(pivot_idx + 1, min(pivot_idx + right_bars + 1, len(series))):
             if series[j] is None:
                 continue
             if series[j] <= current:
@@ -270,7 +316,7 @@ def pivotlow(series, left_bars, right_bars):
                 break
 
         if is_pivot:
-            result[i] = current
+            result[i] = current  # i 위치에 저장 (pivot_idx의 값)
 
     return result
 

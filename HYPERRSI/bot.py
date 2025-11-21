@@ -101,15 +101,30 @@ async def main():
 
         logger.info("Starting polling loop...")
 
+        # 폴링 설정 (재시도 로직 강화)
+        polling_config = {
+            "allowed_updates": None,  # 모든 업데이트 수신
+            "timeout": 60,            # Long polling timeout
+            "handle_signals": False,  # 시그널 핸들링 직접 관리
+        }
+
         # 폴링과 종료 이벤트를 동시에 대기
-        polling_task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
-        shutdown_task = asyncio.create_task(shutdown_event.wait())
+        polling_task = asyncio.create_task(
+            dp.start_polling(bot, **polling_config),
+            name="telegram-polling"
+        )
+        shutdown_task = asyncio.create_task(shutdown_event.wait(), name="shutdown-event")
 
         # 둘 중 하나가 완료될 때까지 대기
-        _done, pending = await asyncio.wait(
+        done, pending = await asyncio.wait(
             {polling_task, shutdown_task},
             return_when=asyncio.FIRST_COMPLETED
         )
+
+        # 완료된 태스크의 예외 확인
+        for task in done:
+            if task.exception():
+                logger.error(f"Task {task.get_name()} failed: {task.exception()}", exc_info=task.exception())
 
         # 남은 태스크 취소
         for task in pending:

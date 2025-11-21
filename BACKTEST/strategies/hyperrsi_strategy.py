@@ -458,7 +458,6 @@ class HyperrsiStrategy(BaseStrategy):
             # ✅ Use DB trend_state if available (more reliable)
             if hasattr(candle, 'trend_state') and candle.trend_state is not None:
                 trend_state = candle.trend_state
-                logger.debug(f"Using DB trend_state: {trend_state}")
             else:
                 # Fallback: Calculate from price_history if DB value not available
                 candles_data = [{
@@ -725,10 +724,7 @@ class HyperrsiStrategy(BaseStrategy):
         if self.use_tp2_tp3_diff_for_offset and tp2_price and tp3_price:
             # Use TP2-TP3 price difference as offset
             offset = abs(tp3_price - tp2_price)
-            logger.debug(
-                f"Trailing offset from TP2-TP3 diff: offset={offset:.2f} "
-                f"(TP2={tp2_price:.2f}, TP3={tp3_price:.2f})"
-            )
+
         else:
             # Use percentage-based offset
             offset = abs(current_price * self.trailing_stop_offset_value * 0.01)

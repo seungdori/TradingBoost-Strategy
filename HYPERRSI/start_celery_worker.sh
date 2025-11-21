@@ -7,6 +7,11 @@ export GRPC_DNS_RESOLVER=native  # 네이티브 DNS resolver 사용
 export GRPC_VERBOSITY=ERROR  # gRPC 로깅 레벨을 ERROR로 설정하여 경고 숨김
 export GRPC_TRACE=""  # gRPC 추적 비활성화
 
+# 인코딩 설정 (한글 로그 깨짐 방지)
+export LANG=ko_KR.UTF-8
+export LC_ALL=ko_KR.UTF-8
+export PYTHONIOENCODING=utf-8
+
 # 색상 정의
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -89,31 +94,43 @@ fi
 
 echo -e "${YELLOW}⚙️ $worker_count 개의 워커를 시작합니다 (CPU 코어: $cores, concurrency=2)${NC}"
 
-# Celery 워커 시작 (백그라운드로 실행)
+# Celery 워커 시작 (foreground로 실행하여 로그 바로 출력)
 echo -e "${GREEN}🚀 Celery 워커 시작 중...${NC}"
 
 echo -e "${YELLOW}🔄 워커 시작 중...${NC}"
+echo -e "${YELLOW}📝 로그가 화면에 바로 출력됩니다. Ctrl+C로 종료 가능합니다.${NC}"
+echo -e "${BLUE}=============================================${NC}"
+
+# 새 tmux 세션에서 worker와 beat 동시 실행
 # --pool=solo: 단일 프로세스로 실행하여 event loop 문제 해결 (macOS asyncio 호환)
 # concurrency 옵션은 solo pool에서 무시됨
-celery -A HYPERRSI.src.core.celery_task worker --loglevel=warning --pool=solo --purge >> "$worker_log" 2>&1 &
 
-# 프로세스 ID 저장
+# worker와 beat를 별도 프로세스로 시작
+celery -A HYPERRSI.src.core.celery_task worker --loglevel=warning --pool=solo --purge &
 worker_pid=$!
-echo "worker_pid=$worker_pid" >> "$SCRIPT_DIR/.celery_pids"
+echo "worker_pid=$worker_pid" > "$SCRIPT_DIR/.celery_pids"
 
-echo -e "${GREEN}✅ 워커 시작됨 (PID: $worker_pid) - solo pool mode${NC}"
-sleep 2
-
-# Celery Beat 시작 (스케줄링된 작업이 필요한 경우)
-echo -e "${GREEN}🚀 Celery beat 시작 중...${NC}"
-celery -A HYPERRSI.src.core.celery_task beat --loglevel=warning >> "$beat_log" 2>&1 &
+celery -A HYPERRSI.src.core.celery_task beat --loglevel=warning &
 beat_pid=$!
 echo "beat_pid=$beat_pid" >> "$SCRIPT_DIR/.celery_pids"
-echo -e "${GREEN}✅ Beat 시작됨 (PID: $beat_pid)${NC}"
 
+echo -e "${GREEN}✅ 워커 시작됨 (PID: $worker_pid) - solo pool mode${NC}"
+echo -e "${GREEN}✅ Beat 시작됨 (PID: $beat_pid)${NC}"
 echo -e "${BLUE}=============================================${NC}"
-echo -e "${GREEN}✅ Celery 워커와 beat가 백그라운드에서 실행 중입니다.${NC}"
-echo -e "${YELLOW}💡 다음 명령어로 프로세스를 확인할 수 있습니다: ps aux | grep celery${NC}"
-echo -e "${YELLOW}💡 모든 워커를 종료하려면: bash stop_celery_worker.sh${NC}"
-echo -e "${YELLOW}💡 로그 확인: tail -f $worker_log${NC}"
-echo -e "${BLUE}=============================================${NC}" 
+echo -e "${YELLOW}💡 프로세스 확인: ps aux | grep celery${NC}"
+echo -e "${YELLOW}💡 종료: Ctrl+C (현재 스크립트 종료) 또는 bash stop_celery_worker.sh${NC}"
+echo -e "${BLUE}=============================================${NC}"
+
+# 사용자가 Ctrl+C를 누를 때까지 대기 (로그 스트리밍)
+trap "echo -e '\n${YELLOW}🛑 종료 신호 수신. 프로세스를 종료합니다...${NC}'; kill $worker_pid $beat_pid 2>/dev/null; exit 0" INT TERM
+
+# 프로세스가 종료될 때까지 대기하며 로그 실시간 출력
+tail -f "$worker_log" &
+tail_pid=$!
+
+# worker나 beat 중 하나라도 종료되면 스크립트 종료
+wait $worker_pid $beat_pid
+kill $tail_pid 2>/dev/null
+
+echo -e "${RED}⚠️ Celery 프로세스가 예기치 않게 종료되었습니다.${NC}"
+echo -e "${YELLOW}💡 로그 확인: tail -f $worker_log${NC}" 

@@ -370,10 +370,7 @@ class BacktestEngine:
             signal = await strategy_executor.generate_signal(candle)
 
             # Debug logging for signal result
-            logger.debug(
-                f"Signal check result: side={signal.side}, reason={signal.reason}, "
-                f"indicators={signal.indicators}"
-            )
+
 
             if signal.side:  # Has entry signal (long or short)
                 logger.info(f"✅ Entry signal detected: {signal.side.value}, reason: {signal.reason}")
@@ -444,22 +441,22 @@ class BacktestEngine:
                 )
 
                 # Log initial position open
-                logger.info(
-                    f"Position opened: {signal.side.value} @ {filled_price:.2f}, "
-                    f"qty={quantity:.4f}, investment={investment:.2f} USDT"
-                )
+                #logger.info(
+                #    f"Position opened: {signal.side.value} @ {filled_price:.2f}, "
+                #    f"qty={quantity:.4f}, investment={investment:.2f} USDT"
+                #)
 
                 # Calculate partial exit levels (TP1/TP2/TP3) if enabled
                 has_calculate_method = hasattr(strategy_executor, 'calculate_tp_levels')
-                logger.info(f"Checking TP calculation: has_calculate_tp_levels={has_calculate_method}")
+                #logger.info(f"Checking TP calculation: has_calculate_tp_levels={has_calculate_method}")
 
                 if has_calculate_method:
                     # Get ATR value from signal indicators if available
                     atr_value = signal.indicators.get("atr") if signal.indicators else None
-                    logger.info(
-                        f"Calculating TP levels with: side={signal.side.value}, "
-                        f"entry_price={filled_price:.2f}, atr={atr_value}"
-                    )
+                    #logger.info(
+                    #    f"Calculating TP levels with: side={signal.side.value}, "
+                    #    f"entry_price={filled_price:.2f}, atr={atr_value}"
+                    #)
 
                     tp1, tp2, tp3 = strategy_executor.calculate_tp_levels(
                         signal.side,
@@ -480,10 +477,10 @@ class BacktestEngine:
                     position.tp2_ratio = strategy_executor.tp2_ratio
                     position.tp3_ratio = strategy_executor.tp3_ratio
 
-                    logger.info(
-                        f"TP flags on position: use_tp1={position.use_tp1}, "
-                        f"use_tp2={position.use_tp2}, use_tp3={position.use_tp3}"
-                    )
+                    #logger.info(
+                    #    f"TP flags on position: use_tp1={position.use_tp1}, "
+                    #    f"use_tp2={position.use_tp2}, use_tp3={position.use_tp3}"
+                    #)
 
                     if any([position.use_tp1, position.use_tp2, position.use_tp3]):
                         logger.info(
@@ -558,13 +555,11 @@ class BacktestEngine:
         # Check trend reversal exit first (highest priority)
         if self.strategy_executor and hasattr(self.strategy_executor, 'use_trend_close'):
             if self.strategy_executor.use_trend_close:
-                logger.info(f"[TREND_EXIT] use_trend_close=True, calling _check_trend_reversal_exit")
+                #logger.info(f"[TREND_EXIT] use_trend_close=True, calling _check_trend_reversal_exit")
                 should_exit_trend = await self._check_trend_reversal_exit(candle, position)
                 if should_exit_trend:
                     logger.info(f"[TREND_EXIT] Position closed by trend reversal at {candle.timestamp}")
                     return  # Position already closed by trend reversal
-            else:
-                logger.info(f"[TREND_EXIT] use_trend_close=False, skipping trend exit check")
 
         # Check HYPERRSI-style trailing stop BEFORE TP3 (when active)
         # Trailing stop is a protective exit that takes priority over aggressive TP3
@@ -684,13 +679,13 @@ class BacktestEngine:
                     # TP1 hit → move SL to entry price
                     if tp_level == 1 and hasattr(self.strategy_executor, 'use_break_even') and self.strategy_executor.use_break_even:
                         break_even_price = position.get_average_entry_price()
-                        logger.info(f"TP1 hit: Moving SL to break-even (entry price) @ {break_even_price:.2f}")
+                        #logger.info(f"TP1 hit: Moving SL to break-even (entry price) @ {break_even_price:.2f}")
 
                     # TP2 hit → move SL to TP1 price
                     elif tp_level == 2 and hasattr(self.strategy_executor, 'use_break_even_tp2') and self.strategy_executor.use_break_even_tp2:
                         if position.tp1_price:
                             break_even_price = position.tp1_price
-                            logger.info(f"TP2 hit: Moving SL to TP1 price @ {break_even_price:.2f}")
+                            #logger.info(f"TP2 hit: Moving SL to TP1 price @ {break_even_price:.2f}")
 
                     # TP3 hit → move SL to TP2 price (only if TP sum < 100%)
                     elif tp_level == 3 and hasattr(self.strategy_executor, 'use_break_even_tp3') and self.strategy_executor.use_break_even_tp3:
@@ -698,24 +693,24 @@ class BacktestEngine:
                         total_tp_ratio = position.tp1_ratio + position.tp2_ratio + position.tp3_ratio
                         if total_tp_ratio < 0.99 and position.tp2_price:  # Allow 1% tolerance
                             break_even_price = position.tp2_price
-                            logger.info(f"TP3 hit: Moving SL to TP2 price @ {break_even_price:.2f}")
-                        else:
-                            logger.info(f"TP3 hit: Total TP ratio ({total_tp_ratio*100:.0f}%) >= 100%, skipping break-even")
+                            #logger.info(f"TP3 hit: Moving SL to TP2 price @ {break_even_price:.2f}")
+                        #else:
+                        #    logger.info(f"TP3 hit: Total TP ratio ({total_tp_ratio*100:.0f}%) >= 100%, skipping break-even")
 
                     # Update stop loss price if break even price was set
                     # 중요: 초기 SL이 None이어도 여기서 entry_price로 설정됨
                     if break_even_price:
                         position.stop_loss_price = break_even_price
-                        if self.event_logger:
-                            self.event_logger.log_event(
-                                event_type=EventType.STOP_LOSS_HIT,  # Reuse event type
-                                message=f"Break-even activated: SL moved to {break_even_price:.2f} after TP{tp_level}",
-                                data={
-                                    "tp_level": tp_level,
-                                    "new_sl_price": break_even_price,
-                                    "reason": "break_even"
-                                }
-                            )
+                        #if self.event_logger:
+                        #    self.event_logger.log_event(
+                        #        event_type=EventType.STOP_LOSS_HIT,  # Reuse event type
+                        #        message=f"Break-even activated: SL moved to {break_even_price:.2f} after TP{tp_level}",
+                        #        data={
+                        #            "tp_level": tp_level,
+                        #            "new_sl_price": break_even_price,
+                        #            "reason": "break_even"
+                        #        }
+                        #    )
 
                 # Check if trailing stop should be activated after this TP level
                 if self.strategy_executor and hasattr(self.strategy_executor, 'trailing_stop_active') and self.strategy_executor.trailing_stop_active:
@@ -829,24 +824,15 @@ class BacktestEngine:
             candle: Current candle
         """
         if not self.position_manager.has_position():
-            logger.debug(f"[DCA] No position - skipping DCA check")
             return
 
         position = self.position_manager.get_position()
 
-        logger.debug(
-            f"[DCA] Checking DCA conditions: "
-            f"timestamp={candle.timestamp}, "
-            f"price={candle.close:.2f}, "
-            f"side={position.side.value}, "
-            f"dca_count={position.dca_count}, "
-            f"entry_price={position.get_average_entry_price():.2f}"
-        )
+
 
         # Check if pyramiding enabled
         pyramiding_enabled = self.strategy_params.get('pyramiding_enabled', True)
         if not pyramiding_enabled:
-            logger.debug(f"[DCA] Pyramiding disabled - skipping DCA")
             return
 
         # Check if DCA limit reached
@@ -865,10 +851,7 @@ class BacktestEngine:
             )
             return
 
-        logger.debug(
-            f"[DCA] DCA levels: {[f'{level:.2f}' for level in position.dca_levels]}, "
-            f"next level: {position.dca_levels[0]:.2f}"
-        )
+
 
         # Check price condition
         price_check_result = check_dca_condition(
@@ -900,10 +883,6 @@ class BacktestEngine:
         if rsi is None and self.strategy_executor:
             if hasattr(self.strategy_executor, 'calculate_rsi_from_history'):
                 rsi = await self.strategy_executor.calculate_rsi_from_history(candle)
-                if rsi is not None:
-                    logger.info(f"[DCA] Calculated RSI={rsi:.2f} from historical data for DCA check")
-                else:
-                    logger.debug(f"[DCA] Failed to calculate RSI for DCA check")
 
         use_rsi_with_pyramiding = self.strategy_params.get('use_rsi_with_pyramiding', True)
         rsi_check_result = check_rsi_condition_for_dca(
@@ -915,18 +894,9 @@ class BacktestEngine:
         )
 
         if not rsi_check_result:
-            logger.debug(
-                f"[DCA] RSI condition NOT met: "
-                f"RSI={rsi}, "
-                f"side={position.side.value}, "
-                f"use_rsi_with_pyramiding={use_rsi_with_pyramiding}"
-            )
+
             return
-        else:
-            logger.debug(
-                f"[DCA] ✅ RSI condition MET: "
-                f"RSI={rsi}, use_rsi_with_pyramiding={use_rsi_with_pyramiding}"
-            )
+
 
         # Check trend condition (if enabled)
         # Note: Using sma and ema fields from Candle model
@@ -937,30 +907,28 @@ class BacktestEngine:
         if (ema_value is None or sma_value is None) and self.strategy_executor:
             if hasattr(self.strategy_executor, 'calculate_trend_indicators'):
                 ema_value, sma_value = await self.strategy_executor.calculate_trend_indicators(candle)
-                if ema_value and sma_value:
-                    logger.info(f"[DCA] Calculated EMA={ema_value:.2f}, SMA={sma_value:.2f} for DCA check")
+                #if ema_value and sma_value:
+                #    logger.info(f"[DCA] Calculated EMA={ema_value:.2f}, SMA={sma_value:.2f} for DCA check")
+
+        # Get trend_state from candle (PineScript indicator)
+        trend_state = candle.trend_state if hasattr(candle, 'trend_state') else None
 
         use_trend_logic = self.strategy_params.get('use_trend_logic', True)
         trend_check_result = check_trend_condition_for_dca(
             ema=ema_value,
             sma=sma_value,
             side=position.side.value,
-            use_trend_logic=use_trend_logic
+            use_trend_logic=use_trend_logic,
+            trend_state=trend_state
         )
 
         if not trend_check_result:
-            logger.debug(
-                f"[DCA] Trend condition NOT met: "
-                f"SMA={sma_value}, "
-                f"EMA={ema_value}, "
-                f"side={position.side.value}, "
-                f"use_trend_logic={use_trend_logic}"
-            )
+
             return
         else:
             logger.debug(
                 f"[DCA] ✅ Trend condition MET: "
-                f"EMA={ema_value}, SMA={sma_value}, use_trend_logic={use_trend_logic}"
+                f"trend_state={trend_state}, EMA={ema_value}, SMA={sma_value}, use_trend_logic={use_trend_logic}"
             )
 
         # All conditions met - execute DCA entry
@@ -995,12 +963,6 @@ class BacktestEngine:
             leverage=position.leverage
         )
 
-        logger.debug(
-            f"[DCA] Calculated DCA size: "
-            f"investment={investment:.2f} USDT, "
-            f"contracts={contracts:.6f} BTC, "
-            f"entry_multiplier={self.strategy_params.get('entry_multiplier', 1.6)}"
-        )
 
         # ✅ Round DCA quantity to 0.001 precision (BTC unit)
         contracts = self.order_simulator.round_to_precision(
@@ -1021,10 +983,6 @@ class BacktestEngine:
             )
             return
 
-        logger.debug(
-            f"[DCA] ✅ Size check passed: "
-            f"{contracts:.6f} {base_currency} >= minimum {minimum_qty:.6f} {base_currency}"
-        )
 
         # Simulate order execution
         filled_price = self.order_simulator.simulate_market_order(
@@ -1076,11 +1034,7 @@ class BacktestEngine:
         )
         updated_position.dca_levels = new_dca_levels
 
-        logger.debug(
-            f"[DCA] Recalculated DCA levels: "
-            f"new_avg_price={updated_position.entry_price:.2f}, "
-            f"new_dca_levels={[f'{level:.2f}' for level in new_dca_levels]}"
-        )
+
 
         # Recalculate TP levels from new average price
         if self.strategy_executor and hasattr(self.strategy_executor, 'calculate_tp_levels'):

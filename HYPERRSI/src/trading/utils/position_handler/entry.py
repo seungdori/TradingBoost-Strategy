@@ -9,9 +9,12 @@ import asyncio
 import json
 import traceback
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, TYPE_CHECKING
 
-from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
+# Lazy import to avoid circular dependency
+if TYPE_CHECKING:
+    from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
+
 from HYPERRSI.src.api.trading.Calculate_signal import TrendStateCalculator
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.logger import setup_error_logger
@@ -137,12 +140,9 @@ async def handle_no_position(
 
         timeframe_str = get_timeframe(timeframe)
         print(f"[{user_id}][{timeframe_str}] 포지션 없는 경우의 디버깅 : {current_rsi}, rsi signals : {rsi_signals},current state : {current_state}", flush=True)
-        logger.info(f"[{user_id}] ===== 진입 로직 시작 =====")
-        print(f"[{user_id}] ===== 진입 로직 시작 =====", flush=True)
 
         # Check entry failure limit
         exceeded, fail_count = await check_entry_failure_limit(user_id)
-        print(f"[{user_id}] fail_count check 완료: {fail_count}, exceeded: {exceeded}", flush=True)
 
         # Clear main position direction if exists
         main_position_direction_key = MAIN_POSITION_DIRECTION_KEY.format(
@@ -166,14 +166,13 @@ async def handle_no_position(
         # ============================================================================
         print(f"[{user_id}] 롱 진입 체크 시작 - direction: {settings['direction']}", flush=True)
         if settings['direction'] in [DIRECTION_LONG_SHORT, DIRECTION_LONG]:
-            print(f"[{user_id}] 롱 direction 조건 통과", flush=True)
             # Check if position is locked
             is_locked, locked_direction, remaining = await check_any_direction_locked(
                 user_id=user_id,
                 symbol=symbol,
                 timeframe=timeframe
             )
-            print(f"[{user_id}] 잠금 체크 완료 - is_locked: {is_locked}", flush=True)
+            #print(f"[{user_id}] 잠금 체크 완료 - is_locked: {is_locked}", flush=True)
 
             if is_locked:
                 logger.info(
@@ -184,8 +183,6 @@ async def handle_no_position(
 
             # Check trend condition for long entry
             should_enter, reason = await should_enter_with_trend(settings, current_state, "long")
-            print(f"[{user_id}] 롱 진입 조건2 - is_oversold: {rsi_signals['is_oversold']}, should_enter: {should_enter}, reason: {reason}, current_state: {current_state}", flush=True)
-
             if rsi_signals['is_oversold'] and should_enter:
                 print(f"[{user_id}] 롱 진입 시도!", flush=True)
                 entry_success = await _execute_long_entry(
@@ -218,14 +215,13 @@ async def handle_no_position(
         # ============================================================================
         print(f"[{user_id}] 숏 진입 체크 시작 - direction: {settings['direction']}", flush=True)
         if settings['direction'] in [DIRECTION_LONG_SHORT, DIRECTION_SHORT]:
-            print(f"[{user_id}] 숏 direction 조건 통과", flush=True)
             # Check if position is locked
             is_locked, locked_direction, remaining = await check_any_direction_locked(
                 user_id=user_id,
                 symbol=symbol,
                 timeframe=timeframe
             )
-            print(f"[{user_id}] 잠금 체크 완료 - is_locked: {is_locked}", flush=True)
+            #print(f"[{user_id}] 잠금 체크 완료 - is_locked: {is_locked}", flush=True)
 
             if is_locked:
                 logger.info(
@@ -236,7 +232,7 @@ async def handle_no_position(
 
             # Check trend condition for short entry
             should_enter, reason = await should_enter_with_trend(settings, current_state, "short")
-            print(f"[{user_id}] 숏 진입 조건2 - is_overbought: {rsi_signals['is_overbought']}, should_enter: {should_enter}, reason: {reason}, current_state: {current_state}", flush=True)
+            #print(f"[{user_id}] 숏 진입 조건2 - is_overbought: {rsi_signals['is_overbought']}, should_enter: {should_enter}, reason: {reason}, current_state: {current_state}", flush=True)
 
             if rsi_signals['is_overbought'] and should_enter:
                 print(f"[{user_id}] 숏 진입 시도!", flush=True)
@@ -329,6 +325,9 @@ async def _execute_long_entry(
         True if entry successful, False otherwise
     """
     try:
+        # Runtime import to avoid circular dependency
+        from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
+
         request = OpenPositionRequest(
             user_id=user_id,
             symbol=symbol,
@@ -482,6 +481,9 @@ async def _execute_short_entry(
         True if entry successful, False otherwise
     """
     try:
+        # Runtime import to avoid circular dependency
+        from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
+
         print("2번")
         request = OpenPositionRequest(
             user_id=user_id,

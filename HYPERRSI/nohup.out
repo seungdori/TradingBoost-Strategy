@@ -1,0 +1,307 @@
+2025-11-19 10:05:13 - shared.database.session - INFO - Database URL: postgresql+asyncpg://tradeuser:SecurePassword123@1...
+2025-11-19 10:05:13 - shared.database.session - INFO - Database engine created
+2025-11-19 10:05:13 - shared.database.session - INFO - Database pool monitor initialized
+2025-11-19 10:05:14 - shared.utils.task_tracker - INFO - TaskTracker 'dual-side-entry' initialized
+2025-11-19 10:05:14 - shared.utils.task_tracker - INFO - TaskTracker 'hyperrsi-main' initialized
+2025-11-19 10:05:14 - shared.errors.handlers - INFO - Exception handlers registered successfully
+REDIS_URL: redis://localhost:6379/0
+2025-11-19 10:05:14 - shared.utils.task_tracker - INFO - TaskTracker 'hyperrsi-main' initialized
+2025-11-19 10:05:14 - shared.errors.handlers - INFO - Exception handlers registered successfully
+INFO:     Started server process [46225]
+INFO:     Waiting for application startup.
+2025-11-19 10:05:14 - hyperrsi - INFO - Starting HYPERRSI application
+2025-11-19 10:05:14 - shared.database.session - INFO - Database connected: 158.247.218.188:5432/tradedb
+2025-11-19 10:05:14,584 - shared.database.redis - ✅ Redis pool created: localhost:6379 (max_connections=50)
+2025-11-19 10:05:14,584 - shared.database.redis - Redis pool monitor initialized
+2025-11-19 10:05:14,599 - shared.database.redis - ✅ Redis connected: localhost:6379
+2025-11-19 10:05:14 - main - INFO - ✅ 서버 시작: 정리할 태스크 상태 없음
+2025-11-19 10:05:14 - shared.database.error_db_session - INFO - Creating Error DB engine (separate pool): postgresql+asyncpg://tradeuser:SecurePassword123@1...
+2025-11-19 10:05:14 - shared.database.error_db_session - INFO - Error DB engine created (SEPARATE POOL)
+2025-11-19 10:05:14 - shared.database.error_db_session - INFO - Error DB connected (separate pool)
+2025-11-19 10:05:14 - shared.database.init_error_db - INFO - ✅ error_logs table created (or already exists)
+2025-11-19 10:05:14 - shared.database.init_error_db - INFO - ✅ error_logs indexes created (9 indexes)
+2025-11-19 10:05:14 - shared.database.init_error_db - INFO - Error database initialization completed
+2025-11-19 10:05:14 - hyperrsi - INFO - Error database initialized (separate pool)
+2025-11-19 10:05:14 - shared.database.error_db_session - INFO - Error DB connected (separate pool)
+2025-11-19 10:05:14 - HYPERRSI.src.database.hyperrsi_error_db - INFO - ✅ hyperrsi_error_logs table created (or already exists)
+2025-11-19 10:05:14 - HYPERRSI.src.database.hyperrsi_error_db - INFO - ✅ hyperrsi_error_logs indexes created (10 indexes)
+2025-11-19 10:05:14 - HYPERRSI.src.database.hyperrsi_error_db - INFO - HYPERRSI error database initialization completed
+2025-11-19 10:05:14 - hyperrsi - INFO - HYPERRSI error table initialized
+2025-11-19 10:05:14 - hyperrsi - INFO - HYPERRSI application startup complete
+2025-11-19 10:05:14 - main - INFO - Starting application...
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2025-11-19 10:05:19 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/health
+2025-11-19 10:05:19 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:05:19 - shared.errors.middleware - INFO - Request completed
+✅ Database connected: 158.247.218.188:5432/tradedb
+✅ Error DB connected (separate pool from tradeDB)
+✅ Error database initialized successfully
+
+============================================================
+✅ Error Database Initialization Complete
+============================================================
+Database: errorDB (separate pool)
+Pool Size: 3 + 5 overflow = 8 connections
+Independent from main tradeDB pool
+============================================================
+
+✅ Error DB connected (separate pool from tradeDB)
+✅ HYPERRSI error table initialized successfully
+
+============================================================
+✅ HYPERRSI Error Database Initialization Complete
+============================================================
+Database: errordb (separate pool)
+Table: hyperrsi_error_logs
+Location: jdbc:postgresql://158.247.218.188:5432/errordb
+============================================================
+
+INFO:     127.0.0.1:53870 - "GET /health HTTP/1.1" 200 OK
+2025-11-19 10:09:47 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/stats/summary?user_id=55dfe11e-820f-4d3c-b548-f507356847ce
+2025-11-19 10:09:47 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:09:47 - HYPERRSI.src.services.timescale_service - INFO - Initialising TimescaleDB connection pool
+2025-11-19 10:09:47 - shared.security.encryption - WARNING - Detected unencrypted API key - consider re-saving with encryption
+2025-11-19 10:09:47 - shared.security.encryption - WARNING - Detected unencrypted API key - consider re-saving with encryption
+2025-11-19 10:09:47 - shared.security.encryption - WARNING - Detected unencrypted API key - consider re-saving with encryption
+2025-11-19 10:09:47,738 - shared.database.redis - 비동기 Redis 클라이언트 (binary) 생성 완료
+2025-11-19 10:09:48,796 - HYPERRSI.src.api.dependencies - Created new exchange client for user 55dfe11e-820f-4d3c-b548-f507356847ce
+2025-11-19 10:09:49 - shared.errors.middleware - INFO - Request completed
+================================================
+get_user_trading_statistics 소요시간: 0.002546072006225586초
+================================================
+================================================
+completed 주문 데이터 조회 소요시간: 0.0009272098541259766초
+================================================
+get_balance2 소요시간: 1.5606231689453125초
+================================================
+================================================
+get_balance3 소요시간: 1.560636281967163초
+================================================
+================================================
+get_stats_summary 소요시간: 1.5660080909729004초
+================================================
+INFO:     127.0.0.1:55456 - "GET /api/stats/summary?user_id=55dfe11e-820f-4d3c-b548-f507356847ce HTTP/1.1" 200 OK
+2025-11-19 10:29:30 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/stats/summary?user_id=55dfe11e-820f-4d3c-b548-f507356847ce
+2025-11-19 10:29:30 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:29:31 - shared.errors.middleware - INFO - Request completed
+================================================
+get_user_trading_statistics 소요시간: 0.0013651847839355469초
+================================================
+================================================
+completed 주문 데이터 조회 소요시간: 0.0007011890411376953초
+================================================
+get_balance2 소요시간: 0.5797512531280518초
+================================================
+================================================
+get_balance3 소요시간: 0.5797731876373291초
+================================================
+================================================
+get_stats_summary 소요시간: 0.5849411487579346초
+================================================
+INFO:     127.0.0.1:62942 - "GET /api/stats/summary?user_id=55dfe11e-820f-4d3c-b548-f507356847ce HTTP/1.1" 200 OK
+2025-11-19 10:29:31 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/stats/trade-history?user_id=55dfe11e-820f-4d3c-b548-f507356847ce&start_date=2025-11-10&end_date=2025-11-19&limit=10
+2025-11-19 10:29:31 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:29:31 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:62942 - "GET /api/stats/trade-history?user_id=55dfe11e-820f-4d3c-b548-f507356847ce&start_date=2025-11-10&end_date=2025-11-19&limit=10 HTTP/1.1" 200 OK
+2025-11-19 10:29:31 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/stats/trade-history?user_id=55dfe11e-820f-4d3c-b548-f507356847ce&start_date=2025-11-10&end_date=2025-11-19&limit=10
+2025-11-19 10:29:31 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:29:31 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:62942 - "GET /api/stats/trade-history?user_id=55dfe11e-820f-4d3c-b548-f507356847ce&start_date=2025-11-10&end_date=2025-11-19&limit=10 HTTP/1.1" 200 OK
+2025-11-19 10:29:32 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/stats/profit-amount?user_id=55dfe11e-820f-4d3c-b548-f507356847ce&start_date=2025-11-12&end_date=2025-11-19
+2025-11-19 10:29:32 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:29:32 - shared.errors.middleware - INFO - Request completed
+================================================
+get_user_trading_statistics 소요시간: 0.0019519329071044922초
+================================================
+================================================
+completed 주문 데이터 조회 소요시간: 0.000843048095703125초
+================================================
+INFO:     127.0.0.1:62942 - "GET /api/stats/profit-amount?user_id=55dfe11e-820f-4d3c-b548-f507356847ce&start_date=2025-11-12&end_date=2025-11-19 HTTP/1.1" 200 OK
+2025-11-19 10:29:32 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/stats/profit-amount?user_id=55dfe11e-820f-4d3c-b548-f507356847ce&start_date=2025-11-12&end_date=2025-11-19
+2025-11-19 10:29:32 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:29:32 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:62942 - "GET /api/stats/profit-amount?user_id=55dfe11e-820f-4d3c-b548-f507356847ce&start_date=2025-11-12&end_date=2025-11-19 HTTP/1.1" 200 OK
+2025-11-19 10:29:32 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/stats/summary?user_id=55dfe11e-820f-4d3c-b548-f507356847ce
+2025-11-19 10:29:32 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:29:32 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:62942 - "GET /api/stats/summary?user_id=55dfe11e-820f-4d3c-b548-f507356847ce HTTP/1.1" 200 OK
+2025-11-19 10:29:32 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/stats/summary?user_id=55dfe11e-820f-4d3c-b548-f507356847ce
+2025-11-19 10:29:32 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:29:32 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:62942 - "GET /api/stats/summary?user_id=55dfe11e-820f-4d3c-b548-f507356847ce HTTP/1.1" 200 OK
+2025-11-19 10:32:34 - HYPERRSI.src.api.middleware - INFO - Request: POST http://localhost:8000/api/trading/start
+2025-11-19 10:32:34 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:32:34 - HYPERRSI.src.api.routes.trading - INFO - [586156710277369942] 새 트레이딩 태스크 시작: 5e29e486-2f74-499a-ae2e-ab7673494923 (symbol: ETH-USDT-SWAP, timeframe: 1m)
+2025-11-19 10:32:34 - shared.errors.middleware - INFO - Request completed
+okx_status_key: user:586156710277369942:trading:status
+okx_status: stopped
+INFO:     127.0.0.1:64254 - "POST /api/trading/start HTTP/1.1" 200 OK
+2025-11-19 10:32:37 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/stats/trade-history?user_id=55dfe11e-820f-4d3c-b548-f507356847ce&start_date=2025-11-10&end_date=2025-11-19&limit=10
+2025-11-19 10:32:37 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:32:37 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:64309 - "GET /api/stats/trade-history?user_id=55dfe11e-820f-4d3c-b548-f507356847ce&start_date=2025-11-10&end_date=2025-11-19&limit=10 HTTP/1.1" 200 OK
+2025-11-19 10:32:37 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/stats/trade-history?user_id=55dfe11e-820f-4d3c-b548-f507356847ce&start_date=2025-11-10&end_date=2025-11-19&limit=10
+2025-11-19 10:32:37 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:32:37 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:64309 - "GET /api/stats/trade-history?user_id=55dfe11e-820f-4d3c-b548-f507356847ce&start_date=2025-11-10&end_date=2025-11-19&limit=10 HTTP/1.1" 200 OK
+2025-11-19 10:32:38 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/stats/profit-amount?user_id=55dfe11e-820f-4d3c-b548-f507356847ce&start_date=2025-11-12&end_date=2025-11-19
+2025-11-19 10:32:38 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:32:38 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:64309 - "GET /api/stats/profit-amount?user_id=55dfe11e-820f-4d3c-b548-f507356847ce&start_date=2025-11-12&end_date=2025-11-19 HTTP/1.1" 200 OK
+2025-11-19 10:32:38 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/stats/profit-amount?user_id=55dfe11e-820f-4d3c-b548-f507356847ce&start_date=2025-11-12&end_date=2025-11-19
+2025-11-19 10:32:38 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:32:38 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:64309 - "GET /api/stats/profit-amount?user_id=55dfe11e-820f-4d3c-b548-f507356847ce&start_date=2025-11-12&end_date=2025-11-19 HTTP/1.1" 200 OK
+2025-11-19 10:32:38 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/stats/summary?user_id=55dfe11e-820f-4d3c-b548-f507356847ce
+2025-11-19 10:32:38 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:32:38 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:64309 - "GET /api/stats/summary?user_id=55dfe11e-820f-4d3c-b548-f507356847ce HTTP/1.1" 200 OK
+2025-11-19 10:32:38 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/stats/summary?user_id=55dfe11e-820f-4d3c-b548-f507356847ce
+2025-11-19 10:32:38 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:32:38 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:64309 - "GET /api/stats/summary?user_id=55dfe11e-820f-4d3c-b548-f507356847ce HTTP/1.1" 200 OK
+2025-11-19 10:47:43 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-19 10:47:43 - shared.errors.middleware - INFO - Request started
+2025-11-19 10:47:43 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:52674 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-19 11:23:31 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-19 11:23:31 - shared.errors.middleware - INFO - Request started
+2025-11-19 11:23:31 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:63268 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-19 11:42:20 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/stats/summary?user_id=55dfe11e-820f-4d3c-b548-f507356847ce
+2025-11-19 11:42:20 - shared.errors.middleware - INFO - Request started
+2025-11-19 11:42:20 - shared.security.encryption - WARNING - Detected unencrypted API key - consider re-saving with encryption
+2025-11-19 11:42:20 - shared.security.encryption - WARNING - Detected unencrypted API key - consider re-saving with encryption
+2025-11-19 11:42:20 - shared.security.encryption - WARNING - Detected unencrypted API key - consider re-saving with encryption
+2025-11-19 11:42:21,322 - HYPERRSI.src.api.dependencies - Created new exchange client for user 55dfe11e-820f-4d3c-b548-f507356847ce
+2025-11-19 11:42:21 - shared.errors.middleware - INFO - Request completed
+================================================
+get_user_trading_statistics 소요시간: 0.0031380653381347656초
+================================================
+================================================
+completed 주문 데이터 조회 소요시간: 0.0005791187286376953초
+================================================
+get_balance2 소요시간: 1.7381420135498047초
+================================================
+================================================
+get_balance3 소요시간: 1.738149881362915초
+================================================
+================================================
+get_stats_summary 소요시간: 1.7472848892211914초
+================================================
+INFO:     127.0.0.1:52324 - "GET /api/stats/summary?user_id=55dfe11e-820f-4d3c-b548-f507356847ce HTTP/1.1" 200 OK
+2025-11-19 11:43:11 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-19 11:43:11 - shared.errors.middleware - INFO - Request started
+2025-11-19 11:43:11 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:52628 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-19 11:59:20 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-19 11:59:20 - shared.errors.middleware - INFO - Request started
+2025-11-19 11:59:20 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:58517 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-19 12:12:15 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-19 12:12:15 - shared.errors.middleware - INFO - Request started
+2025-11-19 12:12:15 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:62811 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-19 12:18:06 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-19 12:18:06 - shared.errors.middleware - INFO - Request started
+2025-11-19 12:18:06 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:65026 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-19 12:19:30 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-19 12:19:30 - shared.errors.middleware - INFO - Request started
+2025-11-19 12:19:30 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:49158 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-19 16:31:16 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-19 16:31:16 - shared.errors.middleware - INFO - Request started
+2025-11-19 16:31:16 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:54353 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-19 17:16:31 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-19 17:16:31 - shared.errors.middleware - INFO - Request started
+2025-11-19 17:16:31 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:52224 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-19 17:27:24 - HYPERRSI.src.api.middleware - INFO - Request: POST http://localhost:8000/api/trading/stop?user_id=586156710277369942
+2025-11-19 17:27:24 - shared.errors.middleware - INFO - Request started
+2025-11-19 17:27:24 - HYPERRSI.src.api.routes.trading - INFO - 사용자 586156710277369942의 트레이딩 태스크 중지 시도
+2025-11-19 17:27:24 - HYPERRSI.src.api.routes.trading - INFO - OKX UID 586156710277369942의 트레이딩 상태를 stopped로 변경했습니다.
+2025-11-19 17:27:24 - HYPERRSI.src.api.routes.trading - INFO - 사용자 586156710277369942에게 종료 신호를 설정했습니다.
+2025-11-19 17:27:24 - HYPERRSI.src.api.routes.trading - INFO - Celery 태스크 취소 시도 (task_id: 5e29e486-2f74-499a-ae2e-ab7673494923, user_id: 586156710277369942)
+2025-11-19 17:27:24 - HYPERRSI.src.api.routes.trading - INFO - Celery 태스크 취소 명령 전송 완료 (task_id: 5e29e486-2f74-499a-ae2e-ab7673494923)
+2025-11-19 17:27:26,579 - HYPERRSI.src.bot.telegram_message - [send_telegram_message] 호출됨 - okx_uid: 1709556958, debug: False, error: False, immediate: False
+2025-11-19 17:27:26,584 - HYPERRSI.src.bot.telegram_message - [send_telegram_message] 텔레그램 ID 1709556958 감지, OKX UID로 변환 시도
+2025-11-19 17:27:26,584 - HYPERRSI.src.bot.telegram_message - [send_telegram_message] 변환 성공: 1709556958 -> 586156710277369942
+2025-11-19 17:27:26,584 - HYPERRSI.src.bot.telegram_message - [send_telegram_message] 트레이딩이 중지된 상태입니다. 메시지 전송을 건너뜁니다. okx_uid: 586156710277369942
+2025-11-19 17:27:26 - HYPERRSI.src.api.routes.trading - INFO - 사용자 586156710277369942에게 트레이딩 중지 메시지 전송 완료
+2025-11-19 17:27:26 - shared.security.encryption - WARNING - Detected unencrypted API key - consider re-saving with encryption
+2025-11-19 17:27:26 - shared.security.encryption - WARNING - Detected unencrypted API key - consider re-saving with encryption
+2025-11-19 17:27:26 - shared.security.encryption - WARNING - Detected unencrypted API key - consider re-saving with encryption
+2025-11-19 17:27:27,615 - HYPERRSI.src.api.dependencies - Created new exchange client for user 586156710277369942
+2025-11-19 17:27:27 - HYPERRSI.src.api.routes.trading - INFO - 사용자 586156710277369942의 Redis 상태 초기화 중
+2025-11-19 17:27:27 - HYPERRSI.src.api.routes.trading - INFO - TradingService cleanup 완료 (user_id: 586156710277369942)
+2025-11-19 17:27:27 - shared.errors.middleware - INFO - Request completed
+⭐️user_id:  586156710277369942
+⭐️okx_uid222:  586156710277369942
+⭐️okx_uid444:  586156710277369942
+INFO:     127.0.0.1:55867 - "POST /api/trading/stop?user_id=586156710277369942 HTTP/1.1" 200 OK
+2025-11-20 11:40:42 - HYPERRSI.src.api.middleware - INFO - Request: POST http://localhost:8000/api/trading/start
+2025-11-20 11:40:42 - shared.errors.middleware - INFO - Request started
+2025-11-20 11:40:42 - HYPERRSI.src.api.routes.trading - INFO - [586156710277369942] 새 트레이딩 태스크 시작: 36e43922-571d-4e24-87bd-2a1cbbd5b7cc (symbol: ETH-USDT-SWAP, timeframe: 1m)
+2025-11-20 11:40:42 - shared.errors.middleware - INFO - Request completed
+okx_status_key: user:586156710277369942:trading:status
+okx_status: stopped
+INFO:     127.0.0.1:56279 - "POST /api/trading/start HTTP/1.1" 200 OK
+2025-11-20 11:43:04 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-20 11:43:04 - shared.errors.middleware - INFO - Request started
+2025-11-20 11:43:04 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:57029 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-20 12:06:49 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-20 12:06:49 - shared.errors.middleware - INFO - Request started
+2025-11-20 12:06:49 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:64954 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-20 14:07:52 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-20 14:07:52 - shared.errors.middleware - INFO - Request started
+2025-11-20 14:07:52 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:55813 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-20 14:23:28 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-20 14:23:28 - shared.errors.middleware - INFO - Request started
+2025-11-20 14:23:28 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:62872 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-20 14:37:34 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-20 14:37:34 - shared.errors.middleware - INFO - Request started
+2025-11-20 14:37:34 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:64523 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-20 15:23:14 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-20 15:23:14 - shared.errors.middleware - INFO - Request started
+2025-11-20 15:23:14 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:58495 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-20 15:33:34 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-20 15:33:34 - shared.errors.middleware - INFO - Request started
+2025-11-20 15:33:34 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:62277 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-20 15:56:22 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-20 15:56:22 - shared.errors.middleware - INFO - Request started
+2025-11-20 15:56:22 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:53633 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-20 15:57:47 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/user/okx/586156710277369942/telegram
+2025-11-20 15:57:47 - shared.errors.middleware - INFO - Request started
+2025-11-20 15:57:47 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:54095 - "GET /api/user/okx/586156710277369942/telegram HTTP/1.1" 200 OK
+2025-11-20 16:00:05 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/settings/586156710277369942/dual_side
+2025-11-20 16:00:05 - shared.errors.middleware - INFO - Request started
+2025-11-20 16:00:05 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:54897 - "GET /api/settings/586156710277369942/dual_side HTTP/1.1" 200 OK
+2025-11-20 16:00:05 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/settings/586156710277369942/dual_side
+2025-11-20 16:00:05 - shared.errors.middleware - INFO - Request started
+2025-11-20 16:00:05 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:54899 - "GET /api/settings/586156710277369942/dual_side HTTP/1.1" 200 OK
+2025-11-20 16:00:08 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/settings/586156710277369942/dual_side
+2025-11-20 16:00:08 - shared.errors.middleware - INFO - Request started
+2025-11-20 16:00:08 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:54919 - "GET /api/settings/586156710277369942/dual_side HTTP/1.1" 200 OK
+2025-11-20 16:00:08 - HYPERRSI.src.api.middleware - INFO - Request: PUT http://localhost:8000/api/settings/586156710277369942/dual_side
+2025-11-20 16:00:08 - shared.errors.middleware - INFO - Request started
+2025-11-20 16:00:08 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:54921 - "PUT /api/settings/586156710277369942/dual_side HTTP/1.1" 200 OK
+2025-11-20 16:00:08 - HYPERRSI.src.api.middleware - INFO - Request: GET http://localhost:8000/api/settings/586156710277369942/dual_side
+2025-11-20 16:00:08 - shared.errors.middleware - INFO - Request started
+2025-11-20 16:00:08 - shared.errors.middleware - INFO - Request completed
+INFO:     127.0.0.1:54927 - "GET /api/settings/586156710277369942/dual_side HTTP/1.1" 200 OK

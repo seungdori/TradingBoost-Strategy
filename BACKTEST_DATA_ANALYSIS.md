@@ -311,7 +311,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
    analysis = await calculator.analyze_market_state_from_redis(
        symbol, str(timeframe), trend_timeframe_str
    )
-   current_state = analysis['extreme_state']
+   current_state = analysis['trend_state']
    ```
 
 #### 사용자 설정 파라미터

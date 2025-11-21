@@ -23,17 +23,36 @@ def parse_order_response(order_data: dict) -> OrderResponse:
     Returns:
         OrderResponse: 파싱된 주문 응답
     """
+    # status 기본값 처리
+    status = order_data.get("status")
+    if status is None:
+        # market order는 즉시 체결되므로 filled로 가정
+        # 그 외에는 open으로 설정
+        order_type = order_data.get("type", "").lower()
+        status = OrderStatus.FILLED if order_type == "market" else OrderStatus.OPEN
+
+    # timestamp 변환 (밀리초 → datetime, created_at으로 변환)
+    created_at = None
+    if order_data.get("timestamp"):
+        created_at = int(order_data["timestamp"])
+
+    # 체결 수량 계산
+    amount = safe_float(order_data["amount"])
+    filled_amount = safe_float(order_data.get("filled", 0))
+    remaining_amount = amount - filled_amount if amount else 0
+
     return OrderResponse(
         order_id=order_data["id"],
         symbol=order_data["symbol"],
         side=order_data["side"],
         type=order_data["type"],
-        amount=safe_float(order_data["amount"]),
-        filled=safe_float(order_data["filled"]),
+        amount=amount,
+        filled_amount=filled_amount,
+        remaining_amount=remaining_amount,
         price=safe_float(order_data["price"]) if order_data.get("price") else None,
         average_price=safe_float(order_data["average"]) if order_data.get("average") else None,
-        status=order_data["status"],
-        timestamp=dt.datetime.fromtimestamp(order_data["timestamp"] / 1000) if order_data.get("timestamp") else dt.datetime.now(),
+        status=status,
+        created_at=created_at,
         pnl=safe_float(order_data["info"].get("pnl"))
     )
 

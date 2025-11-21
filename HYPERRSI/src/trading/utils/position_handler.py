@@ -168,8 +168,6 @@ async def handle_no_position(
         await init_user_position_data(user_id, symbol, "short")
         timeframe_str = get_timeframe(timeframe)
         print(f"[{user_id}][{timeframe_str}] 포지션 없는 경우의 디버깅 : {current_rsi}, rsi signals : {rsi_signals},current state : {current_state}", flush=True)
-        logger.info(f"[{user_id}] ===== 진입 로직 시작 =====")
-        print(f"[{user_id}] ===== 진입 로직 시작 =====", flush=True)
 
 
         entry_fail_count_key = f"user:{user_id}:entry_fail_count"
@@ -281,6 +279,8 @@ async def handle_no_position(
                     
                     await redis.hset(position_key, "initial_size", contracts_amount)
                     await redis.hset(position_key, "last_entry_size", contracts_amount)
+                    # 백업 키에도 초기 저장 (동기화/클린업 시 대비)
+                    await redis.set(f"user:{user_id}:position:{symbol}:long:initial_size", contracts_amount)
                     #포지션 진입 후, 강제로, 해당 타임프레임이 끝날 때까지는 최소한 진입하지 않도록 레디스 키 설정
                     next_candle_time = await calculate_next_candle_time(timeframe)
                     tf_str = get_timeframe(timeframe)
@@ -357,9 +357,7 @@ async def handle_no_position(
                     logger.info(f"[{user_id}] 롱 포지션 진입 조건 불충족 알림 전송 완료. {symbol} {timeframe}")
 
         # 숏 진입 로직도 동일하게 수정...
-        print(f"[{user_id}] 숏 진입 체크 시작 - direction: {settings['direction']}")
         if settings['direction'] in ['롱숏', '숏']:
-            print(f"[{user_id}] 숏 direction 조건 통과")
             timeframe_lock_long_key = f"user:{user_id}:position_lock:{symbol}:long:{timeframe_str}"
             timeframe_lock_short_key = f"user:{user_id}:position_lock:{symbol}:short:{timeframe_str}"
             try:
@@ -375,7 +373,6 @@ async def handle_no_position(
             except Exception as e:
                 is_locked = False
                 timeframe_lock_key = timeframe_lock_long_key
-            print(f"[{user_id}] 잠금 체크 완료 - is_locked: {is_locked}")
             if is_locked:
                 remaining_time = await redis.ttl(timeframe_lock_key)
                 logger.info(f"[{user_id}] Position is locked for {symbol} with timeframe {timeframe_str}. Remaining time: {remaining_time}s")
@@ -434,6 +431,7 @@ async def handle_no_position(
                     position_key = f"user:{user_id}:position:{symbol}:short"
                     await redis.hset(position_key, "initial_size", contracts_amount)
                     await redis.hset(position_key, "last_entry_size", contracts_amount)
+                    await redis.set(f"user:{user_id}:position:{symbol}:short:initial_size", contracts_amount)
                     #$await send_telegram_message(f"[{user_id}] 숏 포지션 진입 완료. 초기 크기: {contracts_amount}, 마지막 진입 크기: {contracts_amount}", user_id, debug = True)
                     
                     #포지션 진입 후, 강제로, 해당 타임프레임이 끝날 때까지는 최소한 진입하지 않도록 레디스 키 설정
@@ -659,7 +657,7 @@ async def handle_existing_position(
             else:
                 last_filled_price = float(last_filled_price_raw)
             
-            print(f"[{user_id}] initial_entry_price : {initial_entry_price}, last_filled_price : {last_filled_price}")
+            print(f"1. [{user_id}] initial_entry_price : {initial_entry_price}, last_filled_price : {last_filled_price}")
             dca_levels = await calculate_dca_levels(initial_entry_price, last_filled_price, settings, side, atr_value, current_price, user_id)
             await update_dca_levels_redis(user_id, symbol, dca_levels, side)
 
@@ -1221,7 +1219,7 @@ async def handle_existing_position(
                                 else:
                                     last_filled_price = float(last_filled_price_raw)
                                 
-                                print(f"[{user_id}] initial_entry_price : {initial_entry_price}, last_filled_price : {last_filled_price}")
+                                print(f"2. [{user_id}] initial_entry_price : {initial_entry_price}, last_filled_price : {last_filled_price}")
                                 dca_levels = await calculate_dca_levels(
                                     initial_entry_price, 
                                     last_filled_price, 

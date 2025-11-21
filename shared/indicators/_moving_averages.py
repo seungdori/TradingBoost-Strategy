@@ -102,36 +102,59 @@ def calc_t3(series, length=5):
     return out
 
 
-def calc_vidya(series, smooth_period=9):
+def calc_vidya(series, smooth_period=9, momentum_source=None):
     """
     Variable Index Dynamic Average (VIDYA)
+
+    PineScript FuncVIDYA 정확한 구현:
+    - series: 스무딩 적용할 가격 시리즈 (Pine의 _src)
+    - momentum_source: Chande Momentum 계산용 시리즈 (Pine의 close, 기본값은 series와 동일)
+
+    Pine에서 FuncVIDYA는:
+    - vidya_price = _src (입력 source로 스무딩)
+    - vidya_pricc = close (항상 close로 모멘텀 계산)
     """
     if not series:
         return []
+
+    # momentum_source가 없으면 series 자체를 사용 (기존 동작 유지)
+    if momentum_source is None:
+        momentum_source = series
+
     result = []
     # 초깃값
     vidya_prev = series[0]
     result.append(vidya_prev)
+
     for i in range(1, len(series)):
-        # RVI 개념으로 N=9 고정(간단화)
+        # Chande Momentum Oscillator (CMO) 계산 - N=9 고정
         sum_up, sum_down = 0.0, 0.0
         for k in range(1, 10):
             if i - k < 0:
                 break
-            diff = series[i - k] - series[i - k - 1] if (i - k - 1 >= 0) else 0
+
+            # momentum_source로 모멘텀 계산 (Pine의 vidya_pricc = close)
+            curr_val = momentum_source[i - k]
+            prev_val = momentum_source[i - k - 1] if (i - k - 1 >= 0) else momentum_source[0]
+            diff = curr_val - prev_val
+
             if diff > 0:
                 sum_up += diff
             else:
                 sum_down -= diff
+
+        # CMO 값 계산
         chande_momentum = 1.0
         if (sum_up + sum_down) != 0:
             chande_momentum = abs((sum_up - sum_down) / (sum_up + sum_down))
 
+        # VIDYA 계산: series에 적용 (Pine의 vidya_price = _src)
         alpha = 2.0 / (smooth_period + 1.0)
         factor = alpha * chande_momentum
         vidya_val = vidya_prev + factor * (series[i] - vidya_prev)
         result.append(vidya_val)
         vidya_prev = vidya_val
+
     return result
 
 
@@ -183,9 +206,17 @@ def calc_jma(series: list[float], length: int = 5, phase: int = 50, power: int =
     return out
 
 
-def get_ma(source, ma_type, length=20, phase_jma=50, power_jma=2):
+def get_ma(source, ma_type, length=20, phase_jma=50, power_jma=2, momentum_source=None):
     """
     Select and calculate moving average by type
+
+    Args:
+        source: 가격 시리즈 (스무딩 적용 대상)
+        ma_type: MA 타입 ('SMA', 'EMA', 'VIDYA', 'JMA', 'T3', etc.)
+        length: MA 길이
+        phase_jma: JMA phase 파라미터
+        power_jma: JMA power 파라미터
+        momentum_source: VIDYA용 모멘텀 계산 소스 (기본값은 source와 동일)
     """
     if ma_type == 'SMA':
         return calc_sma(source, length)
@@ -216,7 +247,7 @@ def get_ma(source, ma_type, length=20, phase_jma=50, power_jma=2):
     elif ma_type == "T3":
         return calc_t3(source, length)
     elif ma_type == "VIDYA":
-        return calc_vidya(source, length)
+        return calc_vidya(source, length, momentum_source=momentum_source)
     else:
         # 기본은 EMA
         return calc_ema(source, length)

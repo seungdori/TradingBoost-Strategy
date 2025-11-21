@@ -33,9 +33,13 @@ async def setup_bot(max_retries: int = 5, retry_delay: float = 5.0):
         try:
             logger.info(f"Setting up Telegram bot... (attempt {attempt + 1}/{max_retries})")
 
-            # Custom session with timeout configuration
-            # Use numeric timeout (in seconds) for compatibility with aiogram polling
-            session = AiohttpSession(timeout=60)
+            # Enhanced session configuration
+            # aiogram 3.x에서 timeout은 초 단위 숫자만 지원
+            # 내부적으로 ClientTimeout 객체로 변환됨
+            session = AiohttpSession(
+                timeout=120,  # 전체 요청 타임아웃: 2분 (초 단위)
+                limit=100     # 최대 동시 연결 수
+            )
 
             # 봇 및 디스패처 초기화
             bot = Bot(
@@ -48,10 +52,13 @@ async def setup_bot(max_retries: int = 5, retry_delay: float = 5.0):
 
             # Test connection with getMe
             logger.info("Testing Telegram API connection...")
-            bot_info = await asyncio.wait_for(bot.get_me(), timeout=15.0)
+            bot_info = await asyncio.wait_for(bot.get_me(), timeout=30.0)
             logger.info(f"Successfully connected to Telegram API as @{bot_info.username}")
 
             dp = Dispatcher(storage=MemoryStorage())
+
+            # 에러 핸들러 설정 (먼저 등록)
+            setup_error_handlers(dp)
 
             # 각 모듈의 라우터 등록
             dp.include_router(basic.router)
@@ -80,9 +87,9 @@ async def setup_bot(max_retries: int = 5, retry_delay: float = 5.0):
                 await bot.session.close()
                 bot = None
 
-        # Wait before retry (exponential backoff)
+        # Wait before retry (exponential backoff with max cap)
         if attempt < max_retries - 1:
-            wait_time = retry_delay * (2 ** attempt)
+            wait_time = min(retry_delay * (2 ** attempt), 60.0)  # 최대 60초
             logger.info(f"Waiting {wait_time:.1f} seconds before retry...")
             await asyncio.sleep(wait_time)
 
@@ -108,3 +115,55 @@ async def shutdown_bot(bot: Bot):
     except Exception as e:
         logger.error(f"Error shutting down bot: {str(e)}")
         raise
+
+
+def setup_error_handlers(dp: Dispatcher):
+    """
+    Telegram API 에러 핸들링 설정
+
+    aiogram의 기본 재시도 메커니즘을 보완하여:
+    - 네트워크 오류에 대한 구체적 로깅
+    - 재시도 전략 모니터링
+    - 치명적 오류 감지
+    """
+    from aiogram.exceptions import TelegramAPIError
+    from aiohttp import ClientError
+
+    @dp.errors()
+    async def error_handler(event, data):
+        """글로벌 에러 핸들러"""
+        exception = event.exception
+
+        # 네트워크 관련 오류 처리
+        if isinstance(exception, (ClientError, asyncio.TimeoutError)):
+            logger.warning(
+                f"Network error in Telegram bot: {type(exception).__name__} - {str(exception)}",
+                extra={
+                    "error_type": "network",
+                    "exception_class": type(exception).__name__
+                }
+            )
+            # aiogram이 자동으로 재시도하므로 여기서는 로깅만
+            return True
+
+        # Telegram API 오류 처리
+        if isinstance(exception, TelegramAPIError):
+            logger.error(
+                f"Telegram API error: {exception}",
+                extra={
+                    "error_type": "telegram_api",
+                    "exception_class": type(exception).__name__
+                }
+            )
+            return True
+
+        # 기타 예외
+        logger.error(
+            f"Unhandled error in Telegram bot: {exception}",
+            exc_info=True,
+            extra={
+                "error_type": "unhandled",
+                "exception_class": type(exception).__name__
+            }
+        )
+        return True  # True를 반환하여 봇이 계속 실행되도록 함

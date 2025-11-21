@@ -87,13 +87,13 @@ def _calc_bb_state_helper(candle_data, bb_length=15, bb_mult=1.5, bb_ma_len=100)
         # pivot 수집 (Pine Script lines 283-288)
         if not (ma_val is None or math.isnan(ma_val) or math.isnan(bbw_val)):
             # bbw > ma일 때만 pivot high 수집
-            if bbw_val > ma_val and ph_list[i] is not None:
+            if bbw_val > ma_val and ph_list[i] is not None and ph_list[i] > 0:
                 ph_array.append(ph_list[i])
                 if len(ph_array) > array_size:
                     ph_array.pop(0)
 
             # bbw < ma일 때만 pivot low 수집
-            if bbw_val < ma_val and pl_list[i] is not None:
+            if bbw_val < ma_val and pl_list[i] is not None and pl_list[i] > 0:
                 pl_array.append(pl_list[i])
                 if len(pl_array) > array_size:
                     pl_array.pop(0)
@@ -153,7 +153,7 @@ def _calc_bb_state_helper(candle_data, bb_length=15, bb_mult=1.5, bb_ma_len=100)
         bbw_2nd_val = bbw_2nd_list[i]
 
         # pivot low 수집 (Pine Script lines 311-313)
-        if not math.isnan(bbw_2nd_val) and bbw_2nd_val < 1 and pl_2nd_list[i] is not None:
+        if not math.isnan(bbw_2nd_val) and bbw_2nd_val < 1 and pl_2nd_list[i] is not None and pl_2nd_list[i] > 0:
             pl_array_2nd.append(pl_2nd_list[i])
             if len(pl_array_2nd) > array_size:
                 pl_array_2nd.pop(0)
@@ -431,16 +431,17 @@ def compute_all_indicators(candles, rsi_period=14, atr_period=14,
     # Pine Script lines 261-352
 
     # Pine Script Line 261-352: BB_State 계산 (현재 타임프레임)
-    # - 참고용으로 계산하지만, extreme_state에서는 사용 안 함
+    # - 참고용으로 계산하지만, trend_state에서는 사용 안 함
     bb_state_list = _calc_bb_state_helper(candles, bb_length=bb_length, bb_mult=bb_mult, bb_ma_len=bb_ma_len)
 
     # Pine Script Line 358: BB_State_MTF = f_security(..., bb_mtf, BB_State)
-    # - extreme_state 계산에 실제로 사용되는 MTF BB_State
+    # - trend_state 계산에 실제로 사용되는 MTF BB_State
     bb_state_mtf_list = _calc_bb_state_helper(candles_bb_mtf, bb_length=bb_length, bb_mult=bb_mult, bb_ma_len=bb_ma_len)
 
-    # (E) extreme_state = 2 / -2 / 0 (PineScript 원본 로직과 동일하게 상태 유지)
-    # Bull & BB_State_MTF=2 => extreme=2
-    # Bear & BB_State_MTF=-2 => extreme=-2
+    # (E) Trend State (Pine Script Line 364-374)
+    # trend_state = 2 / -2 / 0 (PineScript 원본 로직과 동일하게 상태 유지)
+    # Bull & BB_State_MTF=2 => trend_state=2
+    # Bear & BB_State_MTF=-2 => trend_state=-2
     # 상태 유지 로직 추가
     trend_state_list = [0]*len(closes)
     for i in range(len(closes)):
@@ -452,20 +453,20 @@ def compute_all_indicators(candles, rsi_period=14, atr_period=14,
         # 이전 상태 가져오기 (PineScript의 var 동작 모방)
         prev_state = trend_state_list[i-1] if i > 0 else 0
 
-        # 상승 극단 조건 (PineScript 라인 364-365)
+        # Bull 조건 (PineScript Line 364-365)
         # if CYCLE_Bull and (use_longer_trend ? true : BB_State_MTF == 2)
         if bull and (use_longer_trend or bb_st_mtf == 2):
             trend_state_list[i] = 2
-        # 상승 극단 종료 조건 (PineScript 라인 367-368)
-        # if extreme_state == 2 and not CYCLE_Bull
+        # Bull 종료 조건 (PineScript Line 367-368)
+        # if trend_state == 2 and not CYCLE_Bull
         elif prev_state == 2 and not bull:
             trend_state_list[i] = 0
-        # 하락 극단 조건 (PineScript 라인 370-371)
+        # Bear 조건 (PineScript Line 370-371)
         # if CYCLE_Bear and (use_longer_trend ? true : BB_State_MTF == -2)
         elif bear and (use_longer_trend or bb_st_mtf == -2):
             trend_state_list[i] = -2
-        # 하락 극단 종료 조건 (PineScript 라인 373-374)
-        # if extreme_state == -2 and not CYCLE_Bear
+        # Bear 종료 조건 (PineScript Line 373-374)
+        # if trend_state == -2 and not CYCLE_Bear
         elif prev_state == -2 and not bear:
             trend_state_list[i] = 0
         # 상태 유지 (PineScript의 var 동작)

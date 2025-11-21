@@ -8,7 +8,7 @@ import numpy as np
 
 
 def calc_stddev(series: list[float], length: int) -> list[float]:
-    """표준편차(STDEV)"""
+    """표준편차(STDEV) - 원래 구현 (length만큼 데이터 필요)"""
     window: deque[float] = deque()
     sum_ = 0.0
     sum_sq = 0.0

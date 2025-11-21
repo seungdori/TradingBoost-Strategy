@@ -1,5 +1,6 @@
 import asyncio
 import datetime as dt
+import html
 import json
 import logging
 import os
@@ -387,11 +388,14 @@ async def send_telegram_message_with_markup_direct(okx_uid, text, reply_markup=N
             retry_delay = 1
             bot = telegram.Bot(TELEGRAM_BOT_TOKEN)
 
+            # HTML 특수 문자 이스케이프
+            escaped_text = html.escape(text)
+
             for attempt in range(max_retries):
                 try:
                     response_msg = await bot.send_message(
                         chat_id=telegram_id,
-                        text=text,
+                        text=escaped_text,
                         reply_markup=reply_markup,
                         parse_mode='HTML' # HTML 파싱 추가
                     )
@@ -482,11 +486,14 @@ async def send_telegram_message_direct(message, okx_uid, debug=False, category="
                 token = TELEGRAM_BOT_TOKEN
                 bot = telegram.Bot(token)
 
+                # HTML 특수 문자 이스케이프
+                escaped_message = html.escape(final_message)
+
                 for attempt in range(max_retries):
                     try:
                         response = await bot.send_message(
                             chat_id=str(telegram_id_to_send),
-                            text=final_message,
+                            text=escaped_message,
                             parse_mode='HTML' # HTML 파싱 추가
                         )
                         status = "success"
@@ -548,13 +555,16 @@ async def edit_telegram_message_text_direct(okx_uid, message_id, text, reply_mar
             retry_delay = 1
             bot = telegram.Bot(TELEGRAM_BOT_TOKEN)
 
+            # HTML 특수 문자 이스케이프
+            escaped_text = html.escape(text)
+
             for attempt in range(max_retries):
                 try:
                     # edit_message_text는 수정된 메시지 객체 또는 True를 반환할 수 있음
                     response = await bot.edit_message_text(
                         chat_id=str(telegram_id),
                         message_id=message_id,
-                        text=text,
+                        text=escaped_text,
                         reply_markup=reply_markup,
                         parse_mode='HTML' # HTML 파싱 추가
                     )

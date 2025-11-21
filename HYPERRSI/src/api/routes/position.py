@@ -15,6 +15,11 @@ from shared.database.redis_helper import get_redis_client
 from shared.database.redis_patterns import redis_context, RedisTimeout
 from shared.dtos.trading import ClosePositionRequest, OpenPositionRequest, PositionResponse
 from shared.helpers.user_id_resolver import get_okx_uid_from_telegram, resolve_user_identifier
+from shared.utils.redis_utils import get_user_settings as redis_get_user_settings
+
+from HYPERRSI.src.api.trading.Calculate_signal import TrendStateCalculator
+from HYPERRSI.src.trading.trading_service import TradingService
+from HYPERRSI.src.trading.utils.position_handler.entry import handle_no_position
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +112,23 @@ class LeverageResponse(BaseModel):
     posSide: Optional[str]
     status: str
 
-from HYPERRSI.src.trading.trading_service import TradingService
+
+class EntrySignalPayload(BaseModel):
+    is_oversold: bool = Field(description="RSI 기준 과매도 여부")
+    is_overbought: bool = Field(description="RSI 기준 과매수 여부")
+
+
+class EntryTriggerRequest(BaseModel):
+    user_id: str = Field(description="텔레그램 ID 또는 OKX UID")
+    symbol: str = Field(description="거래 심볼 (예: BTC-USDT-SWAP)")
+    timeframe: str = Field(description="진입을 판단한 타임프레임")
+    current_rsi: float = Field(description="현재 RSI 값")
+    rsi_signals: EntrySignalPayload
+    current_state: int = Field(..., ge=-2, le=2, description="TrendStateCalculator가 산출한 현재 상태")
+    settings: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="(옵션) 사용자 설정 덮어쓰기. 지정하지 않으면 Redis 설정을 사용"
+    )
 
 # ----------------------------
 # 요청(Request) / 응답(Response) 모델
@@ -1474,6 +1495,61 @@ async def open_position_endpoint(
         )
         logger.error(f"[open_position] Error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post(
+    "/entry-trigger",
+    summary="외부 신호 기반 포지션 진입 실행",
+    description="RSI·트렌드 신호와 현재 상태를 전달하면 HyperRSI의 handle_no_position 로직을 실행합니다."
+)
+async def trigger_manual_entry(request: EntryTriggerRequest) -> Dict[str, Any]:
+    try:
+        okx_uid = await resolve_user_identifier(str(request.user_id))
+
+        # 설정 로드: 요청에서 오버라이드하거나 Redis에서 가져옴
+        settings = request.settings
+        if settings is None:
+            redis = await get_redis_client()
+            settings = await redis_get_user_settings(redis, okx_uid)
+
+        if not settings:
+            raise HTTPException(status_code=400, detail="사용자 설정을 찾을 수 없습니다.")
+
+        trading_service = await TradingService.create_for_user(okx_uid)
+        calculator = TrendStateCalculator()
+
+        await handle_no_position(
+            user_id=okx_uid,
+            settings=settings,
+            trading_service=trading_service,
+            calculator=calculator,
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            current_rsi=request.current_rsi,
+            rsi_signals=request.rsi_signals.model_dump(),
+            current_state=request.current_state
+        )
+
+        return {
+            "status": "ok",
+            "message": "Entry trigger processed",
+            "user_id": okx_uid,
+            "symbol": request.symbol
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_error(
+            error=e,
+            user_id=request.user_id,
+            additional_info={
+                "function": "trigger_manual_entry",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+        logger.error(f"[entry-trigger] Error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post(

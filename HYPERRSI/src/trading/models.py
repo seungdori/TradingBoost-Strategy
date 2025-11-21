@@ -20,6 +20,7 @@ class Position:
     position_qty: Optional[float] = None
     initial_size: Optional[float] = None
     contract_size: Optional[float] = None # 심볼 별로 contractSize로 나오는 것.
+    mark_price: Optional[float] = None  # 현재 마크 가격
     tp_prices: Optional[List[float]] = None
     sl_price: Optional[float] = None
     order_id: Optional[str] = None  # 진입 주문 ID

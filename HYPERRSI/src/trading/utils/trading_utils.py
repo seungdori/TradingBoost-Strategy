@@ -109,7 +109,7 @@ async def calculate_dca_levels(entry_price: float, last_filled_price:float ,sett
     else:
         entry_price = last_filled_price
         
-    print(f"[{user_id}] 🖤entry_price: {entry_price}")
+
     #print(f"[{user_id}] entry_criterion : {entry_criterion}\n last_filled_price : {last_filled_price}\n current_price : {current_price}")
 
     # pyramiding_limit 만큼 DCA 레벨 생성 (마지막 체결가 기준으로 순차 계산)
@@ -136,7 +136,6 @@ async def calculate_dca_levels(entry_price: float, last_filled_price:float ,sett
         dca_levels.append(level)
         base_price = level  # 다음 레벨은 이전 레벨 기준으로 계산
 
-    print(f"[{user_id}] 계산된 DCA 레벨: {dca_levels}")
     return dca_levels
 
 async def update_dca_levels_redis(user_id: str, symbol: str, dca_levels: list, side: str):

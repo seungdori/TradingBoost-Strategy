@@ -17,7 +17,6 @@ class OrderWrapper:
         # ORDER_BACKEND는 항상 자기 자신을 가리키므로 사용하지 않음
         # 항상 로컬 exchange 사용
         
-        logger.info("Using local exchange client for orders")
         self.exchange = ccxt.okx({
             'apiKey': api_keys.get('api_key'),
             'secret': api_keys.get('api_secret'),

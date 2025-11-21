@@ -34,7 +34,6 @@ async def get_current_price(symbol: str, timeframe: str = "1m", exchange: ccxt.E
         Raises:
             ValueError: 유효하지 않은 시간단위나 현재가일 경우
         """
-    logger.info(f"🔍 get_current_price 호출: symbol={symbol}, timeframe={timeframe}")
 
     # MIGRATED: Using get_redis_context() with FAST_OPERATION for price lookup
     async with get_redis_context(user_id=f"_price_{symbol}", timeout=RedisTimeout.FAST_OPERATION) as redis:
@@ -49,7 +48,6 @@ async def get_current_price(symbol: str, timeframe: str = "1m", exchange: ccxt.E
 
             # Redis에서 latest 데이터 조회
             latest_key = f"latest:{symbol}:{tf_str}"
-            logger.info(f"🔍 Redis 키 조회: {latest_key}")
             latest_data = await redis.get(latest_key)
 
             if not latest_data:
@@ -64,7 +62,6 @@ async def get_current_price(symbol: str, timeframe: str = "1m", exchange: ccxt.E
             if current_price <= 0:
                 raise ValueError(f"유효하지 않은 현재가: {current_price}")
 
-            logger.info(f"✅ {symbol} 현재가: ${current_price:,.2f}")
             return current_price
 
         except Exception as e:

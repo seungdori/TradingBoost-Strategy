@@ -182,7 +182,6 @@ class OrderBackendWrapper:
         else:
             self.backend_client = None
             self.use_backend = False
-            logger.info("Using local exchange client for orders")
             
     async def create_order(self, order_request: OrderRequest) -> OrderResponse:
         """주문 생성 - 백엔드 또는 로컬 자동 선택"""

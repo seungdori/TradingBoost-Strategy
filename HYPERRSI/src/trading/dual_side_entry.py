@@ -10,7 +10,6 @@ import ccxt
 
 from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
 from HYPERRSI.src.api.routes.order.order import cancel_algo_orders, close_position
-from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.error_handler import log_error
 from HYPERRSI.src.core.logger import log_dual_side_debug
@@ -165,6 +164,9 @@ async def manage_dual_side_entry(
     리턴값:
         - None (내부에서 양방향 포지션을 진입하거나, TP를 실행)
     """
+    # Import here to avoid circular dependency
+    from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
+
     #asyncio.create_task(send_telegram_message(f"[{user_id}] 양방향 진입 관리 함수 시작", okx_uid, debug=True))
     # 함수 시작 로깅
     log_dual_side_debug(
@@ -181,9 +183,7 @@ async def manage_dual_side_entry(
 
     # (A) 양방향 기능이 활성화되어 있는지 확인
     try:
-        print("="*30)
-        print("position_mode_info 조회 시작")
-        print("="*30)
+        logger.debug(f"[{user_id}] position_mode_info 조회 시작")
         position_mode_info = await exchange.fetch_position_mode(symbol=symbol)
         #print(f"position_mode_info: {position_mode_info}")
         is_hedge_mode = position_mode_info.get('hedged', False)
@@ -255,7 +255,7 @@ async def manage_dual_side_entry(
                 message='양방향 진입 기능이 비활성화되어 있음',
                 level='INFO'
             )
-            print("양방향 진입 기능이 비활성화되어 있음")
+            logger.info(f"[{user_id}] 양방향 진입 기능이 비활성화되어 있음")
             return  # 기능이 꺼져 있다면 아무것도 하지 않음.
         
    
@@ -279,26 +279,27 @@ async def manage_dual_side_entry(
         except Exception as e:
             logger.error(f"dca_order_count 조회 실패: {str(e)}")
             dca_order_count = 1
-        print("여기 분기까지 안들어오는 것 같다.")
+
         dca_order_count = int(dca_order_count)
-        print(f"[{user_id}] dca_order_count: {dca_order_count}, trigger_index: {trigger_index}")
-        if (dca_order_count ) < int(trigger_index):
-            print(f"아직 양방향 진입 미도달. trigger_index: {trigger_index}, dca_order_count: {dca_order_count}")
+        logger.debug(f"[{user_id}] 양방향 진입 조건 확인 - dca_order_count: {dca_order_count}, trigger_index: {trigger_index}")
+
+        if dca_order_count < int(trigger_index):
+            logger.info(f"[{user_id}] 아직 양방향 진입 미도달. trigger_index: {trigger_index}, dca_order_count: {dca_order_count}")
             return  # 조건 불충족
         # (C) 현재 보유 중인 (메인) 포지션 정보 확인
         existing_position = await trading_service.get_current_position(user_id, symbol, main_position_side)
-        
-        print(f"existing_position: {existing_position}")
+
+        logger.debug(f"[{user_id}] 기존 메인 포지션 조회: {existing_position}")
         if not existing_position:
-
-            await send_telegram_message(f"이상한 부분 발견 : 양방향 조건인데, 메인 포지션이 없음", user_id, debug=True)
+            logger.warning(f"[{user_id}] 양방향 조건이지만 메인 포지션이 없음")
+            await send_telegram_message(f"⚠️ 이상한 부분 발견: 양방향 조건인데, 메인 포지션이 없음", user_id, debug=True)
             return
-        existing_size = existing_position.size  # 메인 포지션 수량
-        print(f"existing_size: {existing_size}")
-        if existing_size <= 0.02:
 
-            
-            await send_telegram_message(f"이상한 부분 발견 : 양방향 조건인데, 메인 포지션이 없음", user_id, debug=True)
+        existing_size = existing_position.size  # 메인 포지션 수량
+        logger.debug(f"[{user_id}] 기존 메인 포지션 크기: {existing_size}")
+        if existing_size <= 0.02:
+            logger.warning(f"[{user_id}] 메인 포지션 크기가 너무 작음: {existing_size}")
+            await send_telegram_message(f"⚠️ 이상한 부분 발견: 양방향 조건인데, 메인 포지션 크기가 너무 작음 ({existing_size})", user_id, debug=True)
             return
     
         # (E) 헷지 포지션 규모 계산
@@ -311,9 +312,9 @@ async def manage_dual_side_entry(
         # 현재 헷지 포지션 확인
         existing_hedge_position = await trading_service.get_current_position(user_id, symbol, opposite_side)
         existing_hedge_size = existing_hedge_position.size if existing_hedge_position else 0
-        print(f"existing_hedge_size: {existing_hedge_size}")
-        
-        print(f"dual_side_enabled: {dual_side_enabled}")
+        logger.debug(f"[{user_id}] 기존 헷지 포지션 크기 ({opposite_side}): {existing_hedge_size}")
+
+        logger.debug(f"[{user_id}] 양방향 진입 활성화 상태: {dual_side_enabled}")
         if not validate_dual_side_settings(dual_side_settings):
             log_dual_side_debug(
                 user_id=user_id,
@@ -323,8 +324,8 @@ async def manage_dual_side_entry(
                 level='WARNING',
                 invalid_settings=dual_side_settings
             )
-            
-            print(f"Invalid dual side settings for user {user_id}")
+
+            logger.warning(f"[{user_id}] 양방향 설정 검증 실패")
             await send_telegram_message(f"⚠️ 양방향 설정이 올바르지 않습니다.\n""/dual_settings 명령어로 설정을 확인해주세요.",user_id)
             return
         
@@ -332,24 +333,25 @@ async def manage_dual_side_entry(
         if ratio_type == 'percent_of_position':
             if dual_side_entry_ratio_value <= 1:
                 dual_side_entry_ratio_value = dual_side_entry_ratio_value * 100
-            
+
             # 목표 헷지 포지션 크기 계산
             target_hedge_size = max(float(existing_size) * float(dual_side_entry_ratio_value)*0.01, 0.05)
-            
+
             # 추가로 필요한 헷지 포지션 크기 계산
             new_position_size = max(target_hedge_size - existing_hedge_size, 0.05)
-            
-            print(f"target_hedge_size: {target_hedge_size}, new_position_size: {new_position_size}")
+
+            logger.debug(f"[{user_id}] 헷지 포지션 계산 (비율 기반) - 목표: {target_hedge_size}, 추가 필요: {new_position_size}")
         else:
             target_hedge_size = max(float(dual_side_entry_ratio_value), 0.05)  # 고정 수량
             new_position_size = max(target_hedge_size - existing_hedge_size, 0.05)  # 필요한 추가 헷지 크기
-            
+            logger.debug(f"[{user_id}] 헷지 포지션 계산 (고정 수량) - 목표: {target_hedge_size}, 추가 필요: {new_position_size}")
+
         # 이미 충분한 헷지 포지션이 있는 경우 추가 진입하지 않음
         if existing_hedge_size >= target_hedge_size:
-            print(f"이미 충분한 헷지 포지션 있음. 추가 진입 불필요 (기존: {existing_hedge_size}, 목표: {target_hedge_size})")
+            logger.info(f"[{user_id}] 이미 충분한 헷지 포지션 있음. 추가 진입 불필요 (기존: {existing_hedge_size}, 목표: {target_hedge_size})")
             return
-            
-        print(f"new_position_size: {new_position_size}" )
+
+        logger.debug(f"[{user_id}] 새로운 헷지 포지션 크기: {new_position_size}")
         # (F) 헷지 포지션 방향 (반대방향) - 위로 이동함
         dual_side_entry_tp_trigger_type = dual_side_settings.get('dual_side_entry_tp_trigger_type', 'percent')
         close_on_last_dca = dual_side_entry_tp_trigger_type == 'last_dca_on_position'
@@ -370,7 +372,7 @@ async def manage_dual_side_entry(
         is_last_dca = (dca_order_count) >= pyramiding_limit
         logger.info(f"[❤️‍🔥마지막 DCA여부 : {is_last_dca}] dca_order_count: {dca_order_count}, pyramiding_limit: {pyramiding_limit}")
         if (close_on_last_dca and is_last_dca):
-            print("최종 DCA에 헷징포지션을 종료")
+            logger.info(f"[{user_id}] 최종 DCA에 헷징포지션을 종료")
             # 헷지 포지션 종료
             close_request = ClosePositionRequest(
                 close_type='market',
@@ -497,8 +499,7 @@ async def manage_dual_side_entry(
                 dual_side_settings=dual_side_settings,
                 trading_service=trading_service
                 )
-            print(f"hedge_sl_price: {hedge_sl_price}, hedge_tp_price: {hedge_tp_price}")
-            print(f"TYPE OF HEDGE TP: {type(hedge_tp_price)}")
+            logger.debug(f"[{user_id}] 헷지 포지션 SL/TP 계산 - SL: {hedge_sl_price}, TP: {hedge_tp_price} (타입: {type(hedge_tp_price)})")
             # (G-2) 헷지 포지션 오픈
 
             try:
@@ -793,7 +794,7 @@ async def calculate_hedge_sl_tp(
         #     "기존 포지션" 모드면 메인 포지션의 첫번째 TP를 헷지 SL로 사용
         #     "퍼센트" 모드면 avg_price ± 퍼센트
         if use_dual_sl:
-            print(f"use_dual_sl: {use_dual_sl}")
+            logger.debug(f"[{user_id}] use_dual_sl 활성화: {use_dual_sl}")
             if str(user_id) == '1709556958':
                 await send_telegram_message(f"use_dual_sl 체크! : {use_dual_sl}", user_id, debug=True)
             if sl_trigger_type == "existing_position":

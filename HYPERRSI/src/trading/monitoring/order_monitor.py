@@ -655,11 +655,22 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
         
         # 완전 체결 또는 취소된 경우 알림 발송
         if status in ["filled"]:
+            # 중복 알림 방지: Redis에 WebSocket 알림 이력 확인
+            notification_key = f"ws_notification:user:{okx_uid}:order:{order_id}"
+            already_notified_by_ws = await redis.get(notification_key)
+
+            if already_notified_by_ws:
+                logger.info(f"⏭️ 이미 WebSocket에서 알림 전송됨: {order_id}, Monitor 알림 스킵")
+                return
+
             order_type = get_actual_order_type(order_data)
-            
+
+            # 디버깅: order_type 확인
+            logger.info(f"📋 [Monitor] 주문 타입 확인 - order_id: {order_id}, order_type: {order_type}, order_data: {order_data.get('order_type')}, order_name: {order_data.get('order_name')}")
+
             price = float(order_data.get("price", "0"))
             position_side = order_data.get("position_side", "unknown")
-            
+
             # PnL 계산을 위한 추가 정보 가져오기
             position_key = f"user:{okx_uid}:position:{symbol}:{position_side}"
             position_data = await redis.hgetall(position_key)
@@ -667,18 +678,18 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
             is_hedge = is_true_value(position_data.get("is_hedge", "false"))
 
             filled_qty = await contracts_to_qty(symbol=symbol, contracts=int(filled_contracts))
-            
+
             # 메시지 구성 (주문 유형별 맞춤형 메시지)
             status_emoji = "✅" if status == "filled" else "❌"
             status_text = "체결 완료"
-            
+
             # 주문 유형에 따른 메시지 제목 설정
             if status == "filled":
                 if order_type == "break_even":
-                    title = f"🟡 브레이크이븐 {status_text}"
+                    title = f"🟡 [Monitor] 브레이크이븐 {status_text}"
                 elif order_type == "sl":
                     if is_hedge == True:
-                        title = f"🔴 반대포지션 손절 {status_text}"
+                        title = f"🔴 [Monitor] 반대포지션 손절 {status_text}"
                         position_exists, _ = await check_position_exists(okx_uid, symbol, position_side)
 
                         # 포지션이 존재한다면 직접 종료
@@ -715,20 +726,20 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                                 await send_telegram_message(f"브레이크이븐 종료 오류!!!: {str(e)}", okx_uid, debug = True)
  
                     else:
-                        title = f"🔴 손절(SL) {status_text}"
+                        title = f"🔴 [Monitor] 손절(SL) {status_text}"
                 elif order_type and isinstance(order_type, str) and order_type.startswith("tp"):
                     tp_level_str = order_type[2:] if len(order_type) > 2 else "1"
-                    title = f"🟢 익절(TP{tp_level_str}) {status_text}"
+                    title = f"🟢 [Monitor] 익절(TP{tp_level_str}) {status_text}"
                 else:
-                    title = f"{status_emoji} 주문 {status_text}"
+                    title = f"{status_emoji} [Monitor] 주문 {status_text}"
             else:
                 if order_type == "sl":
-                    title = f"⚠️ 손절(SL) 주문 {status_text}"
+                    title = f"⚠️ [Monitor] 손절(SL) 주문 {status_text}"
                 elif order_type and isinstance(order_type, str) and order_type.startswith("tp"):
                     tp_level_str = order_type[2:] if len(order_type) > 2 else "1"
-                    title = f"⚠️ 익절(TP{tp_level_str}) 주문 {status_text}"
+                    title = f"⚠️ [Monitor] 익절(TP{tp_level_str}) 주문 {status_text}"
                 else:
-                    title = f"{status_emoji} 주문 {status_text}"
+                    title = f"{status_emoji} [Monitor] 주문 {status_text}"
             
             # PnL 계산 (체결된 경우만)
             pnl_text = ""

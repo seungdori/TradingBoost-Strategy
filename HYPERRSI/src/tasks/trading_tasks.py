@@ -110,6 +110,19 @@ async def execute_trading_with_context(okx_uid: str, symbol: str, timeframe: str
             raise
         except Exception as e:
             logger.error(f"[{okx_uid}] 트레이딩 로직 오류: {str(e)}")
+            # errordb 로깅
+            from HYPERRSI.src.utils.error_logger import async_log_error_to_db
+            await async_log_error_to_db(
+                error=e,
+                user_id=okx_uid,
+                severity="CRITICAL",
+                symbol=symbol,
+                metadata={
+                    "timeframe": timeframe,
+                    "restart": restart,
+                    "component": "celery_trading_task"
+                }
+            )
             raise
 
 # 태스크 추적 기능 강화
@@ -243,6 +256,13 @@ def run_async(coroutine, timeout=90):
         raise
     except Exception as e:
         logger.error(f"비동기 작업 실행 중 오류: {str(e)}")
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            severity="ERROR",
+            metadata={"component": "run_async_task", "timeout": timeout}
+        )
         raise
     finally:
         # Solo pool 모드에서는 이벤트 루프를 닫지 않음 (재사용)
@@ -412,6 +432,10 @@ async def get_active_trading_users(): # 내부 로직 변경 필요
 
                 for key in keys:
                     try:
+                        # 바이트 문자열을 디코딩 (Redis SCAN이 bytes를 반환할 수 있음)
+                        if isinstance(key, bytes):
+                            key = key.decode('utf-8')
+
                         # 키 형식: user:{okx_uid}:trading:status
                         key_parts = key.split(':')
                         if len(key_parts) < 4 or key_parts[0] != 'user' or key_parts[2] != 'trading' or key_parts[3] != 'status':
@@ -441,11 +465,10 @@ async def get_active_trading_users(): # 내부 로직 변경 필요
                         if status == "running":
                             try:
                                 # 이미 실행 중인 태스크가 있는지 확인 (okx_uid 사용)
-                                is_running = await is_task_running(okx_uid)
+                                is_task_running_now = await is_task_running(okx_uid)
 
-                                # 실행 중인 태스크가 없거나 오래된 태스크일 경우 강제로 상태 초기화 후 추가
-                                if is_running:
-                                    # 오래된 태스크가 있다면 강제로 초기화
+                                # 오래된 태스크가 있다면 강제로 초기화
+                                if is_task_running_now:
                                     task_key = REDIS_KEY_TASK_RUNNING.format(okx_uid=okx_uid)
                                     status_data = await redis.hgetall(task_key)
 
@@ -457,9 +480,11 @@ async def get_active_trading_users(): # 내부 로직 변경 필요
                                         if current_time - started_at > 30:
                                             logger.warning(f"[{okx_uid}] 오래된 태스크 상태 초기화 (30초 초과)")
                                             await redis.delete(task_key)
+                                            is_task_running_now = False  # 초기화했으므로 False로 변경
 
-
-                                if not is_running:
+                                # 태스크가 실행 중이 아닌 경우에만 활성 사용자 목록에 추가
+                                # (이미 실행 중인 경우 중복 실행 방지)
+                                if not is_task_running_now:
                                     # 선호도 정보 가져오기 (okx_uid 사용)
                                     pref_key = REDIS_KEY_PREFERENCES.format(okx_uid=okx_uid) # 변경된 키 사용
                                     pref_type = await redis.type(pref_key)
@@ -629,9 +654,9 @@ def check_and_execute_trading():
         active_users = run_async(get_active_trading_users()) # 내부 로직에서 okx_uid 반환
 
         if active_users:
-            logger.info(f"🔍 활성 트레이더 목록: {len(active_users)}명")
+            logger.info(f"🔍 새로 시작할 활성 트레이더: {len(active_users)}명")
         else:
-            logger.warning(f"⚠️ 활성 트레이더가 없습니다 (또는 가져오기 실패)")
+            logger.debug(f"⏭️ 새로 시작할 트레이더 없음 (모두 실행 중이거나 대기 중)")
 
         for user_data in active_users:
             okx_uid = user_data['okx_uid'] # user_id -> okx_uid
@@ -651,8 +676,8 @@ def check_and_execute_trading():
                     continue
 
                 # 태스크 실행 상태를 True로 설정 (okx_uid 사용)
-                # expiry 20초: 비정상 종료 시 빠른 자동 정리
-                run_async(set_task_running(okx_uid, True, expiry=20))
+                # expiry 60초: Beat 주기(5초)보다 충분히 길게 설정
+                run_async(set_task_running(okx_uid, True, expiry=60))
 
                 # Celery 태스크 등록 (okx_uid 전달)
                 task = execute_trading_cycle.apply_async(
@@ -741,8 +766,8 @@ async def _execute_trading_cycle(
     error_message: Optional[str] = None
 
     try:
-        # 1. 태스크 실행 상태를 True로 설정 (20초 만료 - 빠른 자동 정리)
-        await set_task_running(okx_uid, True, expiry=20)
+        # 1. 태스크 실행 상태를 True로 설정 (60초 만료 - Beat 주기보다 충분히 길게)
+        await set_task_running(okx_uid, True, expiry=60)
 
         lock_key = REDIS_KEY_USER_LOCK.format(okx_uid=okx_uid, symbol=symbol, timeframe=timeframe)
 

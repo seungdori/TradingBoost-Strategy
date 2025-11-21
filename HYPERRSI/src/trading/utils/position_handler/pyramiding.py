@@ -10,7 +10,6 @@ import json
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
-from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.logger import setup_error_logger
 from HYPERRSI.src.trading.dual_side_entry import manage_dual_side_entry
@@ -147,7 +146,7 @@ async def handle_pyramiding(
     else:
         last_filled_price = float(last_filled_price_raw)
 
-    print(f"[{user_id}] initial_entry_price : {initial_entry_price}, last_filled_price : {last_filled_price}")
+    print(f"3. [{user_id}] initial_entry_price : {initial_entry_price}, last_filled_price : {last_filled_price}")
     dca_levels = await calculate_dca_levels(
         initial_entry_price,
         last_filled_price,
@@ -404,14 +403,16 @@ async def _calculate_dca_entry_size(
                 except (ValueError, TypeError):
                     manual_calculated_initial_size = float(position_size) / float(dca_order_count)
 
-        new_entry_contracts_amount = float(manual_calculated_initial_size) * float(scale) * float(dca_order_count)
+        # 올바른 DCA 수식: 초기크기 × (배율 ^ DCA회차)
+        new_entry_contracts_amount = float(manual_calculated_initial_size) * (float(scale) ** float(dca_order_count))
 
         await send_telegram_message(
-            f"⛔️[{user_id}] : 뭔가 이상한 상황! 초기진입사이즈! "
-            f"초기진입사이즈 : {manual_calculated_initial_size}, "
-            f"배율 : {scale}, "
-            f"DCA횟수 : {dca_order_count}, "
-            f"총 진입사이즈 : {new_entry_contracts_amount}",
+            f"[DEBUG : {user_id}] Fallback DCA 계산\n"
+            f"초기진입크기: {manual_calculated_initial_size:.6f}\n"
+            f"배율: {scale}\n"
+            f"DCA회차: {dca_order_count}\n"
+            f"계산: {manual_calculated_initial_size:.6f} × ({scale}^{dca_order_count})\n"
+            f"결과: {new_entry_contracts_amount:.6f} 계약",
             user_id,
             debug=True
         )
@@ -517,6 +518,9 @@ async def _execute_long_pyramiding(
         )
 
         logger.info(f"[{user_id}] new_position_entry_qty : {new_entry_contracts_amount}")
+
+        # Import here to avoid circular dependency
+        from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
 
         # Create DCA entry request
         request = OpenPositionRequest(
@@ -743,6 +747,9 @@ async def _execute_short_pyramiding(
     print("<숏 포지션> 추가 진입 시작")
 
     try:
+        # Import here to avoid circular dependency
+        from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
+
         # Create DCA entry request
         request = OpenPositionRequest(
             user_id=user_id,

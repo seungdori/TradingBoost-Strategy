@@ -274,18 +274,12 @@ def check_rsi_condition_for_dca(
     if side == "long":
         # Long DCA: RSI must be oversold
         is_oversold = rsi <= rsi_oversold
-        logger.debug(
-            f"RSI condition for long DCA: RSI={rsi:.2f}, "
-            f"oversold_threshold={rsi_oversold}, is_oversold={is_oversold}"
-        )
+
         return is_oversold
     else:  # short
         # Short DCA: RSI must be overbought
         is_overbought = rsi >= rsi_overbought
-        logger.debug(
-            f"RSI condition for short DCA: RSI={rsi:.2f}, "
-            f"overbought_threshold={rsi_overbought}, is_overbought={is_overbought}"
-        )
+
         return is_overbought
 
 
@@ -293,42 +287,60 @@ def check_trend_condition_for_dca(
     ema: Optional[float],
     sma: Optional[float],
     side: str,
-    use_trend_logic: bool
+    use_trend_logic: bool,
+    trend_state: Optional[int] = None
 ) -> bool:
     """
     Check if trend condition allows DCA entry.
 
-    Uses EMA/SMA relationship to determine trend strength.
+    Uses both trend_state (PineScript) and EMA/SMA relationship to determine trend strength.
+    Priority: trend_state check first (strong filter), then EMA/SMA check (weak filter).
 
     Args:
         ema: EMA (ma7) indicator value
         sma: SMA (ma20) indicator value
         side: Position side ('long' or 'short')
         use_trend_logic: If False, always returns True
+        trend_state: Trend state from PineScript indicator (-2: strong downtrend, 0: neutral, 2: strong uptrend)
 
     Returns:
         True if trend condition met, False otherwise
 
     Logic:
-        - For long positions: NOT in strong downtrend (EMA not too far below SMA)
-        - For short positions: NOT in strong uptrend (EMA not too far above SMA)
-        - Strong trend defined as EMA/SMA ratio > 2% divergence
-        - If use_trend_logic is False, always passes
+        1. If use_trend_logic is False, always passes
+        2. If trend_state provided, apply strong filter:
+           - Block LONG DCA when trend_state == -2 (strong downtrend)
+           - Block SHORT DCA when trend_state == 2 (strong uptrend)
+        3. Fallback to EMA/SMA relationship check:
+           - For long positions: NOT in strong downtrend (EMA not too far below SMA)
+           - For short positions: NOT in strong uptrend (EMA not too far above SMA)
+           - Strong trend defined as EMA/SMA ratio > 2% divergence
 
     Example:
         >>> check_trend_condition_for_dca(
         ...     ema=100.0,
         ...     sma=105.0,
         ...     side='long',
-        ...     use_trend_logic=True
+        ...     use_trend_logic=True,
+        ...     trend_state=-2
         ... )
-        True  # EMA only 4.8% below SMA, not strong downtrend
+        False  # trend_state=-2 blocks long DCA
+
+        >>> check_trend_condition_for_dca(
+        ...     ema=100.0,
+        ...     sma=105.0,
+        ...     side='long',
+        ...     use_trend_logic=True,
+        ...     trend_state=0
+        ... )
+        True  # trend_state=0 (neutral) allows DCA
 
         >>> check_trend_condition_for_dca(
         ...     ema=100.0,
         ...     sma=110.0,
         ...     side='long',
-        ...     use_trend_logic=True
+        ...     use_trend_logic=True,
+        ...     trend_state=None
         ... )
         False  # EMA 9% below SMA, strong downtrend - block long DCA
     """
@@ -336,6 +348,33 @@ def check_trend_condition_for_dca(
         # Trend check disabled
         return True
 
+    # === Priority 1: trend_state check (strong filter) ===
+    # Matches SignalGenerator.check_long_signal() logic (BACKTEST/strategies/signal_generator.py:101-102)
+    if trend_state is not None:
+        if side == "long":
+            if trend_state == -2:
+                logger.debug(
+                    f"[DCA] ❌ LONG DCA BLOCKED by trend_state: trend_state={trend_state} (strong downtrend)"
+                )
+                return False
+            else:
+                logger.debug(
+                    f"[DCA] ✅ LONG DCA ALLOWED by trend_state: trend_state={trend_state}"
+                )
+                return True
+        else:  # short
+            if trend_state == 2:
+                logger.debug(
+                    f"[DCA] ❌ SHORT DCA BLOCKED by trend_state: trend_state={trend_state} (strong uptrend)"
+                )
+                return False
+            else:
+                logger.debug(
+                    f"[DCA] ✅ SHORT DCA ALLOWED by trend_state: trend_state={trend_state}"
+                )
+                return True
+
+    # === Priority 2: EMA/SMA check (fallback weak filter) ===
     if ema is None or sma is None:
         logger.debug("EMA or SMA is None, skipping trend condition check")
         return False

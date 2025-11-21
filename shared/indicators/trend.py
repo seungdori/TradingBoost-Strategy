@@ -218,24 +218,32 @@ async def analyze_trend(df, symbol, timeframe, ma_type="JMA", use_longer_trend=F
 
         #print(f"BB_State values: {BB_State.value_counts()}")
 
-        # Extreme State 계산
-        extreme_state = pd.Series(np.zeros(len(df)), index=df.index)
+        # Trend State 계산 (PineScript Line 364-374)
+        trend_state = pd.Series(np.zeros(len(df)), index=df.index)
         for i in range(1, len(df)):
+            # 이전 상태 (PineScript의 var 동작 모방)
+            prev_state = trend_state.iloc[i-1]
+
+            # Bull 조건 (Line 364-365)
             if CYCLE_Bull.iloc[i] and (BB_State.iloc[i] == 2):
-                extreme_state.iloc[i] = 2
-            elif extreme_state.iloc[i-1] == 2 and not CYCLE_Bull.iloc[i]:
-                extreme_state.iloc[i] = 0
+                trend_state.iloc[i] = 2
+            # Bull 종료 조건 (Line 367-368)
+            elif prev_state == 2 and not CYCLE_Bull.iloc[i]:
+                trend_state.iloc[i] = 0
+            # Bear 조건 (Line 370-371)
             elif CYCLE_Bear.iloc[i] and (BB_State.iloc[i] == -2):
-                extreme_state.iloc[i] = -2
-            elif extreme_state.iloc[i-1] == -2 and not CYCLE_Bear.iloc[i]:
-                extreme_state.iloc[i] = 0
+                trend_state.iloc[i] = -2
+            # Bear 종료 조건 (Line 373-374)
+            elif prev_state == -2 and not CYCLE_Bear.iloc[i]:
+                trend_state.iloc[i] = 0
             else:
-                extreme_state.iloc[i] = extreme_state.iloc[i-1]
+                # 상태 유지 (PineScript의 var 동작)
+                trend_state.iloc[i] = prev_state
 
         trend = "중립"
-        if extreme_state.iloc[-1] == 2:
+        if trend_state.iloc[-1] == 2:
             trend = "강한 상승"
-        elif extreme_state.iloc[-1] == -2:
+        elif trend_state.iloc[-1] == -2:
             trend = "강한 하락"
         elif CYCLE_Bull.iloc[-1]:
             trend = "상승"
@@ -243,13 +251,13 @@ async def analyze_trend(df, symbol, timeframe, ma_type="JMA", use_longer_trend=F
             trend = "하락"
 
         # print(f"Final BB_State: {BB_State.iloc[-1]}")
-        # print(f"Final extreme_state: {extreme_state.iloc[-1]}")
+        # print(f"Final trend_state: {trend_state.iloc[-1]}")
         # print(f"Final trend: {trend}")
 
         return {
             'symbol': symbol,
-            'trend': extreme_state.iloc[-1],
-            'extreme_state': extreme_state.iloc[-1],
+            'trend': trend_state.iloc[-1],
+            'trend_state': trend_state.iloc[-1],
             'BB_State': BB_State.iloc[-1],
             'CYCLE_Bull': CYCLE_Bull.iloc[-1],
             'CYCLE_Bear': CYCLE_Bear.iloc[-1],
@@ -272,7 +280,7 @@ async def analyze_all_trends(symbol, timeframe, ma_type="JMA", use_longer_trend=
         # if result:
         #     print(f"\n트랜드 분석 결과:")
         #     print(f"{result['symbol']} - 트랜드: {result['trend']}")
-        #     print(f"Extreme State: {result['extreme_state']}")
+        #     print(f"Trend State: {result['trend_state']}")
         #     print(f"BB State: {result['BB_State']}")
         #     print(f"CYCLE Bull: {result['CYCLE_Bull']}")
         #     print(f"CYCLE Bear: {result['CYCLE_Bear']}")

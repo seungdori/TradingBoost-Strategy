@@ -15,6 +15,7 @@ from HYPERRSI.src.api.middleware import setup_middlewares
 from HYPERRSI.src.api.routes import (
     account,
     chart,
+    errors,
     okx,
     order,
     position,
@@ -212,12 +213,20 @@ async def lifespan(app: FastAPI):
         await init_redis()
 
         # Clean up stale Redis task states (from abnormal shutdown)
-        await cleanup_redis_on_startup()
+        try:
+            await asyncio.wait_for(cleanup_redis_on_startup(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("Redis cleanup timed out, continuing startup...")
 
         # Initialize error database (separate pool)
         try:
             await initialize_error_database()
             logger_new.info("Error database initialized (separate pool)")
+
+            # Initialize HYPERRSI error table
+            from HYPERRSI.src.database.hyperrsi_error_db import initialize_hyperrsi_error_db
+            await initialize_hyperrsi_error_db()
+            logger_new.info("HYPERRSI error table initialized")
         except Exception as e:
             logger.warning(f"Error database initialization failed (continuing without it): {e}")
             # Continue even if error DB fails - it's not critical for main operations
@@ -343,6 +352,10 @@ app = FastAPI(
         {
             "name": "okx",
             "description": "OKX 거래소 전용 엔드포인트"
+        },
+        {
+            "name": "errors",
+            "description": "에러 로그 조회 및 통계"
         }
     ]
 )
@@ -391,6 +404,7 @@ app.include_router(stats.router, prefix="/api")
 app.include_router(status.router, prefix="/api")
 app.include_router(user.router, prefix="/api")
 app.include_router(okx.router, prefix="/api")
+app.include_router(errors.router, prefix="/api")
 
 # Add Redis pool monitoring endpoint
 from shared.api.health import router as health_router
@@ -403,9 +417,10 @@ app.mount("/src/static", StaticFiles(directory=static_dir), name="static")
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """전역 예외 처리"""
-    # 요청에서 user_id 추출 시도
+    """전역 예외 처리 + errordb 자동 로깅"""
+    # 요청에서 user_id, telegram_id 추출 시도
     user_id = None
+    telegram_id = None
     try:
         # 헤더나 토큰에서 user_id 추출
         if 'user_id' in request.headers:
@@ -413,10 +428,16 @@ async def global_exception_handler(request: Request, exc: Exception):
         # 또는 query params에서
         elif 'user_id' in request.query_params:
             user_id = request.query_params['user_id']
+
+        # telegram_id 추출
+        if 'telegram_id' in request.headers:
+            telegram_id = int(request.headers['telegram_id'])
+        elif 'telegram_id' in request.query_params:
+            telegram_id = int(request.query_params['telegram_id'])
     except Exception:
         pass
 
-    # 에러 로깅
+    # 파일 로그 (기존)
     log_error(
         error=exc,
         user_id=user_id,
@@ -425,6 +446,46 @@ async def global_exception_handler(request: Request, exc: Exception):
             'method': request.method
         }
     )
+
+    # errordb에 자동 기록 (HYPERRSI 전용 테이블)
+    try:
+        from HYPERRSI.src.database.hyperrsi_error_db import log_hyperrsi_error
+
+        # Request ID 추출 (있으면)
+        request_id = request.headers.get('X-Request-ID') or request.state.__dict__.get('request_id')
+
+        # 에러 타입 결정
+        error_type = exc.__class__.__name__
+
+        # 심각도 결정
+        severity = "ERROR"
+        if isinstance(exc, (ValueError, KeyError, AttributeError)):
+            severity = "WARNING"
+        elif "Critical" in error_type or "Fatal" in error_type:
+            severity = "CRITICAL"
+
+        # 비동기로 DB에 기록 (실패해도 응답은 반환)
+        asyncio.create_task(
+            log_hyperrsi_error(
+                error=exc,
+                error_type=error_type,
+                user_id=user_id,
+                telegram_id=telegram_id,
+                severity=severity,
+                module="global_exception_handler",
+                function_name="global_exception_handler",
+                metadata={
+                    'path': request.url.path,
+                    'method': request.method,
+                    'headers': dict(request.headers),
+                    'query_params': dict(request.query_params),
+                },
+                request_id=request_id,
+            )
+        )
+    except Exception as e:
+        # DB 로깅 실패해도 응답은 반환
+        logger.error(f"Failed to log error to errordb: {e}")
 
     return JSONResponse(
         status_code=500,
@@ -459,3 +520,14 @@ async def redoc_html():
 
 # Note: @app.on_event decorators are deprecated in FastAPI.
 # All startup/shutdown logic is now handled by the lifespan context manager above.
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=False,
+        log_level="info"
+    )

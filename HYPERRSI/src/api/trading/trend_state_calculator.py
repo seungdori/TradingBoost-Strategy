@@ -282,52 +282,60 @@ class TrendStateCalculator:
         
         return bbw_state
 
-    def calculate_extreme_state(self, data: pd.Series, use_longer_trend: bool = False) -> pd.Series:
+    def calculate_trend_state(self, data: pd.Series, use_longer_trend: bool = False) -> pd.Series:
         """
-        극단 상태(Extreme State) 계산
-        
+        트렌드 상태(Trend State) 계산 - PineScript의 trend_state와 동일
+
         Args:
             data: 가격 시리즈
             use_longer_trend: 장기 추세 사용 여부
-            
+
         Returns:
-            극단 상태 시리즈 (2: 강한 상승, -2: 강한 하락, 0: 중립)
+            트렌드 상태 시리즈 (2: 강한 상승 트렌드, -2: 강한 하락 트렌드, 0: 중립)
+
+        PineScript 로직 (Line 364-374):
+        - Bull 조건: CYCLE_Bull and (use_longer_trend ? true : BB_State_MTF == 2)
+        - Bear 조건: CYCLE_Bear and (use_longer_trend ? true : BB_State_MTF == -2)
+        - 상태 유지: var 동작으로 이전 상태 유지
         """
-        # 추세 상태 계산
-        trend_state = self.get_trend_state(data)
-        
+        # CYCLE 상태 계산 (get_trend_state는 이동평균 기반 bull/bear 판단)
+        cycle_bull = self.get_trend_state(data) > 0
+
         # BBW 상태 계산
         bbw_state = self.calculate_bbw_state(data)
-        
-        # 극단 상태를 저장할 시리즈
-        extreme_state = pd.Series(0, index=data.index)
-        
+
+        # 트렌드 상태를 저장할 시리즈
+        trend_state = pd.Series(0, index=data.index)
+
         for i in range(len(data)):
-            # 불리시(상승) 극단 상태 조건
-            bull_condition = trend_state.iloc[i] > 0 and (
+            # 이전 상태 (PineScript의 var 동작 모방)
+            prev_state = trend_state.iloc[i-1] if i > 0 else 0
+
+            # Bull 조건 (Line 364-365)
+            bull_condition = cycle_bull.iloc[i] and (
                 use_longer_trend or bbw_state.iloc[i] == 2
             )
-            
-            # 베어리시(하락) 극단 상태 조건
-            bear_condition = trend_state.iloc[i] < 0 and (
+
+            # Bear 조건 (Line 370-371)
+            bear_condition = not cycle_bull.iloc[i] and (
                 use_longer_trend or bbw_state.iloc[i] == -2
             )
-            
-            # 이전 상태
-            prev_state = extreme_state.iloc[i-1] if i > 0 else 0
-            
+
             if bull_condition:
-                extreme_state.iloc[i] = 2
+                trend_state.iloc[i] = 2
+            # Bull 종료 조건 (Line 367-368)
+            elif prev_state == 2 and not cycle_bull.iloc[i]:
+                trend_state.iloc[i] = 0
             elif bear_condition:
-                extreme_state.iloc[i] = -2
-            elif prev_state == 2 and trend_state.iloc[i] <= 0:
-                extreme_state.iloc[i] = 0
-            elif prev_state == -2 and trend_state.iloc[i] >= 0:
-                extreme_state.iloc[i] = 0
+                trend_state.iloc[i] = -2
+            # Bear 종료 조건 (Line 373-374)
+            elif prev_state == -2 and cycle_bull.iloc[i]:
+                trend_state.iloc[i] = 0
             else:
-                extreme_state.iloc[i] = prev_state
-                
-        return extreme_state
+                # 상태 유지
+                trend_state.iloc[i] = prev_state
+
+        return trend_state
 
     async def analyze_market_state_from_redis(self, symbol: str, timeframe: str) -> Dict:
         """시장 상태 분석 (저장된 PineScript 기반 trend_state 사용)
@@ -338,7 +346,7 @@ class TrendStateCalculator:
 
         Returns:
             Dict: 분석 결과를 담은 딕셔너리
-                - extreme_state: -2 (강한 하락), 0 (중립), 2 (강한 상승)
+                - trend_state: -2 (강한 하락), 0 (중립), 2 (강한 상승)
                 - CYCLE_Bull: 불 사이클 여부
                 - CYCLE_Bear: 베어 사이클 여부
                 - BB_State: BB 상태
@@ -360,7 +368,7 @@ class TrendStateCalculator:
                 latest_candle = json.loads(candles[0])
 
                 # 저장된 PineScript 기반 trend_state 직접 사용
-                extreme_state = int(latest_candle.get('trend_state', 0))
+                trend_state = int(latest_candle.get('trend_state', 0))
 
                 # PineScript 기반 추가 정보
                 cycle_bull = latest_candle.get('CYCLE_Bull', False)
@@ -376,13 +384,13 @@ class TrendStateCalculator:
 
                 logger.info(
                     f"[PineScript Trend State] {symbol} {tf_str}: "
-                    f"extreme_state={extreme_state}, "
+                    f"trend_state={trend_state}, "
                     f"CYCLE_Bull={cycle_bull}, CYCLE_Bear={cycle_bear}, "
                     f"BB_State={bb_state}"
                 )
 
                 return {
-                    'extreme_state': extreme_state,
+                    'trend_state': trend_state,
                     'CYCLE_Bull': cycle_bull,
                     'CYCLE_Bear': cycle_bear,
                     'BB_State': bb_state,
@@ -434,35 +442,35 @@ class TrendStateCalculator:
     def get_market_signals(self, data: pd.Series) -> pd.DataFrame:
         """
         시장 신호 생성
-        
+
         Args:
             data: 가격 시리즈
-            
+
         Returns:
             DataFrame with trading signals
         """
         analysis = self.analyze_market_state(data)
-        
+
         signals = pd.DataFrame(index=data.index)
-        
-        # 매수 신호
+
+        # 매수 신호 (trend_state가 2로 진입)
         signals['buy_signal'] = (
-            (analysis['extreme_state'] == 2) & 
-            (analysis['extreme_state'].shift(1) != 2)
+            (analysis['trend_state'] == 2) &
+            (analysis['trend_state'].shift(1) != 2)
         )
-        
-        # 매도 신호
+
+        # 매도 신호 (trend_state가 -2로 진입)
         signals['sell_signal'] = (
-            (analysis['extreme_state'] == -2) & 
-            (analysis['extreme_state'].shift(1) != -2)
+            (analysis['trend_state'] == -2) &
+            (analysis['trend_state'].shift(1) != -2)
         )
-        
-        # 청산 신호
+
+        # 청산 신호 (trend_state가 0으로 진입)
         signals['exit_signal'] = (
-            (analysis['extreme_state'] == 0) & 
-            (analysis['extreme_state'].shift(1) != 0)
+            (analysis['trend_state'] == 0) &
+            (analysis['trend_state'].shift(1) != 0)
         )
-        
+
         return signals
 
     def clear_cache(self):
@@ -487,7 +495,7 @@ class TrendStateCalculator:
     def _get_empty_state(self) -> Dict:
         """빈 상태 반환 (기본값)"""
         return {
-            'extreme_state': 0,
+            'trend_state': 0,
             'CYCLE_Bull': False,
             'CYCLE_Bear': False,
             'BB_State': 0,

@@ -58,6 +58,7 @@ TRADE_HISTORY_SCHEMA = {
     "side": "",            # 거래 방향 (long/short)
     "size": 0.0,           # 거래 크기
     "initial_size": 0.0,    # 초기 거래 크기
+    "contracts_amount": 0.0, # 계약 수량
     "entry_price": 0.0,     # 진입가
     "exit_price": None,     # 청산가
     "leverage": 0.0,        # 레버리지
@@ -226,13 +227,21 @@ async def record_trade_history_entry(
     """새로운 거래 진입을 히스토리에 기록"""
     history_key = get_redis_key(user_id, "history")
 
+    contracts_amount = float(size)
+    try:
+        contract_size = await get_contract_size(symbol)
+    except Exception:
+        contract_size = 1.0
+    position_qty = contracts_amount * contract_size
+
     trade_history = TRADE_HISTORY_SCHEMA.copy()
     trade_history.update({
         "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         "symbol": symbol,
         "side": side,
-        "size": size,
-        "initial_size": size,  # 초기 사이즈 저장
+        "size": position_qty,
+        "initial_size": position_qty,  # 초기 사이즈 저장 (실제 수량)
+        "contracts_amount": contracts_amount,
         "entry_price": entry_price,
         "leverage": leverage,
         "status": TradeStatus.OPEN,
@@ -905,4 +914,3 @@ async def generate_pnl_statistics_image(user_id: str) -> Optional[str]:
     except Exception as e:
         logger.error(f"Error generating cumulative PnL image: {str(e)}")
         return None
-

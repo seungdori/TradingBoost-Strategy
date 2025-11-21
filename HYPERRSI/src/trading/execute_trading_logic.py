@@ -58,6 +58,14 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> str:
             return None
         except Exception as e:
             logger.error(f"텔레그램 ID를 OKX UID로 변환 중 오류: {str(e)}")
+            # errordb 로깅
+            from HYPERRSI.src.utils.error_logger import log_error_to_db
+            log_error_to_db(
+                error=e,
+                user_id=telegram_id,
+                severity="WARNING",
+                metadata={"telegram_id": telegram_id}
+            )
             return None
 
 async def get_identifier(user_id: str) -> str:
@@ -140,29 +148,52 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
             error_msg = f"트레이딩 초기화 실패: {str(e)}"
             error_logger.error(error_msg)
             logger.error(f"트레이딩 초기화 실패: {str(e)}", exc_info=True)
-        
+
+            # errordb 로깅
+            from HYPERRSI.src.utils.error_logger import async_log_error_to_db
+            await async_log_error_to_db(
+                error=e,
+                user_id=user_id,
+                telegram_id=int(telegram_id) if telegram_id else None,
+                severity="CRITICAL",
+                symbol=symbol,
+                metadata={
+                    "timeframe": timeframe,
+                    "restart": restart,
+                    "component": "trading_initialization"
+                }
+            )
+
             await handle_critical_error(
                 error=e,
                 category=ErrorCategory.TRADING_INIT,
                 context={"user_id": user_id, "symbol": symbol, "timeframe": timeframe, "restart": restart},
                 okx_uid=user_id
             )
-        
+
             try:
                 # 에러 로그 기록
                 log_bot_error(
-                    user_id=int(user_id), 
-                    symbol=symbol, 
-                    error_message=error_msg, 
+                    user_id=int(user_id),
+                    symbol=symbol,
+                    error_message=error_msg,
                     exception=e,
                     component="trading_initialization"
                 )
-            
+
                 await send_telegram_message(f"⚠️ {error_msg}\n User의 상태를 Stopped로 강제 변경.", user_id, debug=True)
                 await send_telegram_message(f"에러가 발생했습니다. 잠시 후에 다시 시도해주세요.", user_id)
                 await redis.set(f"user:{user_id}:trading:status", "stopped")
             except Exception as telegram_error:
                 logger.error(f"텔레그램 메시지 전송 실패: {str(telegram_error)}", exc_info=True)
+                # errordb 로깅 (텔레그램 전송 실패)
+                await async_log_error_to_db(
+                    error=telegram_error,
+                    user_id=user_id,
+                    telegram_id=int(telegram_id) if telegram_id else None,
+                    severity="WARNING",
+                    metadata={"component": "telegram_notification", "original_error": error_msg}
+                )
         
             if trading_service:
                 try:
@@ -216,7 +247,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
             leverage = float(user_settings.get('leverage', 10))
             actual_notional = investment * leverage
             tf_str = get_timeframe(timeframe)
-            print(f"[{user_id}] : symbol: {symbol}, investment: {investment}, leverage: {leverage}, actual_notional: {actual_notional}")
+            logger.info(f"[{user_id}] : symbol: {symbol}, investment: {investment}, leverage: {leverage}, actual_notional: {actual_notional}")
             await asyncio.sleep(0.05)
 
             if restart:
@@ -498,7 +529,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                 )
                 #print("rsi_signals: ", rsi_signals)
                 analysis = await calculator.analyze_market_state_from_redis(symbol, str(timeframe), trend_timeframe_str)
-                current_state = analysis['extreme_state']
+                current_state = analysis['trend_state']
                 # --- (3) 포지션 분기 ---
                 current_position = await trading_service.get_current_position(user_id, symbol)
             

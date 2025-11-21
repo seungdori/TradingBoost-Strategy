@@ -174,20 +174,30 @@ class AlgoOrderService(BaseService):
             raise HTTPException(status_code=400, detail=INVALID_SYMBOL_FORMAT)
 
         # 미체결 알고리즘 주문 조회
-        resp = await exchange.fetch2(
-            path=API_ENDPOINTS['ALGO_ORDERS_PENDING'],
-            api="private",
-            method="GET",
-            params={"instId": symbol}
-        )
+        # OKX API v5는 ordType이 필수입니다
+        # 여러 타입의 알고리즘 주문을 조회하려면 각 타입별로 요청해야 합니다
+        all_algo_orders = []
+        ord_types = ["conditional", "trigger", "oco", "move_order_stop"]
 
-        code = resp.get("code")
-        if code != "0":
-            msg = resp.get("msg", "")
-            logger.warning(f"알고리즘 주문 조회 실패: {msg}")
-            return 0
+        for ord_type in ord_types:
+            try:
+                resp = await exchange.fetch2(
+                    path=API_ENDPOINTS['ALGO_ORDERS_PENDING'],
+                    api="private",
+                    method="GET",
+                    params={"instId": symbol, "ordType": ord_type}
+                )
 
-        algo_data = resp.get("data", [])
+                code = resp.get("code")
+                if code == "0":
+                    data = resp.get("data", [])
+                    all_algo_orders.extend(data)
+            except Exception as e:
+                # 특정 ordType이 없는 경우 무시
+                logger.debug(f"알고리즘 주문 조회 실패 ({ord_type}): {str(e)}")
+                continue
+
+        algo_data = all_algo_orders
 
         # pos_side 필터링 (Hedge 모드)
         if pos_side:
@@ -284,21 +294,21 @@ class AlgoOrderService(BaseService):
                         cancel_list.append({"ordId": ord_id, "instId": inst_id})
 
                 if cancel_list:
-                    resp = await exchange.fetch2(
-                        path=API_ENDPOINTS['CANCEL_BATCH_ORDERS'],
-                        api="private",
-                        method="POST",
-                        params={},
-                        headers=None,
-                        body=json.dumps({"data": cancel_list})
-                    )
+                    # CCXT의 자동 생성 메서드 사용 (올바른 서명 생성)
+                    # OKX API는 배열을 직접 받음 (data로 감싸지 않음)
+                    try:
+                        resp = await exchange.privatePostTradeCancelBatchOrders(cancel_list)
 
-                    code = resp.get("code")
-                    if code == "0":
-                        canceled_count += len(cancel_list)
-                    else:
-                        msg = resp.get("msg", "")
-                        logger.warning(f"reduceOnly 주문 취소 실패: {msg}")
+                        code = resp.get("code")
+                        if code == "0":
+                            canceled_count += len(cancel_list)
+                            logger.info(f"✅ reduceOnly 주문 배치 취소 성공: {len(cancel_list)}개")
+                        else:
+                            msg = resp.get("msg", "")
+                            logger.warning(f"⚠️ reduceOnly 주문 배치 취소 실패 (code: {code}): {msg}")
+                    except Exception as batch_error:
+                        logger.error(f"❌ 배치 취소 중 오류: {str(batch_error)}")
+                        # 배치 취소 실패 시 개별 취소 시도는 하지 않음 (너무 많은 API 호출)
 
             logger.info(f"reduceOnly 주문 취소 완료: {canceled_count}개 - {symbol}")
             return canceled_count

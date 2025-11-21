@@ -77,8 +77,6 @@ class RedisService:
             return
 
         # shared 연결 풀 사용 (중복 풀 생성 방지)
-        logger.info("RedisService initializing with shared connection pool")
-
         try:
             # shared.database.redis의 전역 풀 사용
             # 실제 Redis 클라이언트는 _get_redis() 메서드에서 비동기로 획득
@@ -90,7 +88,6 @@ class RedisService:
             # Start cache cleanup task (will be initialized when event loop is available)
             self._cleanup_task = None
 
-            logger.info("RedisService initialized successfully (using shared pool)")
         except Exception as e:
             logger.error(f"Redis initialization failed: {e}")
             raise

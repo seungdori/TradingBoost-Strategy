@@ -82,6 +82,7 @@ class StopLossService(BaseService):
 
         # OKX 스탑로스 주문 파라미터 구성
         params = {
+            "instId": symbol,  # 상품 ID (필수)
             "tdMode": "cross",  # 거래 모드
             "side": side.lower(),
             "posSide": pos_side,
@@ -90,18 +91,12 @@ class StopLossService(BaseService):
             "triggerPx": str(trigger_price),
             "orderPx": str(order_price) if order_price else "-1",  # -1은 시장가
             "triggerPxType": "mark",  # 마크 가격 기준
-            "reduceOnly": reduce_only
+            "reduceOnly": "true" if reduce_only else "false"  # OKX API는 문자열 요구
         }
 
         # OKX API를 통해 알고리즘 주문 생성
-        response = await exchange.fetch2(
-            path="trade/order-algo",
-            api="private",
-            method="POST",
-            params={},
-            headers=None,
-            body=json.dumps([params])
-        )
+        # CCXT는 dict 파라미터만 허용하므로 리스트로 감싸지 않는다
+        response = await exchange.privatePostTradeOrderAlgo(params)
 
         code = response.get("code")
         if code != "0":
@@ -219,19 +214,12 @@ class StopLossService(BaseService):
         if not validate_symbol_format(symbol):
             raise HTTPException(status_code=400, detail=INVALID_SYMBOL_FORMAT)
 
-        response = await exchange.fetch2(
-            path="trade/cancel-algos",
-            api="private",
-            method="POST",
-            params={},
-            headers=None,
-            body=json.dumps({
-                "data": [{
-                    "algoId": order_id,
-                    "instId": symbol
-                }]
-            })
-        )
+        # CCXT의 자동 생성 메서드 사용 (올바른 서명 생성)
+        # OKX API는 배열을 직접 받음 (data로 감싸지 않음)
+        response = await exchange.privatePostTradeCancelAlgos([{
+            "algoId": order_id,
+            "instId": symbol
+        }])
 
         code = response.get("code")
         if code != "0":

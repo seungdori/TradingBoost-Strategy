@@ -1,22 +1,92 @@
 import asyncio
 import base64
-import hashlib
 import hmac
 import json
 import logging
 import os
+import signal
 import ssl
+import subprocess
 import time
+import traceback
 
 import websockets
 
 from shared.database.redis import get_redis
 from shared.logging import get_logger
+from HYPERRSI.src.bot.telegram_message import send_telegram_message
 
 logger = get_logger(__name__)
 
+
+def kill_existing_processes():
+    """기존에 실행 중인 position_monitor.py 프로세스를 종료"""
+    try:
+        current_pid = os.getpid()
+
+        # 현재 실행 중인 position_monitor.py 프로세스 찾기
+        result = subprocess.run(
+            ['ps', 'aux'],
+            capture_output=True,
+            text=True
+        )
+
+        killed_count = 0
+        for line in result.stdout.split('\n'):
+            if 'position_monitor.py' in line and 'python' in line:
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+
+                pid = int(parts[1])
+
+                # 자기 자신은 제외
+                if pid == current_pid:
+                    continue
+
+                try:
+                    logger.info(f"🔴 기존 프로세스 종료 중: PID {pid}")
+                    os.kill(pid, signal.SIGTERM)
+                    killed_count += 1
+
+                    # 프로세스가 종료될 때까지 잠시 대기
+                    time.sleep(0.5)
+
+                    # 강제 종료가 필요한 경우
+                    try:
+                        os.kill(pid, 0)  # 프로세스가 아직 살아있는지 확인
+                        logger.warning(f"⚠️ PID {pid} 강제 종료 시도 (SIGKILL)")
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        # 프로세스가 이미 종료됨
+                        pass
+
+                except ProcessLookupError:
+                    # 프로세스가 이미 종료됨
+                    pass
+                except PermissionError:
+                    logger.error(f"❌ PID {pid} 종료 권한 없음")
+                except Exception as e:
+                    logger.error(f"❌ PID {pid} 종료 중 오류: {e}")
+
+        if killed_count > 0:
+            logger.info(f"✅ {killed_count}개의 기존 프로세스 종료 완료")
+            # 안전을 위해 추가 대기
+            time.sleep(1)
+        else:
+            logger.info("ℹ️ 종료할 기존 프로세스 없음")
+
+    except Exception as e:
+        logger.error(f"프로세스 종료 중 오류: {e}")
+        logger.error(traceback.format_exc())
+
+# WebSocket URL
 OKX_PUBLIC_WS_URL = "wss://ws.okx.com:8443/ws/v5/public"
 OKX_PRIVATE_WS_URL = "wss://ws.okx.com:8443/ws/v5/private"
+
+# Rate Limit 설정
+CONNECTION_DELAY = 0.5  # 각 사용자 연결 사이 대기 시간 (초) - 200명: 100초 소요
+MAX_CONCURRENT_CONNECTIONS = 200  # 최대 동시 연결 수
 
 class OKXWebsocketClient:
     def __init__(
@@ -28,7 +98,7 @@ class OKXWebsocketClient:
         options: dict = None
     ):
         self.user_id = user_id
-        
+
         self.api_key = api_key
         self.api_secret = api_secret
         self.passphrase = passphrase
@@ -44,6 +114,9 @@ class OKXWebsocketClient:
         self.public_ws = None
         self.private_ws = None
         self.running = True
+
+        # 이전 포지션 정보 저장 (변경 감지용)
+        self.previous_positions = {}
 
     async def connect(self):
         """Public/Private WebSocket 모두 연결"""
@@ -78,12 +151,17 @@ class OKXWebsocketClient:
                     ping_timeout=10
                 )
                 logger.info("[OKX] Private WebSocket connected")
-                
-                # 로그인 시도
-                await self.login()
-                response = await self.private_ws.recv()
-                logger.info(f"[OKX] Login response: {response}")
-                
+
+                # 로그인 시도 (login() 함수 내부에서 응답 처리)
+                login_success = await self.login()
+
+                if login_success:
+                    # 로그인 성공 후 포지션 및 주문 채널 구독
+                    await self.subscribe_private_channels()
+                else:
+                    logger.error("[OKX] Login failed, skipping channel subscription")
+                    self.private_ws = None
+
             except Exception as e:
                 logger.error(f"[OKX] Connection error: {str(e)}")
                 self.private_ws = None
@@ -92,7 +170,7 @@ class OKXWebsocketClient:
         """OKX WebSocket 로그인"""
         timestamp = str(int(time.time()))
         message = timestamp + 'GET' + '/users/self/verify'
-        
+
         # HMAC-SHA256 서명 생성
         mac = hmac.new(
             bytes(self.api_secret, encoding='utf-8'),
@@ -119,13 +197,57 @@ class OKXWebsocketClient:
         # 로그인 응답 대기
         response = await self.private_ws.recv()
         response_data = json.loads(response)
-        
+
         if response_data.get('event') == 'login' and response_data.get('code') == '0':
             logger.info("[OKX] Login successful")
             return True
         else:
             logger.error(f"[OKX] Login failed: {response_data}")
             return False
+
+    async def subscribe_private_channels(self):
+        """개인 채널 구독 (포지션, 주문, 잔고)"""
+        if not self.private_ws:
+            logger.warning("[OKX] Private WebSocket not connected, skipping subscription")
+            return
+
+        # 포지션 채널 구독 (instType: SWAP = 무기한 선물)
+        subscribe_positions = {
+            "op": "subscribe",
+            "args": [
+                {
+                    "channel": "positions",
+                    "instType": "SWAP"
+                }
+            ]
+        }
+        await self.private_ws.send(json.dumps(subscribe_positions))
+        logger.info("[OKX] Subscribed to positions channel (SWAP)")
+
+        # 주문 채널 구독
+        subscribe_orders = {
+            "op": "subscribe",
+            "args": [
+                {
+                    "channel": "orders",
+                    "instType": "SWAP"
+                }
+            ]
+        }
+        await self.private_ws.send(json.dumps(subscribe_orders))
+        logger.info("[OKX] Subscribed to orders channel (SWAP)")
+
+        # 계좌 잔고 채널 구독 (선택사항)
+        subscribe_account = {
+            "op": "subscribe",
+            "args": [
+                {
+                    "channel": "account"
+                }
+            ]
+        }
+        await self.private_ws.send(json.dumps(subscribe_account))
+        logger.info("[OKX] Subscribed to account channel")
 
     async def handle_public_messages(self):
         """공개 채널(tickers)에서 들어오는 메시지를 Redis에 저장"""
@@ -152,6 +274,13 @@ class OKXWebsocketClient:
                 break
             except Exception as e:
                 logger.error(f"[OKX] Error in public message loop: {e}")
+                # errordb 로깅
+                from HYPERRSI.src.utils.error_logger import async_log_error_to_db
+                await async_log_error_to_db(
+                    error=e,
+                    severity="ERROR",
+                    metadata={"component": "websocket_public_message_loop"}
+                )
                 await asyncio.sleep(1)
 
     async def handle_private_messages(self, user_id: str):
@@ -175,31 +304,314 @@ class OKXWebsocketClient:
                 elif "data" in data:
                     channel = data.get("arg", {}).get("channel")
                     inst_id = data.get("arg", {}).get("instId", "unknown")
+                    inst_type = data.get("arg", {}).get("instType", "unknown")
                     payload = data["data"]  # 실제 포지션/오더 정보 리스트
 
                     if channel == "positions":
                         # OKX Position 모드(net/long/short 등) 유의
                         # payload가 여러 포지션일 수도 있음
+                        position_changed = False
                         for pos in payload:
                             # 예: posSide가 "net"인 경우 -> side="net"
                             side = pos.get("posSide", "unknown").lower()
+                            symbol = pos.get("instId", inst_id)
+                            pos_size = pos.get("pos", "0")
+
+                            # 포지션 키 생성
+                            position_key = f"{symbol}:{side}"
+
+                            # 이전 포지션 사이즈와 비교
+                            previous_size = self.previous_positions.get(position_key, "0")
+
+                            # 포지션 변경 감지 (사이즈 변경 또는 새로운 포지션)
+                            if previous_size != pos_size:
+                                position_changed = True
+                                self.previous_positions[position_key] = pos_size
+
+                                # 변경된 포지션만 로그 출력
+                                if float(pos_size) == 0:
+                                    logger.info(f"🔴 포지션 청산: {symbol} | Side: {side} | 이전: {previous_size}")
+
+                                    # 수동 청산 감지 및 텔레그램 알림
+                                    # (TP/SL 체결이 아닌 경우 = Redis에 pending_manual_close가 설정되지 않은 경우)
+                                    try:
+                                        # 수동 청산 여부 확인 (최근 1초 이내에 TP/SL 주문 체결이 없었는지 확인)
+                                        manual_close_check_key = f"ws:position_closed:{user_id}:{symbol}:{side}"
+                                        is_manual_close = await redis.get(manual_close_check_key)
+
+                                        if not is_manual_close:
+                                            # 수동 청산으로 판단 - 중복 알림 방지 플래그 설정 (5초 TTL)
+                                            await redis.set(manual_close_check_key, "1", ex=5)
+
+                                            # 포지션 정보 조회
+                                            position_key = f"user:{user_id}:position:{symbol}:{side}"
+                                            position_data = await redis.hgetall(position_key)
+
+                                            # PnL 계산
+                                            entry_price = float(position_data.get(b"entry_price" if isinstance(list(position_data.keys())[0], bytes) else "entry_price", "0")) if position_data else 0
+
+                                            # 현재가 조회 (청산 시점의 가격)
+                                            avg_px = pos.get("avgPx", "")
+                                            mark_px = pos.get("markPx", "")
+
+                                            # avgPx 우선, 없거나 빈 문자열이면 markPx 사용
+                                            try:
+                                                current_price = float(avg_px) if avg_px and avg_px != "" else (float(mark_px) if mark_px and mark_px != "" else 0)
+                                            except (ValueError, TypeError):
+                                                logger.warning(f"가격 변환 실패: avgPx={avg_px}, markPx={mark_px}")
+                                                current_price = 0
+
+                                            pnl_text = ""
+                                            if entry_price > 0 and current_price > 0:
+                                                leverage = float(position_data.get(b"leverage" if isinstance(list(position_data.keys())[0], bytes) else "leverage", "1")) if position_data else 1
+
+                                                if side == "long":
+                                                    pnl_percent = ((current_price / entry_price) - 1) * 100
+                                                else:  # short
+                                                    pnl_percent = ((entry_price / current_price) - 1) * 100
+
+                                                pnl_icon = "📈" if pnl_percent > 0 else "📉"
+                                                pnl_text = f"\n{pnl_icon} 수익률: {pnl_percent:.2f}%"
+
+                                                if leverage > 1:
+                                                    leveraged_pnl = pnl_percent * leverage
+                                                    pnl_text += f" (레버리지 x{leverage} 적용: {leveraged_pnl:.2f}%)"
+
+                                            # 텔레그램 메시지 전송
+                                            price_text = f"{round(current_price, 3)}" if current_price > 0 else "정보 없음"
+                                            message = (
+                                                f"🔵 [WebSocket] 수동 청산 감지\n"
+                                                f"━━━━━━━━━━━━━━━\n"
+                                                f"심볼: {symbol}\n"
+                                                f"방향: {side.upper()}\n"
+                                                f"청산 수량: {previous_size}\n"
+                                                f"청산가격: {price_text}{pnl_text}"
+                                            )
+
+                                            await send_telegram_message(message, user_id)
+                                            logger.info(f"✉️ [WebSocket] 수동 청산 텔레그램 알림 전송: {user_id}, {symbol}, {side}")
+
+                                    except Exception as e:
+                                        logger.error(f"수동 청산 알림 전송 실패: {e}")
+                                        traceback.print_exc()
+
+                                elif float(previous_size) == 0:
+                                    logger.info(f"🟢 포지션 진입: {symbol} | Side: {side} | Size: {pos_size}")
+                                else:
+                                    logger.info(f"📊 포지션 변경: {symbol} | Side: {side} | {previous_size} → {pos_size}")
+
+                                logger.debug(f"  📝 Full data: {pos}")
 
                             # 예시) ws:user:1709556958:BTC-USDT-SWAP:long
-                            redis_key = f"ws:user:{user_id}:{inst_id}:{side}"
+                            redis_key = f"ws:user:{user_id}:{symbol}:{side}"
                             await redis.set(redis_key, json.dumps(pos))
-                            logger.debug(f"[OKX] Updated position => {redis_key}")
 
                     elif channel == "orders":
+                        logger.info(f"📝 [OKX] Order Update - instType: {inst_type}, count: {len(payload)}")
                         # 주문 정보도 여러 개가 들어올 수 있음 => 통째로 저장
+                        for order in payload:
+                            symbol = order.get("instId", inst_id)
+                            order_id = order.get("ordId", "unknown")
+                            order_type = order.get("ordType", "unknown")
+                            state = order.get("state", "unknown")
+                            side = order.get("side", "unknown")
+                            pos_side = order.get("posSide", "unknown")
+                            filled_size = order.get("accFillSz", "0")
+                            price_str = order.get("avgPx", order.get("px", "0"))
+                            reduce_only = order.get("reduceOnly", "false")
+
+                            logger.info(f"  📋 Order: {symbol} | ID: {order_id} | Type: {order_type} | Side: {side} | State: {state}")
+
+                            # TP/SL 주문 체결 감지 및 Telegram 알림 (limit 주문이면서 reduceOnly인 경우)
+                            if state == "filled" and order_type == "limit" and reduce_only == "true":
+                                try:
+                                    # 중복 알림 방지: Redis에 15초 TTL로 알림 전송 이력 저장
+                                    notification_key = f"ws_notification:user:{user_id}:order:{order_id}"
+                                    already_notified = await redis.get(notification_key)
+
+                                    if already_notified:
+                                        logger.info(f"⏭️ 이미 WebSocket 알림 전송됨: {order_id}, 중복 방지")
+                                        continue
+
+                                    # TP/SL 주문 체결 시 수동 청산 알림 방지 플래그 설정
+                                    # (포지션 변화 감지보다 주문 체결이 먼저 올 수도, 나중에 올 수도 있음)
+                                    manual_close_check_key = f"ws:position_closed:{user_id}:{symbol}:{pos_side}"
+                                    await redis.set(manual_close_check_key, "1", ex=5)  # 5초 TTL
+
+                                    # Redis에서 주문 정보 조회하여 order_type 확인
+                                    monitor_order_key = f"monitor:user:{user_id}:{symbol}:order:{order_id}"
+                                    order_data_from_redis = await redis.hgetall(monitor_order_key)
+
+                                    # order_type 추출 (tp1, tp2, tp3, sl, break_even 등)
+                                    actual_order_type = order_data_from_redis.get("order_type", "unknown") if order_data_from_redis else "unknown"
+                                    order_name = order_data_from_redis.get("order_name", "") if order_data_from_redis else ""
+
+                                    # order_type이 limit/market이면 order_name 확인
+                                    if actual_order_type in ["limit", "market", "unknown"]:
+                                        actual_order_type = order_name if order_name else actual_order_type
+
+                                    # Redis에서 포지션 정보 조회하여 PnL 계산
+                                    position_key = f"user:{user_id}:position:{symbol}:{pos_side}"
+                                    position_data = await redis.hgetall(position_key)
+
+                                    price = float(price_str)
+                                    entry_price = float(position_data.get("entry_price", "0")) if position_data else 0
+                                    leverage = float(position_data.get("leverage", "1")) if position_data else 1
+
+                                    # PnL 계산
+                                    pnl_text = ""
+                                    if entry_price > 0:
+                                        if pos_side == "long":
+                                            pnl_percent = ((price / entry_price) - 1) * 100
+                                        else:  # short
+                                            pnl_percent = ((entry_price / price) - 1) * 100
+
+                                        pnl_icon = "📈" if pnl_percent > 0 else "📉"
+                                        pnl_text = f"\n{pnl_icon} 수익률: {pnl_percent:.2f}%"
+
+                                        # 레버리지 적용 수익률
+                                        if leverage > 1:
+                                            leveraged_pnl = pnl_percent * leverage
+                                            pnl_text += f" (레버리지 x{leverage} 적용: {leveraged_pnl:.2f}%)"
+
+                                    # 메시지 타이틀 설정 (order_type 기반)
+                                    if actual_order_type == "break_even":
+                                        title = "🟡 [WebSocket] 브레이크이븐 체결 완료"
+                                    elif actual_order_type == "sl":
+                                        title = "🔴 [WebSocket] 손절(SL) 체결 완료"
+                                    elif actual_order_type == "tp3":
+                                        title = "🟢 [WebSocket] 익절(TP3) 체결 완료"
+                                    elif actual_order_type == "tp2":
+                                        title = "🟢 [WebSocket] 익절(TP2) 체결 완료"
+                                    elif actual_order_type == "tp1":
+                                        title = "🟢 [WebSocket] 익절(TP1) 체결 완료"
+                                    else:
+                                        title = "✅ [WebSocket] 주문 체결 완료"
+
+                                    message = (
+                                        f"{title}\n"
+                                        f"━━━━━━━━━━━━━━━\n"
+                                        f"심볼: {symbol}\n"
+                                        f"방향: {pos_side.upper()}\n"
+                                        f"체결가격: {round(price, 3)}\n"
+                                        f"체결수량: {round(float(filled_size), 4)}{pnl_text}"
+                                    )
+
+                                    # 알림 전송 (파라미터 순서: message, okx_uid)
+                                    await send_telegram_message(message, user_id)
+
+                                    # 알림 전송 성공 후 Redis에 이력 저장 (15초 TTL)
+                                    await redis.set(notification_key, "1", ex=15)
+
+                                    logger.info(f"✉️ [WebSocket] Telegram 알림 전송 완료: {user_id}, 메시지: {title}")
+
+                                    # TP 주문 체결 시 브레이크이븐/트레일링스탑 처리
+                                    if "익절(TP" in title:
+                                        try:
+                                            # TP 레벨 추출 (TP1, TP2, TP3)
+                                            if "TP1" in title:
+                                                order_type_for_breakeven = "tp1"
+                                                tp_level = 1
+                                            elif "TP2" in title:
+                                                order_type_for_breakeven = "tp2"
+                                                tp_level = 2
+                                            elif "TP3" in title:
+                                                order_type_for_breakeven = "tp3"
+                                                tp_level = 3
+                                            else:
+                                                order_type_for_breakeven = "tp1"
+                                                tp_level = 1
+
+                                            # Lazy import to avoid circular dependency
+                                            from HYPERRSI.src.trading.monitoring.break_even_handler import process_break_even_settings
+                                            from HYPERRSI.src.trading.monitoring.utils import is_true_value
+                                            from HYPERRSI.src.trading.monitoring.telegram_service import get_identifier
+                                            from shared.database.redis_helper import get_redis_client
+                                            from shared.utils.redis_utils import get_user_settings
+
+                                            # 사용자 설정 확인
+                                            try:
+                                                # user_id를 OKX UID로 변환
+                                                okx_uid = await get_identifier(str(user_id))
+                                                redis_client = await get_redis_client()
+                                                settings = await get_user_settings(redis_client, okx_uid)
+                                                use_break_even_tp1 = is_true_value(settings.get('use_break_even', False))
+                                                use_break_even_tp2 = is_true_value(settings.get('use_break_even_tp2', False))
+                                                use_break_even_tp3 = is_true_value(settings.get('use_break_even_tp3', False))
+                                                trailing_stop_active = is_true_value(settings.get('trailing_stop_active', False))
+                                                trailing_start_point = str(settings.get('trailing_start_point', 'tp3')).lower()
+
+                                                # 브레이크이븐 발동 여부 체크
+                                                breakeven_will_trigger = False
+                                                trailing_will_trigger = False
+
+                                                if tp_level == 1 and use_break_even_tp1:
+                                                    breakeven_will_trigger = True
+                                                elif tp_level == 2 and use_break_even_tp2:
+                                                    breakeven_will_trigger = True
+                                                elif tp_level == 3 and use_break_even_tp3:
+                                                    breakeven_will_trigger = True
+
+                                                # 트레일링스탑 발동 여부 체크
+                                                current_tp = f"tp{tp_level}"
+                                                if trailing_stop_active and current_tp.lower() == trailing_start_point:
+                                                    trailing_will_trigger = True
+
+                                                # 추가 알림 메시지 구성
+                                                additional_info = ""
+                                                if breakeven_will_trigger:
+                                                    additional_info += "\n🔧 브레이크이븐 발동 예정 (SL 이동)"
+                                                if trailing_will_trigger:
+                                                    additional_info += "\n🔹 트레일링스탑 활성화 예정"
+
+                                                if additional_info:
+                                                    # 추가 정보가 있으면 별도 메시지 전송
+                                                    await send_telegram_message(
+                                                        f"━━━━━━━━━━━━━━━\n{additional_info.strip()}",
+                                                        user_id
+                                                    )
+                                                    logger.info(f"🔔 [WebSocket] 추가 기능 알림 전송: {additional_info.strip()}")
+
+                                            except Exception as settings_error:
+                                                logger.error(f"설정 확인 중 오류: {settings_error}")
+
+                                            # 브레이크이븐 처리 (비동기 태스크로 실행)
+                                            asyncio.create_task(process_break_even_settings(
+                                                user_id=user_id,
+                                                symbol=symbol,
+                                                order_type=order_type_for_breakeven,
+                                                position_data=position_data
+                                            ))
+                                            logger.info(f"🔧 [WebSocket] 브레이크이븐 처리 시작: {user_id}, {symbol}, {order_type_for_breakeven}")
+                                        except Exception as breakeven_error:
+                                            logger.error(f"브레이크이븐 처리 중 오류: {breakeven_error}")
+                                            traceback.print_exc()
+
+                                except Exception as e:
+                                    logger.error(f"Telegram 알림 전송 실패: {e}")
+                                    traceback.print_exc()
+
                         redis_key = f"ws:user:{user_id}:{inst_id}:open_orders"
                         await redis.set(redis_key, json.dumps(payload))
-                        logger.debug(f"[OKX] Updated orders => {redis_key}")
+
+                    elif channel == "account":
+                        logger.debug(f"💰 [OKX] Account Update - details: {len(payload)} items")
+                        for acc_detail in payload:
+                            logger.debug(f"  Account detail: {acc_detail}")
 
             except websockets.exceptions.ConnectionClosed:
                 logger.warning("[OKX] Private WebSocket connection closed.")
                 break
             except Exception as e:
                 logger.error(f"[OKX] Error in private message loop: {e}")
+                # errordb 로깅
+                from HYPERRSI.src.utils.error_logger import async_log_error_to_db
+                await async_log_error_to_db(
+                    error=e,
+                    user_id=user_id,
+                    severity="ERROR",
+                    metadata={"component": "websocket_private_message_loop"}
+                )
                 await asyncio.sleep(1)
 
     async def run(self, user_id: str):
@@ -221,52 +633,237 @@ class OKXWebsocketClient:
         self.running = False
         
         
-async def main():
+async def get_active_users() -> list:
+    """
+    Celery worker에서 실행 중인 활성 사용자 목록을 가져옵니다.
+
+    Returns:
+        활성 사용자 ID 리스트
+    """
+    redis = await get_redis()
+    active_users = []
+
     try:
-        redis = await get_redis()
-        key = f"user:1709556958:api:keys"
+        # Redis에서 모든 user:*:trading:status 키 패턴 검색
+        pattern = "user:*:trading:status"
+        keys = await redis.keys(pattern)
+
+        logger.debug(f"총 {len(keys)}개의 trading:status 키 발견: {keys}")
+
+        for key in keys:
+            # key 형식: user:{okx_uid}:trading:status
+            key_str = key.decode('utf-8') if isinstance(key, bytes) else key
+            logger.debug(f"키 확인 중: {key_str}")
+
+            # String 타입으로 저장됨 (값: "running" 또는 "stopped")
+            trading_status = await redis.get(key)
+
+            if trading_status:
+                # bytes를 str로 변환
+                status_str = trading_status.decode('utf-8') if isinstance(trading_status, bytes) else trading_status
+                logger.debug(f"키 {key_str}의 status: {status_str}")
+
+                if status_str == 'running':
+                    # user_id 추출 (user:586156710277369942:trading:status -> 586156710277369942)
+                    user_id = key_str.split(':')[1]
+                    active_users.append(user_id)
+                    logger.debug(f"✅ 활성 사용자 발견: {user_id}")
+                else:
+                    logger.debug(f"status가 'running'이 아님: {status_str}")
+            else:
+                logger.warning(f"키 {key_str}에 값이 없음")
+
+        logger.debug(f"최종 활성 사용자 목록: {active_users}")
+        return active_users
+    except Exception as e:
+        logger.error(f"활성 사용자 조회 실패: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return []
+
+
+async def get_user_api_keys(user_id: str) -> dict:
+    """
+    사용자 API 키를 Redis에서 가져옵니다.
+
+    Args:
+        user_id: 사용자 ID (OKX UID)
+
+    Returns:
+        API 키 딕셔너리 (api_key, api_secret, passphrase)
+    """
+    redis = await get_redis()
+    key = f"user:{user_id}:api:keys"
+
+    try:
         key_type = await redis.type(key)
-        logger.info(f"Redis key type: {key_type}")
-        
-        # Redis type 명령어는 문자열로 반환되므로 정확한 비교 필요
+
+        # Hash 타입인 경우
         if key_type == b'hash' or key_type == 'hash':
             api_keys = await redis.hgetall(key)
             if not api_keys:
-                logger.error("API 키를 찾을 수 없습니다")
-                return
-                
-            logger.info(f"Found API keys (hash): {api_keys}")
-            
-            # 문자열 키로 접근하도록 수정
-            client = OKXWebsocketClient(
-                user_id="1709556958",
-                api_key=api_keys.get('api_key', ''),  # 바이트열 키(b'api_key') 대신 문자열 키 사용
-                api_secret=api_keys.get('api_secret', ''),
-                passphrase=api_keys.get('passphrase', '')
-            )
+                logger.error(f"사용자 {user_id}의 API 키를 찾을 수 없습니다")
+                return None
+
+            # bytes 키를 str로 변환
+            return {
+                'api_key': api_keys.get(b'api_key', b'').decode('utf-8') if isinstance(api_keys.get(b'api_key'), bytes) else api_keys.get('api_key', ''),
+                'api_secret': api_keys.get(b'api_secret', b'').decode('utf-8') if isinstance(api_keys.get(b'api_secret'), bytes) else api_keys.get('api_secret', ''),
+                'passphrase': api_keys.get(b'passphrase', b'').decode('utf-8') if isinstance(api_keys.get(b'passphrase'), bytes) else api_keys.get('passphrase', '')
+            }
+
+        # String 타입인 경우 (JSON)
         else:
-            # 문자열 타입인 경우
             api_keys = await redis.get(key)
             if not api_keys:
-                logger.error("API 키를 찾을 수 없습니다")
-                return
-                
-            logger.info(f"Found API keys (string): {api_keys}")  # 디버깅용
-            
+                logger.error(f"사용자 {user_id}의 API 키를 찾을 수 없습니다")
+                return None
+
             api_keys_json = json.loads(api_keys)
-            client = OKXWebsocketClient(
-                user_id="1709556958",
-                api_key=api_keys_json.get("api_key"),
-                api_secret=api_keys_json.get("api_secret"),
-                passphrase=api_keys_json.get("passphrase")
-            )
-            
-        await client.run("1709556958")
-        
+            return {
+                'api_key': api_keys_json.get("api_key"),
+                'api_secret': api_keys_json.get("api_secret"),
+                'passphrase': api_keys_json.get("passphrase")
+            }
+
+    except Exception as e:
+        logger.error(f"사용자 {user_id} API 키 조회 실패: {str(e)}")
+        return None
+
+
+async def monitor_active_users():
+    """
+    활성 사용자를 모니터링하고 WebSocket 연결을 관리합니다.
+    사용자가 없어도 계속 대기하면서 주기적으로 체크합니다.
+    """
+    clients = []
+    tasks = []
+    current_users = set()
+    is_first_run = True
+
+    logger.info("🔄 포지션 모니터 시작: 활성 사용자 감지 대기 중...")
+
+    while True:
+        try:
+            # 활성 사용자 목록 가져오기
+            active_users = await get_active_users()
+            new_users = set(active_users)
+
+            # 사용자 변경 감지 (최초 실행 또는 변경사항이 있을 때만)
+            if new_users != current_users:
+                # 새로운 사용자 추가
+                added_users = new_users - current_users
+                removed_users = current_users - new_users
+
+                if added_users:
+                    logger.info(f"➕ 새로운 활성 사용자 감지: {list(added_users)}")
+
+                if removed_users:
+                    logger.info(f"➖ 비활성화된 사용자: {list(removed_users)}")
+                    # 비활성화된 사용자의 WebSocket 연결 종료
+                    for client in clients[:]:
+                        if client.user_id in removed_users:
+                            client.stop()
+                            clients.remove(client)
+                            logger.info(f"🔴 사용자 {client.user_id} WebSocket 연결 종료")
+
+                # 새로운 사용자에 대한 WebSocket 연결 시작
+                for user_id in added_users:
+                    # 최대 연결 수 체크
+                    if len(clients) >= MAX_CONCURRENT_CONNECTIONS:
+                        logger.warning(
+                            f"⚠️ 최대 연결 수({MAX_CONCURRENT_CONNECTIONS}) 도달. "
+                            f"사용자 {user_id}는 대기합니다."
+                        )
+                        continue
+
+                    # API 키 가져오기
+                    api_keys = await get_user_api_keys(user_id)
+
+                    if not api_keys:
+                        logger.error(f"사용자 {user_id}의 API 키를 찾을 수 없습니다. 건너뜁니다.")
+                        continue
+
+                    # WebSocket 클라이언트 생성
+                    client = OKXWebsocketClient(
+                        user_id=user_id,
+                        api_key=api_keys['api_key'],
+                        api_secret=api_keys['api_secret'],
+                        passphrase=api_keys['passphrase']
+                    )
+
+                    clients.append(client)
+
+                    # 비동기 태스크 생성
+                    task = asyncio.create_task(client.run(user_id))
+                    tasks.append(task)
+
+                    logger.info(f"✅ 사용자 {user_id} WebSocket 모니터링 시작")
+
+                    # Rate Limit 방지
+                    await asyncio.sleep(CONNECTION_DELAY)
+
+                current_users = new_users
+
+                # 최초 실행 시에만 상태 로그 출력
+                if is_first_run:
+                    if current_users:
+                        logger.info(f"📊 현재 모니터링 중인 사용자: {len(current_users)}명")
+                    else:
+                        logger.info("⏳ 활성 사용자 없음 - 대기 중...")
+                    is_first_run = False
+
+            # 30초마다 체크
+            await asyncio.sleep(30)
+
+        except KeyboardInterrupt:
+            logger.info("🛑 사용자 중단 요청 (Ctrl+C)")
+            break
+        except Exception as e:
+            logger.error(f"모니터링 루프 에러: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # 에러 발생 시 10초 대기 후 재시도
+            await asyncio.sleep(10)
+
+    # 종료 시 모든 클라이언트 정리
+    logger.info("🧹 모든 WebSocket 연결 종료 중...")
+    for client in clients:
+        client.stop()
+
+    if tasks:
+        # 실행 중인 태스크 취소
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
+        # 모든 태스크가 완료될 때까지 대기
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    logger.info("✅ 포지션 모니터 종료 완료")
+
+
+async def main():
+    """
+    활성 사용자들의 포지션을 WebSocket으로 모니터링합니다.
+    사용자가 없어도 계속 실행되며, 주기적으로 활성 사용자를 체크합니다.
+    """
+    try:
+        # 0. 기존 프로세스 종료
+        logger.info("=" * 50)
+        logger.info("🔍 기존 position_monitor.py 프로세스 확인 중...")
+        kill_existing_processes()
+        logger.info("=" * 50)
+
+        # 1. 지속적인 모니터링 시작
+        await monitor_active_users()
+
+    except KeyboardInterrupt:
+        logger.info("🛑 사용자 중단 요청 (Ctrl+C)")
     except Exception as e:
         logger.error(f"에러 발생: {str(e)}")
         import traceback
-        logger.error(traceback.format_exc())  # 상세한 에러 트레이스 출력
+        logger.error(traceback.format_exc())
 
 if __name__ == "__main__":
     asyncio.run(main())

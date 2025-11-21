@@ -101,7 +101,7 @@ async def handle_existing_position(
 
         # Determine position side if "any"
         if side == "any":
-            print("[종목] 종목X )종목t 종목. 종목X )종목D >D $i종목.")
+            logger.debug(f"[{user_id}] 포지션 방향이 'any'입니다. Redis에서 메인 포지션 방향을 확인합니다.")
             main_position_direction_key = MAIN_POSITION_DIRECTION_KEY.format(
                 user_id=user_id,
                 symbol=symbol
@@ -146,11 +146,11 @@ async def handle_existing_position(
                         "initial_size",
                         initial_position_size
                     )
-                    print(f"[{user_id}] 0 종목 종목 종목  종목 D종목: {initial_position_size}")
+                    logger.debug(f"[{user_id}] 초기 포지션 크기 Redis에 저장: {initial_position_size}")
                 except Exception as e:
-                    logger.error(f"0 종목 종목 종목 종목(: {str(e)}")
+                    logger.error(f"초기 포지션 크기 조회 실패: {str(e)}")
                     initial_position_size = float(size)
-                    print(f"[{user_id}] 0 종목 종목 종목 종목(, 현재 포지션 크기 사용: {initial_position_size}")
+                    logger.debug(f"[{user_id}] 초기 포지션 크기 조회 실패로 현재 포지션 크기 사용: {initial_position_size}")
                     await redis.set(
                         f"user:{user_id}:position:{symbol}:{side}:initial_size",
                         initial_position_size
@@ -172,7 +172,7 @@ async def handle_existing_position(
         )
 
         print(
-            f"[{user_id}]종목:{korean_time} 포지션이 이미 존재. "
+            f"[{user_id}] {korean_time} 포지션이 이미 존재. "
             f"평단: {entry_price}, 포지션 수량(amount): {size}, 포지션 방향: {side}"
         )
 
@@ -194,7 +194,7 @@ async def handle_existing_position(
                 # Position mismatch - cleanup Redis
                 await position_manager.cleanup_position_data(user_id, symbol, side)
                 await send_telegram_message(
-                    f"[{user_id}]L 종목X 종목 종목|X: Redis 0T",
+                    f"[{user_id}] 포지션 불일치 감지: Redis 데이터 정리 완료",
                     user_id,
                     debug=True
                 )

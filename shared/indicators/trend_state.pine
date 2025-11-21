@@ -359,16 +359,16 @@ BB_State_MTF = f_security(syminfo.tickerid, bb_mtf, BB_State)
 
 //Exteme State//
 
-var int extreme_state = 0
+var int trend_state = 0
 
 if barstate.isconfirmed and CYCLE_Bull and (use_longer_trend ? true : BB_State_MTF == 2)
-    extreme_state := 2
+    trend_state := 2
 
-if barstate.isconfirmed and extreme_state == 2 and not CYCLE_Bull
-    extreme_state := 0
+if barstate.isconfirmed and trend_state == 2 and not CYCLE_Bull
+    trend_state := 0
 
 if barstate.isconfirmed and CYCLE_Bear and ( use_longer_trend ? true : BB_State_MTF == -2)
-    extreme_state := -2
+    trend_state := -2
 
-if barstate.isconfirmed and extreme_state == -2 and not CYCLE_Bear
-    extreme_state := 0
+if barstate.isconfirmed and trend_state == -2 and not CYCLE_Bear
+    trend_state := 0
