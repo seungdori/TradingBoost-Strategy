@@ -51,6 +51,7 @@ git_commands.txt
 *.csv
 *.xlsx
 *.json
+*.pid
 /data/
 /backtest_results/
 /trading_results/
