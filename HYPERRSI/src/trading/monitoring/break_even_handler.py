@@ -247,8 +247,24 @@ async def process_break_even_settings(user_id: str, symbol: str, order_type: str
     """
     # Lazy import to avoid circular dependency
     from HYPERRSI.src.api.routes.order import ClosePositionRequest, close_position
-
     try:
+        def _decode_hash(data: dict | None) -> dict:
+            """Redis hash에서 가져온 bytes 키/값을 str로 디코드."""
+            if not data:
+                return {}
+            decoded: dict = {}
+            for key, value in data.items():
+                decoded_key = key.decode() if isinstance(key, (bytes, bytearray)) else key
+                if isinstance(value, (bytes, bytearray)):
+                    try:
+                        decoded_value = value.decode()
+                    except Exception:
+                        decoded_value = value
+                else:
+                    decoded_value = value
+                decoded[decoded_key] = decoded_value
+            return decoded
+
         redis = await get_redis_client()
         # user_id를 OKX UID로 변환
         okx_uid = await get_identifier(str(user_id))
@@ -283,32 +299,74 @@ async def process_break_even_settings(user_id: str, symbol: str, order_type: str
         
         
         # 포지션 정보 가져오기
-        # WebSocket 데이터는 posSide 필드를 사용
-        position_side = position_data.get('posSide', position_data.get('position_side', ''))
+        position_data = _decode_hash(position_data)
+        raw_position_side = (
+            position_data.get('posSide')
+            or position_data.get('position_side')
+            or position_data.get('side')
+            or ''
+        )
+        position_side = str(raw_position_side).lower() if raw_position_side else ''
+        if position_side == 'buy':
+            position_side = 'long'
+        elif position_side == 'sell':
+            position_side = 'short'
 
         # contracts_amount도 WebSocket 형식에 맞게 조정
         # WebSocket: 'pos' 필드 사용, API: 'contracts_amount' 사용
-        contracts_amount = float(position_data.get('pos', position_data.get('contracts_amount', '0')))
+        contracts_amount = float(position_data.get('pos', position_data.get('contracts_amount', '0') or 0))
         # position_data에서 진입가 확인 (avgPrice 키를 먼저 확인)
-        entry_price_from_data = float(position_data.get('avgPrice', position_data.get('entry_price', '0')))
+        entry_price_from_data = float(position_data.get('avgPrice', position_data.get('entry_price', '0') or 0))
+        full_position_data = {}
+        if position_side:
+            position_key = f"user:{okx_uid}:position:{symbol}:{position_side}"
+            full_position_data = _decode_hash(await redis.hgetall(position_key))
+
+        # 포지션 방향을 찾지 못했거나 데이터가 비어있으면 양방향 키 모두 확인
+        if (not position_side) or not full_position_data:
+            for candidate_side in ("long", "short"):
+                candidate_key = f"user:{okx_uid}:position:{symbol}:{candidate_side}"
+                candidate_data = await redis.hgetall(candidate_key)
+                if candidate_data:
+                    position_side = position_side or candidate_side
+                    full_position_data = _decode_hash(candidate_data)
+                    break
+
+        # full_position_data에도 side 정보가 있다면 한 번 더 정규화
+        if not position_side:
+            fallback_side = (
+                full_position_data.get('posSide')
+                or full_position_data.get('position_side')
+                or full_position_data.get('side')
+                or ''
+            )
+            if fallback_side:
+                fallback_side = str(fallback_side).lower()
+                if fallback_side == 'buy':
+                    fallback_side = 'long'
+                elif fallback_side == 'sell':
+                    fallback_side = 'short'
+                position_side = fallback_side
+
+        if not position_side:
+            logger.error(f"포지션 side 확인 실패: user {okx_uid}, symbol {symbol}, order_type {order_type}")
+            await send_telegram_message("SL 이동 실패: 포지션 방향을 확인할 수 없습니다.", okx_uid, debug=True)
+            return False
         
         dual_side_position_side = None
         if use_dual_side:
-            if position_side == 'long' or position_side == 'buy':
+            if position_side == 'long':
                 dual_side_position_side = 'short'
             else:
                 dual_side_position_side = 'long'
-                
-        position_key = f"user:{okx_uid}:position:{symbol}:{position_side}"
-        full_position_data = await redis.hgetall(position_key)
         
         # 주문 가격 정보
         # Redis에서 진입가를 가져오되, 이미 position_data에서 진입가를 가져왔다면 그 값을 우선 사용
-        entry_price = entry_price_from_data if entry_price_from_data > 0 else float(full_position_data.get("entry_price", 0))
+        entry_price = entry_price_from_data if entry_price_from_data > 0 else float(full_position_data.get("entry_price", 0) or 0)
         
         # contracts_amount를 이미 위에서 설정했으므로 중복 재설정하지 않음 (값이 유효하지 않은 경우에만 재설정)
         if contracts_amount <= 0:
-            contracts_amount = float(full_position_data.get("contracts_amount", 0))
+            contracts_amount = float(full_position_data.get("contracts_amount", 0) or 0)
         
         # TP 데이터 가져오기
         tp_data_str = full_position_data.get("tp_data", "[]")

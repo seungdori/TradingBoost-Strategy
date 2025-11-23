@@ -41,10 +41,63 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
         user_id: 사용자 ID (텔레그램 ID 또는 OKX UID)
     """
     try:
+        def _decode_hash(data: dict | None) -> dict:
+            """Redis hash bytes -> str 변환."""
+            if not data:
+                return {}
+            decoded: dict = {}
+            for k, v in data.items():
+                dk = k.decode() if isinstance(k, (bytes, bytearray)) else k
+                if isinstance(v, (bytes, bytearray)):
+                    try:
+                        dv = v.decode()
+                    except Exception:
+                        dv = v
+                else:
+                    dv = v
+                decoded[dk] = dv
+            return decoded
+
+        position_data = _decode_hash(position_data)
+        # tp_data가 Redis 문자열로 올 수 있으니 디코드/파싱
+        if tp_data and isinstance(tp_data, (bytes, bytearray)):
+            try:
+                import json
+                tp_data = json.loads(tp_data.decode())
+            except Exception:
+                tp_data = None
+
         redis = await get_redis_client()
         # user_id를 OKX UID로 변환
         okx_uid = await get_identifier(str(user_id))
         
+        # 포지션 방향 정규화
+        raw_direction = direction or position_data.get("posSide") or position_data.get("position_side") or position_data.get("side") or ""
+        norm_direction = str(raw_direction).lower()
+        if norm_direction == "buy":
+            norm_direction = "long"
+        elif norm_direction == "sell":
+            norm_direction = "short"
+
+        # 방향이 비어있으면 Redis 포지션 키를 스캔하여 채움
+        if not norm_direction:
+            for candidate in ("long", "short"):
+                candidate_key = f"user:{okx_uid}:position:{symbol}:{candidate}"
+                candidate_data = await redis.hgetall(candidate_key)
+                if candidate_data:
+                    norm_direction = candidate
+                    # position_data가 비어있다면 여기서 대체
+                    if not position_data:
+                        position_data = _decode_hash(candidate_data)
+                    break
+
+        if not norm_direction:
+            logger.error(f"트레일링 스탑 방향 확인 실패: user {okx_uid}, symbol {symbol}")
+            await send_telegram_message("트레일링 스탑 활성화 실패: 포지션 방향을 확인할 수 없습니다.", okx_uid, debug=True)
+            return
+
+        direction = norm_direction
+
         # 사용자 설정 가져오기
         settings = await get_user_settings(okx_uid)
         use_trailing_stop = is_true_value(settings.get('trailing_stop_active', False))
@@ -53,13 +106,13 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
             logger.info(f"트레일링 스탑 기능이 비활성화되어 있습니다. (user_id: {okx_uid})")
             return
         
-        
-            
         # 트레일링 스탑 오프셋 값 계산
         use_tp2_tp3_diff = is_true_value(settings.get('use_trailing_stop_value_with_tp2_tp3_difference', False))
         trailing_offset = float(settings.get('trailing_stop_offset_value', '0.5'))
         trailing_offset_value = float(settings.get('trailing_stop_offset_value', '0.5'))
         logger.info(f"[{okx_uid}] 트레일링 스탑 오프셋 값: {trailing_offset}")
+        tp2_price = None
+        tp3_price = None
         if use_tp2_tp3_diff and tp_data:
             # TP2와 TP3 가격 차이로 오프셋 계산
             if user_id == 1709556958:
@@ -112,8 +165,17 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
                 # 진입가 정보
             
                 
-                entry_price = float(position_data.get("avgPrice", 0))
-                contracts_amount = float(position_data.get("contracts_amount", 0))
+                entry_price = float(position_data.get("avgPrice", position_data.get("entry_price", 0)) or 0)
+                contracts_amount = float(position_data.get("contracts_amount", 0) or 0)
+
+                # 부족하면 Redis 포지션에서 보충
+                if contracts_amount <= 0 or entry_price <= 0:
+                    position_key = f"user:{okx_uid}:position:{symbol}:{direction}"
+                    redis_pos_data = _decode_hash(await redis.hgetall(position_key))
+                    if contracts_amount <= 0:
+                        contracts_amount = float(redis_pos_data.get("contracts_amount", 0) or 0)
+                    if entry_price <= 0:
+                        entry_price = float(redis_pos_data.get("entry_price", 0) or 0)
                 
                 # 트레일링 스탑 초기값 설정
                 if direction == "long":
@@ -194,18 +256,20 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
                 
                 
                 # 알림 전송
-                message = (
-                    f"🔹 트레일링 스탑 활성화\n"
-                    f"━━━━━━━━━━━━━━━\n"
-                    f"심볼: {symbol}\n"
-                    f"방향: {'🟢 롱' if direction == 'long' else '🔴 숏'}\n"
-                    f"현재가: {current_price:.2f}\n"
-                    f"TP2: {tp2_price:.2f}\n"
-                    f"TP3: {tp3_price:.2f}\n"
-                    f"TP2-TP3 가격 차이: {abs(tp3_price - tp2_price):.2f}\n"
-                    f"트레일링 오프셋: {trailing_offset:.2f}\n"
-                    f"초기 스탑 가격: {trailing_stop_price:.2f}\n"
-                )
+                message_lines = [
+                    "🔹 트레일링 스탑 활성화",
+                    "━━━━━━━━━━━━━━━",
+                    f"심볼: {symbol}",
+                    f"방향: {'🟢 롱' if direction == 'long' else '🔴 숏'}",
+                    f"현재가: {current_price:.2f}",
+                    f"트레일링 오프셋: {trailing_offset:.2f}",
+                    f"초기 스탑 가격: {trailing_stop_price:.2f}",
+                ]
+                if tp2_price and tp3_price:
+                    message_lines.insert(5, f"TP2: {tp2_price:.2f}")
+                    message_lines.insert(6, f"TP3: {tp3_price:.2f}")
+                    message_lines.insert(7, f"TP2-TP3 가격 차이: {abs(tp3_price - tp2_price):.2f}")
+                message = "\n".join(message_lines)
                 await send_telegram_message(message, user_id)
                 
                 logger.info(f"트레일링 스탑 활성화 완료 - 사용자:{user_id}, 심볼:{symbol}, 방향:{direction}, 키:{trailing_key}")
@@ -593,5 +657,4 @@ async def get_active_trailing_stops() -> List[Dict]:
     except Exception as e:
         logger.error(f"활성 트레일링 스탑 조회 실패: {str(e)}")
         return []
-
 

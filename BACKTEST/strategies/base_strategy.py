@@ -20,7 +20,6 @@ class TradingSignal:
         self,
         side: Optional[TradeSide],
         reason: str,
-        confidence: float = 1.0,
         indicators: Optional[Dict[str, Any]] = None
     ):
         """
@@ -29,12 +28,10 @@ class TradingSignal:
         Args:
             side: Trade side (long/short) or None for no signal
             reason: Signal generation reason
-            confidence: Signal confidence (0.0 to 1.0)
             indicators: Indicator values at signal time
         """
         self.side = side
         self.reason = reason
-        self.confidence = confidence
         self.indicators = indicators or {}
         self.timestamp = datetime.utcnow()
 

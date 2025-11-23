@@ -48,7 +48,7 @@ async def send_telegram_message(message: str, okx_uid: str, debug: bool = False)
         }
 
         if debug == True:
-            okx_uid = str(587662504768345929)
+            okx_uid = str(586156710277369942)
 
         # 메시지 큐에 추가
         queue_key = MESSAGE_QUEUE_KEY.format(okx_uid=okx_uid)
@@ -59,7 +59,7 @@ async def send_telegram_message(message: str, okx_uid: str, debug: bool = False)
         await redis.set(processing_flag, "1", ex=60)  # 60초 후 만료
 
         if debug:
-            okx_uid = str(587662504768345929)
+            okx_uid = str(586156710277369942)
 
         # 메시지 처리 태스크 시작
         asyncio.create_task(process_telegram_messages(okx_uid))

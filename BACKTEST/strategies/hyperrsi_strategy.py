@@ -437,7 +437,7 @@ class HyperrsiStrategy(BaseStrategy):
 
                 if rsi is None:
                     logger.warning(f"RSI calc failed after loading history (size: {len(self.price_history)})")
-                    return TradingSignal(side=None, reason="RSI calculation failed", confidence=0.0)
+                    return TradingSignal(side=None, reason="RSI calculation failed")
         else:
             rsi = candle.rsi
 
@@ -501,7 +501,6 @@ class HyperrsiStrategy(BaseStrategy):
                 return TradingSignal(
                     side=TradeSide.LONG,
                     reason=long_reason,
-                    confidence=1.0,
                     indicators={"rsi": rsi, "previous_rsi": previous_rsi, "trend_state": trend_state}
                 )
 
@@ -512,20 +511,18 @@ class HyperrsiStrategy(BaseStrategy):
                 return TradingSignal(
                     side=TradeSide.SHORT,
                     reason=short_reason,
-                    confidence=1.0,
                     indicators={"rsi": rsi, "previous_rsi": previous_rsi, "trend_state": trend_state}
                 )
 
         return TradingSignal(
             side=None,
             reason="No signal",
-            confidence=0.0,
             indicators={"rsi": rsi, "previous_rsi": previous_rsi, "trend_state": trend_state}
         )
 
     def calculate_position_size(
         self,
-        signal: TradingSignal,
+        _signal: TradingSignal,
         current_balance: float,
         current_price: float
     ) -> Tuple[float, float]:
@@ -533,14 +530,14 @@ class HyperrsiStrategy(BaseStrategy):
         Calculate position size and leverage.
 
         Args:
-            signal: Trading signal
+            _signal: Trading signal (required by BaseStrategy interface, unused in implementation)
             current_balance: Current account balance
             current_price: Current market price
 
         Returns:
             Tuple of (quantity, leverage)
         """
-        # Use fixed investment amount
+        # Use fixed investment amount (matches HYPERRSI live trading logic)
         investment_amount = min(self.investment, current_balance * 0.95)
 
         # Calculate quantity with leverage
@@ -727,8 +724,15 @@ class HyperrsiStrategy(BaseStrategy):
             Trailing offset (absolute price difference)
         """
         if self.use_tp2_tp3_diff_for_offset and tp2_price and tp3_price:
-            # Use TP2-TP3 price difference as offset
-            offset = abs(tp3_price - tp2_price)
+            # Use TP2-TP3 price difference as offset (matches HYPERRSI live trading logic)
+            if side == TradeSide.LONG:
+                offset = abs(tp3_price - tp2_price)
+            else:  # SHORT
+                offset = abs(tp2_price - tp3_price)
+            logger.debug(
+                f"Trailing offset from TP2-TP3 difference: offset={offset:.2f} "
+                f"(side={side.value}, tp2={tp2_price:.2f}, tp3={tp3_price:.2f})"
+            )
 
         else:
             # Use percentage-based offset
