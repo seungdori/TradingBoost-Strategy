@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     # Order Backend 설정
     ORDER_BACKEND: Optional[str] = None
 
+    # CandlesDB 설정 (PostgreSQL for OHLCV data)
+    CANDLES_HOST: Optional[str] = "158.247.218.188"
+    CANDLES_PORT: Optional[int] = 5432
+    CANDLES_DATABASE: Optional[str] = "candlesdb"
+    CANDLES_USER: Optional[str] = "tradeuser"
+    CANDLES_PASSWORD: Optional[str] = "SecurePassword123"
+
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),
         env_file_encoding='utf-8',

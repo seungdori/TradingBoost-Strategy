@@ -45,12 +45,13 @@ class CandlesDBWriter:
     def _init_pool(self):
         """Initialize PostgreSQL connection pool"""
         try:
-            # Get config from environment variables directly
-            candles_host = os.getenv("CANDLES_HOST", "158.247.251.34")
-            candles_port = int(os.getenv("CANDLES_PORT", "5432"))
-            candles_db = os.getenv("CANDLES_DATABASE", "candlesdb")
-            candles_user = os.getenv("CANDLES_USER", "tradeuser")
-            candles_password = os.getenv("CANDLES_PASSWORD", "SecurePassword123")
+            # Get config from shared settings (loads .env automatically)
+            from shared.config import settings
+            candles_host = settings.CANDLES_HOST
+            candles_port = settings.CANDLES_PORT
+            candles_db = settings.CANDLES_DATABASE
+            candles_user = settings.CANDLES_USER
+            candles_password = settings.CANDLES_PASSWORD
 
             self.pool = SimpleConnectionPool(
                 minconn=1,

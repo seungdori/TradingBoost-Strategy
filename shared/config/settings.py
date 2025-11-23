@@ -67,6 +67,14 @@ class Settings(BaseSettings):
     TIMESCALE_USER: str = Field(default="", description="TimescaleDB username")
     TIMESCALE_PASSWORD: str = Field(default="", description="TimescaleDB password")
 
+    # CandlesDB connection (PostgreSQL for OHLCV market data)
+    CANDLES_HOST: str = Field(default="158.247.218.188", description="CandlesDB host")
+    CANDLES_PORT: int = Field(default=5432, ge=1, le=65535, description="CandlesDB port")
+    CANDLES_DATABASE: str = Field(default="candlesdb", description="CandlesDB database name")
+    CANDLES_USER: str = Field(default="tradeuser", description="CandlesDB username")
+    CANDLES_PASSWORD: str = Field(default="SecurePassword123", description="CandlesDB password")
+    CANDLES_SCHEMA: str = Field(default="public", description="CandlesDB schema")
+
     DATABASE_URL: str = Field(default="", description="Complete database URL")
 
     # Error Database (separate pool for error logging)
