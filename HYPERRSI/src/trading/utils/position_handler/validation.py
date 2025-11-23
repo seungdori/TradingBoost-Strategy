@@ -341,13 +341,13 @@ async def should_enter_with_trend(
     if side == "long":
         if current_state == TREND_STATE_STRONG_DOWNTREND:
             return False, "Strong downtrend detected - long entry blocked"
-        return True, "Trend condition satisfied for long"
+        return True, "Trendstate != -2 for long"
 
     # Short position checks
     elif side == "short":
         if current_state == TREND_STATE_STRONG_UPTREND:
             return False, "Strong uptrend detected - short entry blocked"
-        return True, "Trend condition satisfied for short"
+        return True, "Trendstate != 2 for short"
 
     # Unknown side
     else:

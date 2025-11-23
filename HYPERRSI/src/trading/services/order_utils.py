@@ -430,14 +430,7 @@ async def try_send_order(
             # 필요한 마진 계산 (대략적인 값)
             required_margin = (size * current_price) / (leverage or 1.0)
 
-            logger.info(f"💰 [{user_id}] 계좌 잔고 상태:")
-            logger.info(f"   📊 총 USDT: {total_usdt:.2f}")
-            logger.info(f"   💵 사용 가능 USDT: {free_usdt:.2f}")
-            logger.info(f"   📈 {symbol} 현재가: ${current_price:,.2f}")
-            logger.info(f"   🎯 주문 수량: {size} 계약")
-            logger.info(f"   ⚖️  레버리지: {leverage}x")
-            logger.info(f"   💎 필요 마진 (예상): {required_margin:.2f} USDT")
-            logger.info(f"   ✅ 마진 충분 여부: {'예' if free_usdt >= required_margin else '아니오'}")
+            logger.info(f"💰 [{user_id}] 계좌 잔고 상태: 📊 총 USDT: {total_usdt:.2f}\n 💵 사용 가능 USDT: {free_usdt:.2f} \n📈 {symbol} 현재가: ${current_price:,.2f}\n 🎯 주문 수량: {size} 계약\n ⚖️  레버리지: {leverage}x\n 💎 필요 마진 (예상): {required_margin:.2f} USDT\n ✅ 마진 충분 여부: {'예' if free_usdt >= required_margin else '아니오'}")
 
             # Exchange 닫기
             if need_close_for_balance and balance_exchange is not None:
