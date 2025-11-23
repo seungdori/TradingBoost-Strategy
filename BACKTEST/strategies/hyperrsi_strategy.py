@@ -634,10 +634,15 @@ class HyperrsiStrategy(BaseStrategy):
         # Direction multiplier: +1 for LONG, -1 for SHORT
         multiplier = 1 if side == TradeSide.LONG else -1
 
-        # Fallback ATR if missing and tp_option is "atr"
-        if self.tp_option == "atr" and (atr_value is None or atr_value <= entry_price * 0.001):
-            atr_value = entry_price * 0.01 * 0.1  # Use 0.1% of entry price as fallback
-            logger.warning(f"Missing/invalid ATR value, using fallback: {atr_value:.2f}")
+        # Ensure 1ATR is at least 0.1% of entry price when using ATR-based TP
+        if self.tp_option == "atr":
+            min_atr = entry_price * 0.001  # 0.1% of entry price
+            if atr_value is None:
+                atr_value = min_atr
+                logger.warning(f"Missing ATR value, using minimum 0.1%: {atr_value:.2f}")
+            elif atr_value < min_atr:
+                logger.info(f"ATR {atr_value:.2f} below minimum 0.1%, adjusted to {min_atr:.2f}")
+                atr_value = min_atr
 
         # Calculate TP levels based on tp_option
         for i, (use_tp, tp_value) in enumerate([

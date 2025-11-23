@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 import ccxt.async_support as ccxt
 from fastapi import APIRouter, Body, HTTPException, Path, Query
+from fastapi.params import Query as QueryParam
 from pydantic import BaseModel
 
 from HYPERRSI.src.api.dependencies import get_exchange_context
@@ -46,6 +47,9 @@ from .constants import ALGO_ORDERS_CHUNK_SIZE, API_ENDPOINTS, REGULAR_ORDERS_CHU
 from .models import EXAMPLE_RESPONSE, STATUS_MAPPING, ClosePositionRequest
 from .parsers import parse_algo_order_to_order_response, parse_order_response
 from .services import AlgoOrderService, OrderService, PositionService, StopLossService
+
+# Stop Loss Error Logging
+from HYPERRSI.src.database.stoploss_error_db import log_stoploss_error
 
 # ORDER_BACKEND는 항상 자기 자신을 가리키므로 사용하지 않음
 order_backend_client = None
@@ -2059,6 +2063,32 @@ async def update_stop_loss_order(
     Note: 일부 커스텀 로직(invalid SL price 처리, monitor key tracking)은
     비즈니스 요구사항에 따라 엔드포인트에서 직접 처리
     """
+    def _normalize_query_value(value, fallback=None):
+        if isinstance(value, QueryParam):
+            default = value.default
+            if default is ...:
+                return fallback
+            return default if default is not None else fallback
+        return value if value is not None else fallback
+
+    symbol = str(_normalize_query_value(symbol, "BTC-USDT-SWAP"))
+    side = str(_normalize_query_value(side, "sell")).lower()
+    order_side = str(_normalize_query_value(order_side, "sell")).lower()
+    contracts_amount = float(_normalize_query_value(contracts_amount, 0.0) or 0.0)
+    new_sl_price = _normalize_query_value(new_sl_price)
+    position_qty = _normalize_query_value(position_qty)
+    user_id = str(_normalize_query_value(user_id, ""))
+    algo_type = str(_normalize_query_value(algo_type, "trigger")).lower() or "trigger"
+    order_type = str(_normalize_query_value(order_type, "sl")).lower() or "sl"
+    is_hedge = bool(_normalize_query_value(is_hedge, False))
+    ord_type_for_algo = "conditional" if algo_type == "conditional" else "trigger"
+
+    if new_sl_price is None:
+        raise HTTPException(status_code=400, detail="new_sl_price is required")
+
+    new_sl_price = float(new_sl_price)
+    position_qty = float(position_qty) if position_qty not in (None, "") else None
+
     # ORDER_BACKEND 사용 여부 확인 (backward compatibility)
     if order_backend_client:
         try:
@@ -2156,6 +2186,32 @@ async def update_stop_loss_order(
                     except Exception as e:
                         if "활성화된 포지션을 찾을 수 없습니다" not in str(e) and "no_position" not in str(e):
                             logger.error(f"Failed to close position: {str(e)}")
+
+                            # Stop Loss Error Logging
+                            await log_stoploss_error(
+                                error=e,
+                                error_type="MarketCloseError",
+                                user_id=okx_uid,
+                                severity="ERROR",
+                                module="order.update_stop_loss",
+                                function_name="update_stop_loss",
+                                symbol=symbol,
+                                side=side_for_close,
+                                order_side=order_side_normalized,
+                                new_sl_price=new_sl_price,
+                                current_price=current_price,
+                                position_qty=position_qty,
+                                position_side=pos_side,
+                                failure_reason="Failed to close position at market price",
+                                should_close_at_market=should_close_at_market,
+                                position_info=position if position else None,
+                                metadata={
+                                    "side_normalized": side_normalized,
+                                    "is_hedge": is_hedge,
+                                    "order_type": order_type
+                                }
+                            )
+
                             await send_telegram_message(
                                 f"[{okx_uid}] 주문 생성 중 오류 발생: {str(e)}\n"
                                 f"BreakEven의 변경된 SL이 현재 시장가보다 {'높습니다' if side_normalized == 'buy' else '낮습니다'}.\n"
@@ -2184,7 +2240,7 @@ async def update_stop_loss_order(
                         symbol=symbol,
                         user_id=okx_uid,
                         side=pos_side,
-                        algo_type=algo_type if algo_type == "trigger" else "conditional"
+                        algo_type=ord_type_for_algo
                     )
                 except Exception as e:
                     logger.warning(f"기존 SL algo 주문 취소 중 오류: {str(e)}")
@@ -2199,7 +2255,8 @@ async def update_stop_loss_order(
                         trigger_price=new_sl_price,
                         order_price=new_sl_price,
                         pos_side=pos_side,
-                        reduce_only=True
+                        reduce_only=True,
+                        ord_type=ord_type_for_algo
                     )
     
                     # 7. Update Redis with new SL data
@@ -2245,7 +2302,40 @@ async def update_stop_loss_order(
     
                 except Exception as e:
                     logger.error(f"Failed to create stop loss order: {str(e)}")
-    
+
+                    # Stop Loss Error Logging
+                    error_message = str(e)
+                    is_timeout = "Order timed out" in error_message or "51149" in error_message
+
+                    await log_stoploss_error(
+                        error=e,
+                        error_type="OrderCreationError" if not is_timeout else "OrderTimeoutError",
+                        user_id=okx_uid,
+                        severity="ERROR" if not is_timeout else "WARNING",
+                        module="order.update_stop_loss",
+                        function_name="update_stop_loss",
+                        symbol=symbol,
+                        side=side_for_close,
+                        order_side=order_side_normalized,
+                        new_sl_price=new_sl_price,
+                        current_price=current_price,
+                        position_qty=position_qty,
+                        position_side=pos_side,
+                        algo_type=algo_type,
+                        order_type=order_type,
+                        failure_reason="Failed to create stop loss order" if not is_timeout else "Stop loss order creation timed out",
+                        should_close_at_market=should_close_at_market,
+                        position_info=position if position else None,
+                        old_sl_data=old_sl_data,
+                        metadata={
+                            "side_normalized": side_normalized,
+                            "is_hedge": is_hedge,
+                            "contracts_amount": contracts_amount,
+                            "is_timeout": is_timeout,
+                            "error_code": "51149" if "51149" in error_message else None
+                        }
+                    )
+
                     # Fallback: Update Redis with SL price only
                     await update_stop_loss_order_redis(
                         user_id=okx_uid,
@@ -2253,9 +2343,8 @@ async def update_stop_loss_order(
                         side=side_for_close,
                         new_sl_price=new_sl_price
                     )
-    
-                    error_message = str(e)
-                    if "Order timed out" in error_message or "51149" in error_message:
+
+                    if is_timeout:
                         await send_telegram_message(
                             f"[{okx_uid}] 스탑로스 주문 생성 중 타임아웃 발생. "
                             f"시스템이 자동으로 SL 가격을 {new_sl_price}로 설정했지만 실제 주문은 생성되지 않았습니다.",
@@ -2268,7 +2357,7 @@ async def update_stop_loss_order(
                             okx_uid=1709556958,
                             debug=True
                         )
-    
+
                     return {
                         "success": False,
                         "symbol": symbol,
@@ -2281,6 +2370,28 @@ async def update_stop_loss_order(
                 raise
             except Exception as e:
                 logger.error(f"Failed to update stop loss: {str(e)}", exc_info=True)
+
+                # Stop Loss Error Logging - General Error
+                await log_stoploss_error(
+                    error=e,
+                    error_type="StopLossUpdateError",
+                    user_id=okx_uid,
+                    severity="CRITICAL",
+                    module="order.update_stop_loss",
+                    function_name="update_stop_loss",
+                    symbol=symbol,
+                    side=side_normalized,
+                    order_side=order_side_normalized,
+                    new_sl_price=new_sl_price,
+                    failure_reason="Unexpected error during stop loss update",
+                    metadata={
+                        "contracts_amount": contracts_amount,
+                        "algo_type": algo_type,
+                        "is_hedge": is_hedge,
+                        "order_type": order_type
+                    }
+                )
+
                 await handle_exchange_error(e)
 
 

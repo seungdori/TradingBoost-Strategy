@@ -14,6 +14,7 @@ import httpx
 from aiogram import F, Router, types
 from aiogram.filters import Command
 from aiogram.types import Message
+from aiogram.exceptions import TelegramBadRequest
 
 from HYPERRSI.src.api.dependencies import get_user_api_keys
 from HYPERRSI.src.core.celery_task import celery_app
@@ -45,6 +46,23 @@ def get_redis_keys(user_id: str, symbol: Optional[str] = None, side: Optional[st
         keys['position'] = f"user:{user_id}:position:{symbol}:{side}"
 
     return keys
+
+async def safe_edit_message(message: Message, text: str, **kwargs) -> None:
+    """
+    Telegram 메시지를 안전하게 편집합니다.
+    메시지 내용이 동일한 경우의 오류를 자동으로 처리합니다.
+
+    Args:
+        message: 편집할 메시지 객체
+        text: 새로운 메시지 텍스트
+        **kwargs: edit_text()에 전달할 추가 인자 (reply_markup 등)
+    """
+    try:
+        await message.edit_text(text, **kwargs)
+    except TelegramBadRequest as e:
+        # 메시지 내용이 동일한 경우 무시
+        if "message is not modified" not in str(e):
+            raise
 
 async def get_telegram_id(identifier: str) -> Optional[int]:
     """
@@ -202,7 +220,7 @@ async def confirm_stop(callback: types.CallbackQuery) -> None:
         
         # 둘 다 running이 아니면 실행 중인 트레이딩이 없음
         if current_status != "running" and (not okx_uid or okx_status != "running"):
-            await callback.message.edit_text("현재 실행 중인 트레이딩이 없습니다.")
+            await safe_edit_message(callback.message, "현재 실행 중인 트레이딩이 없습니다.")
             await callback.answer("실행 중인 트레이딩이 없습니다.")
             return
         
@@ -234,9 +252,10 @@ async def confirm_stop(callback: types.CallbackQuery) -> None:
                 )
                 response.raise_for_status()
                 logger.info(f"OKX UID {okx_uid}로 트레이딩 중지 API 호출 성공")
-            
+
             # 성공 메시지 전송
-            await callback.message.edit_text(
+            await safe_edit_message(
+                callback.message,
                 "✅ 트레이딩이 중지되었습니다.\n"
                 "다시 시작하려면 /start 명령어를 사용하세요."
             )
@@ -259,7 +278,7 @@ async def cancel_stop(callback: types.CallbackQuery) -> None:
     """트레이딩 중지 취소"""
     if not isinstance(callback.message, Message):
         return
-    await callback.message.edit_text("✅ 트레이딩 중지가 취소되었습니다.")
+    await safe_edit_message(callback.message, "✅ 트레이딩 중지가 취소되었습니다.")
     await callback.answer()
 
 
@@ -268,7 +287,7 @@ async def cancel_stop_return(callback: types.CallbackQuery) -> None:
     """트레이딩 중지 취소"""
     if not isinstance(callback.message, Message):
         return
-    await callback.message.edit_text("취소되었습니다.")
+    await safe_edit_message(callback.message, "취소되었습니다.")
     await callback.answer()
     
 
@@ -507,8 +526,9 @@ async def handle_symbol_selection(callback: types.CallbackQuery) -> None:
                 callback_data="trade_reset"
             )]
         ])
-        
-        await callback.message.edit_text(
+
+        await safe_edit_message(
+            callback.message,
             f"📊 트레이딩 설정\n\n"
             f"1️⃣ 거래할 종목을 선택해주세요:\n"
             f"현재 선택: {symbol}\n\n"
@@ -516,7 +536,7 @@ async def handle_symbol_selection(callback: types.CallbackQuery) -> None:
             f"현재 선택: {selected_timeframe if selected_timeframe else '없음'}",
             reply_markup=keyboard
         )
-        
+
         await callback.answer(f"{symbol} 선택됨")
         
     except Exception as e:
@@ -550,13 +570,14 @@ async def handle_back_to_symbol(callback: types.CallbackQuery) -> None:
             ])
         
         keyboard = types.InlineKeyboardMarkup(inline_keyboard=symbol_buttons)
-        
-        await callback.message.edit_text(
+
+        await safe_edit_message(
+            callback.message,
             "📊 트레이딩 설정\n\n"
             "1️⃣ 거래할 종목을 선택해주세요:",
             reply_markup=keyboard
         )
-        
+
         await callback.answer("종목 선택 화면으로 돌아갔습니다.")
         
     except Exception as e:
@@ -603,8 +624,9 @@ async def handle_timeframe_selection(callback: types.CallbackQuery) -> None:
             callback_data="trade_reset"
         )]
     ])
-    
-    await callback.message.edit_text(
+
+    await safe_edit_message(
+        callback.message,
         f"📊 트레이딩 설정 확인\n\n"
         f"📈 선택된 종목: {selected_symbol}\n"
         f"⏱ 타임프레임: {timeframe}\n\n"
@@ -696,7 +718,7 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
                     f"• 최소 투자금: {min_notional:.2f} USDT\n"
                     f"설정을 수정하고 다시 시작해주세요."
                 )
-                await callback.message.edit_text(msg)
+                await safe_edit_message(callback.message, msg)
                 await callback.answer()
                 # 상태를 stopped로 변경
                 await redis.set(f"user:{user_id}:trading:status", "stopped")
@@ -774,14 +796,15 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
                 )]
             ])
 
-            await callback.message.edit_text(
+            await safe_edit_message(
+                callback.message,
                 f"📊 트레이딩 상태\n\n"
                 f"현재 상태: 🟢 실행 중\n"
                 f"거래 종목: {selected_symbol}\n"
                 f"타임프레임: {selected_timeframe}",
                 reply_markup=keyboard
             )
-            
+
             # 시작 알림 메시지
             await callback.answer("트레이딩이 시작되었습니다!")
             
@@ -826,17 +849,18 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
                     )
                 ])
             
-            
+
             keyboard = types.InlineKeyboardMarkup(inline_keyboard=symbol_buttons)
 
-            await callback.message.edit_text(
+            await safe_edit_message(
+                callback.message,
                 "📊 트레이딩 설정\n\n"
                 "1️⃣ 거래할 종목을 선택해주세요:",
                 reply_markup=keyboard
             )
-            
+
             # 중지 알림 메시지
-            
+
             await callback.answer("트레이딩이 중지되었습니다.")
             
     except Exception as e:
@@ -903,14 +927,16 @@ async def handle_reset_callback(callback: types.CallbackQuery) -> None:
                 disabled=True
             )]
         ])
-        
-        await callback.message.edit_text(
+
+
+        await safe_edit_message(
+            callback.message,
             f"트레이딩 제어\n"
             f"현재 상태: 🔴 중지됨\n\n"
             f"원하시는 작업을 선택해주세요:",
             reply_markup=keyboard
         )
-        
+
         await callback.answer("설정이 초기화되었습니다.")
         
     except Exception as e:
@@ -1207,11 +1233,11 @@ async def button_callback(callback: types.CallbackQuery) -> None:
             if action == 'start':
                 #await redis_client.set(f"user:{user_id}:trading:status", "running")
                 await callback.answer("트레이딩을 시작합니다.")
-                await callback.message.edit_text("자동 트레이딩이 시작되었습니다.")
+                await safe_edit_message(callback.message, "자동 트레이딩이 시작되었습니다.")
             elif action == 'stop':
                 await redis.set(f"user:{user_id}:trading:status", "stopped")
                 await callback.answer("트레이딩을 중지합니다.")
-                await callback.message.edit_text("자동 트레이딩이 중지되었습니다.")
+                await safe_edit_message(callback.message, "자동 트레이딩이 중지되었습니다.")
         else:
             await callback.answer("알 수 없는 명령입니다.")
             
@@ -1245,9 +1271,10 @@ async def handle_back_to_timeframe(callback: types.CallbackQuery) -> None:
         # 재설정 버튼 추가
         reset_button = [types.InlineKeyboardButton(text="🔄 처음부터 다시 설정", callback_data="trade_reset")]
         keyboard = types.InlineKeyboardMarkup(inline_keyboard=timeframe_buttons + [reset_button])
-        
+
         # 타임프레임 선택 화면 표시
-        await callback.message.edit_text(
+        await safe_edit_message(
+            callback.message,
             f"📊 타임프레임 재선택\n\n"
             f"선택된 종목: {selected_symbol}\n"
             "원하는 타임프레임을 선택해주세요:",

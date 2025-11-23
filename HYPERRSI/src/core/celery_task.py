@@ -4,16 +4,17 @@ from shared.utils.path_config import configure_pythonpath
 
 configure_pythonpath()
 
-#실행 명령어
+# 실행 명령어
 
-#celery -A HYPERRSI.src.core.celery_task worker --loglevel=INFO --concurrency=8
+# Celery Worker 실행
+# celery -A HYPERRSI.src.core.celery_task worker --loglevel=INFO --concurrency=8
+# celery -A HYPERRSI.src.core.celery_task worker --loglevel=WARNING --concurrency=8
 
-#celery -A HYPERRSI.src.core.celery_task worker --loglevel=WARNING --concurrency=8
+# Celery Beat 실행 (자동 로그 관리를 위해 필요)
+# celery -A HYPERRSI.src.core.celery_task beat --loglevel=WARNING
 
-
-#비트 사용할 필요 없음.
-#celery -A HYPERRSI.src.core.celery_task beat --loglevel=WARNING
-#celery -A HYPERRSI.src.core.celery_task flower --port=5555
+# Flower 모니터링 (선택사항)
+# celery -A HYPERRSI.src.core.celery_task flower --port=5555
 
 import asyncio
 import logging
@@ -21,6 +22,7 @@ import os
 import signal
 
 from celery import Celery
+from celery.schedules import crontab
 from celery.signals import worker_init, worker_process_init, worker_ready, worker_shutdown
 from celery.utils.log import get_task_logger
 
@@ -124,6 +126,15 @@ beat_schedule = {
         'task': 'trading_tasks.check_and_execute_trading',
         'schedule': 5.0,  # 5초마다 실행
     },
+    'cleanup-old-logs': {
+        'task': 'maintenance_tasks.cleanup_old_logs',
+        'schedule': crontab(hour=3, minute=0),  # 매일 새벽 3시 실행
+    },
+    'analyze-logs-summary': {
+        'task': 'maintenance_tasks.analyze_logs_summary',
+        'schedule': crontab(hour=23, minute=0),  # 매일 밤 11시 실행
+        'kwargs': {'days': 1},  # 최근 1일 로그 분석
+    },
 }
 
 # Celery 애플리케이션 설정
@@ -134,6 +145,7 @@ celery_app = Celery(
     include=[
         'HYPERRSI.src.tasks.trading_tasks',  # 트레이딩 태스크
         'HYPERRSI.src.tasks.grid_trading_tasks',  # Grid 트레이딩 태스크 추가
+        'HYPERRSI.src.tasks.maintenance_tasks',  # 로그 관리 태스크
     ]
 )
 celery_app.conf.update(

@@ -262,6 +262,8 @@ class CandlesDBWriter:
             Decimal(str(candle.get("atr14", 0))) if candle.get("atr14") else None,  # atr
             Decimal(str(candle.get("ema7", 0))) if candle.get("ema7") else None,  # ema7
             Decimal(str(candle.get("sma20", 0))) if candle.get("sma20") else None,  # ma20
+            int(candle.get("trend_state", 0)) if candle.get("trend_state") is not None else None,  # trend_state
+            int(candle.get("auto_trend_state", 0)) if candle.get("auto_trend_state") is not None else None,  # auto_trend_state
         )
 
     def _do_upsert(self, table_name: str, timeframe_str: str, rows: list[tuple]) -> bool:
@@ -285,7 +287,7 @@ class CandlesDBWriter:
             upsert_query = f"""
                 INSERT INTO {table_name} (
                     time, timeframe, open, high, low, close, volume,
-                    rsi14, atr, ema7, ma20
+                    rsi14, atr, ema7, ma20, trend_state, auto_trend_state
                 )
                 VALUES %s
                 ON CONFLICT (time, timeframe)
@@ -298,7 +300,9 @@ class CandlesDBWriter:
                     rsi14 = EXCLUDED.rsi14,
                     atr = EXCLUDED.atr,
                     ema7 = EXCLUDED.ema7,
-                    ma20 = EXCLUDED.ma20;
+                    ma20 = EXCLUDED.ma20,
+                    trend_state = EXCLUDED.trend_state,
+                    auto_trend_state = EXCLUDED.auto_trend_state;
             """
 
             # Execute batch upsert

@@ -1069,38 +1069,53 @@ async def handle_trend_timeframe_setting(callback_query: CallbackQuery) -> None:
         return
 
     try:
-        # 사용 가능한 타임프레임 옵션들
-        timeframe_options = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d']
-        
+        # 사용 가능한 타임프레임 옵션들 (자동 옵션 추가)
+        timeframe_options = ['자동', '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d']
+
         # 현재 설정된 타임프레임 가져오기
         user_id = str(callback_query.from_user.id)
         user_id = await get_identifier(user_id)
         settings = await redis_service.get_user_settings(user_id)
         if settings is None:
             settings = DEFAULT_PARAMS_SETTINGS.copy()
-        current_tf = str(settings.get('trend_timeframe', '')).lower() if settings else ''
-        
+
+        # 내부 저장값 ('auto')과 UI 표시값 ('자동') 분리
+        current_tf_raw = str(settings.get('trend_timeframe', 'auto')).lower() if settings else 'auto'
+
         # 인라인 키보드 생성
         buttons = []
-        for i in range(0, len(timeframe_options), 3):  # 한 줄에 3개씩 배치
+
+        # 자동 옵션을 첫 번째 행에 단독 배치
+        auto_option = timeframe_options[0]  # '자동'
+        text = f"✓ {auto_option}" if current_tf_raw == 'auto' else auto_option
+        buttons.append([InlineKeyboardButton(
+            text=text,
+            callback_data=f"set_trend_timeframe:{auto_option}"
+        )])
+
+        # 나머지 타임프레임 옵션들을 3개씩 배치
+        for i in range(1, len(timeframe_options), 3):  # 한 줄에 3개씩 배치
             row = []
             for tf in timeframe_options[i:i+3]:
                 # 현재 선택된 타임프레임이면 ✓ 표시 추가
-                text = f"✓ {tf.upper()}" if tf == current_tf else tf.upper()
+                text = f"✓ {tf.upper()}" if tf == current_tf_raw else tf.upper()
                 row.append(InlineKeyboardButton(
                     text=text,
                     callback_data=f"set_trend_timeframe:{tf}"
                 ))
             buttons.append(row)
-        
+
         # 뒤로가기 버튼 추가
         buttons.append([InlineKeyboardButton(text="⬅️ 뒤로가기", callback_data="settings_back")])
-        
+
         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-        
+
+        # UI 표시: 'auto' → '자동' 변환
+        display_tf = '자동' if current_tf_raw == 'auto' else current_tf_raw.upper()
+
         await callback_query.message.edit_text(
             "트랜드 로직에 사용할 타임프레임을 선택해주세요:\n"
-            f"현재 설정: [{current_tf.upper() if current_tf else '설정 없음'}]",
+            f"현재 설정: [{display_tf if current_tf_raw else '설정 없음'}]",
             reply_markup=keyboard
         )
         
@@ -1126,17 +1141,30 @@ async def handle_trend_timeframe_value(callback_query: CallbackQuery) -> None:
         settings = await redis_service.get_user_settings(user_id)
         if settings is None:
             settings = {}
-            
-        # 타임프레임 설정 업데이트
-        settings['trend_timeframe'] = timeframe.upper()
-        
+
+        # 타임프레임 정규화: 내부적으로는 'auto'로 통일, 다른 값은 소문자로 저장
+        timeframe_lower = timeframe.lower()
+        if timeframe_lower in ['auto', '자동']:
+            settings['trend_timeframe'] = 'auto'  # 내부 저장: 'auto'
+            is_auto = True
+        else:
+            settings['trend_timeframe'] = timeframe_lower  # 소문자로 정규화 ('15M' → '15m')
+            is_auto = False
+
         # 설정 저장
         await redis_service.set_user_settings(user_id, settings)
-        
+
         # 설정 메뉴로 돌아가기
         keyboard = get_settings_keyboard(settings)
+
+        # 성공 메시지 생성 (UI 표시: '자동')
+        if is_auto:
+            message = "✅ 트렌드 타임프레임이 '자동'으로 설정되었습니다.\n(차트 타임프레임에 맞게 자동으로 선택됩니다)"
+        else:
+            message = f"✅ 트렌드 타임프레임이 {timeframe.upper()}로 설정되었습니다."
+
         await callback_query.message.edit_text(
-            f"✅ 트렌드 타임프레임이 {timeframe.upper()}로 설정되었습니다.",
+            message,
             reply_markup=keyboard
         )
         

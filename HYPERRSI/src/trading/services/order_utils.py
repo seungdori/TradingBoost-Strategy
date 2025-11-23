@@ -400,47 +400,59 @@ async def try_send_order(
     required_margin = 0.0
     current_price = 0.0
 
-    try:
-        # Exchange 객체 준비 (잔고 조회용)
-        need_close_for_balance = False
-        balance_exchange = exchange
-        if balance_exchange is None:
-            api_keys = await get_user_api_keys(user_id)
-            from HYPERRSI.src.trading.services.order_wrapper import OrderWrapper
-            balance_exchange = OrderWrapper(str(user_id), api_keys)
-            need_close_for_balance = True
+    # 청산 주문(reduceOnly)은 마진 체크 건너뛰기
+    is_close_position = (order_concept == "close_position")
 
-        # 계좌 잔고 조회
-        balance = await balance_exchange.fetch_balance()
-        usdt_balance = balance.get('USDT', {})
-        free_usdt = safe_float(usdt_balance.get('free', 0))
-        total_usdt = safe_float(usdt_balance.get('total', 0))
+    if is_close_position:
+        logger.info(f"[{user_id}] 청산 주문이므로 마진 체크를 건너뜁니다.")
 
-        # 현재가 조회
-        current_price = await get_current_price(symbol)
+    # 청산 주문이 아닐 때만 잔고 확인
+    if not is_close_position:
+        try:
+            # Exchange 객체 준비 (잔고 조회용)
+            need_close_for_balance = False
+            balance_exchange = exchange
+            if balance_exchange is None:
+                api_keys = await get_user_api_keys(user_id)
+                from HYPERRSI.src.trading.services.order_wrapper import OrderWrapper
+                balance_exchange = OrderWrapper(str(user_id), api_keys)
+                need_close_for_balance = True
 
-        # 필요한 마진 계산 (대략적인 값)
-        required_margin = (size * current_price) / (leverage or 1.0)
+            # 계좌 잔고 조회
+            balance = await balance_exchange.fetch_balance()
+            usdt_balance = balance.get('USDT', {})
+            free_usdt = safe_float(usdt_balance.get('free', 0))
+            total_usdt = safe_float(usdt_balance.get('total', 0))
 
-        logger.info(f"💰 [{user_id}] 계좌 잔고 상태:")
-        logger.info(f"   📊 총 USDT: {total_usdt:.2f}")
-        logger.info(f"   💵 사용 가능 USDT: {free_usdt:.2f}")
-        logger.info(f"   📈 {symbol} 현재가: ${current_price:,.2f}")
-        logger.info(f"   🎯 주문 수량: {size} 계약")
-        logger.info(f"   ⚖️  레버리지: {leverage}x")
-        logger.info(f"   💎 필요 마진 (예상): {required_margin:.2f} USDT")
-        logger.info(f"   ✅ 마진 충분 여부: {'예' if free_usdt >= required_margin else '아니오'}")
+            # 현재가 조회
+            current_price = await get_current_price(symbol)
 
-        # Exchange 닫기
-        if need_close_for_balance and balance_exchange is not None:
-            await balance_exchange.close()
+            # 필요한 마진 계산 (대략적인 값)
+            required_margin = (size * current_price) / (leverage or 1.0)
 
-    except Exception as e:
-        logger.warning(f"[{user_id}] 계좌 잔고 조회 실패: {str(e)}")
+            logger.info(f"💰 [{user_id}] 계좌 잔고 상태:")
+            logger.info(f"   📊 총 USDT: {total_usdt:.2f}")
+            logger.info(f"   💵 사용 가능 USDT: {free_usdt:.2f}")
+            logger.info(f"   📈 {symbol} 현재가: ${current_price:,.2f}")
+            logger.info(f"   🎯 주문 수량: {size} 계약")
+            logger.info(f"   ⚖️  레버리지: {leverage}x")
+            logger.info(f"   💎 필요 마진 (예상): {required_margin:.2f} USDT")
+            logger.info(f"   ✅ 마진 충분 여부: {'예' if free_usdt >= required_margin else '아니오'}")
 
-    # 자금 부족 차단 상태 확인
-    is_blocked: bool = await check_margin_block(user_id, symbol)
-    if is_blocked:
+            # Exchange 닫기
+            if need_close_for_balance and balance_exchange is not None:
+                await balance_exchange.close()
+
+        except Exception as e:
+            logger.warning(f"[{user_id}] 계좌 잔고 조회 실패: {str(e)}")
+
+    # 청산 주문이 아닐 때만 자금 부족 차단 상태 확인
+    if not is_close_position:
+        is_blocked: bool = await check_margin_block(user_id, symbol)
+    else:
+        is_blocked = False  # 청산 주문은 차단하지 않음
+
+    if is_blocked and not is_close_position:
         # 실제 잔고 확인 - 충분하면 차단 자동 해제
         shortage = required_margin - free_usdt if required_margin > free_usdt else 0.0
 
@@ -502,11 +514,15 @@ async def try_send_order(
                 posSide=direction or "net",
             )
 
-    # Redis에서 현재 재시도 횟수 가져오기
-    current_retry_count: int = await get_margin_retry_count(user_id, symbol)
-    
-    # 재시도 횟수 확인
-    if current_retry_count >= max_retries:
+    # 청산 주문이 아닐 때만 재시도 횟수 확인
+    if not is_close_position:
+        # Redis에서 현재 재시도 횟수 가져오기
+        current_retry_count: int = await get_margin_retry_count(user_id, symbol)
+    else:
+        current_retry_count = 0  # 청산 주문은 재시도 체크 안 함
+
+    # 재시도 횟수 확인 (청산 주문이 아닐 때만)
+    if current_retry_count >= max_retries and not is_close_position:
         # 부족한 자금 계산
         shortage = required_margin - free_usdt if required_margin > free_usdt else 0.0
 
@@ -796,7 +812,8 @@ async def try_send_order(
                 'orderType': 'limit'
             })
         if is_hedge_mode:
-            if order_type in ['take_profit', 'stop_loss']:
+            # TP/SL 주문 또는 청산 주문 처리
+            if order_type in ['take_profit', 'stop_loss'] or is_close_position:
                 if direction == 'long':
                     order_params['posSide'] = 'long'
                     side = 'sell'  # long 포지션을 닫으므로 sell
@@ -826,7 +843,8 @@ async def try_send_order(
         else:
             print("!!ORDER_PARAMS: ", order_params)
             order_params['posSide'] = 'net'
-            if order_type in ['take_profit', 'stop_loss']:
+            # TP/SL 주문 또는 청산 주문일 때 reduceOnly 설정
+            if order_type in ['take_profit', 'stop_loss'] or is_close_position:
                 order_params['reduceOnly'] = True
                 
         print(

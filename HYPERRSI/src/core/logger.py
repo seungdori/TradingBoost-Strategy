@@ -1,21 +1,124 @@
 import json
 import logging
 import os
+import re
 import sys
 import traceback
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict
 
 from .config import settings
 
-#주석 : 로그를 생성하는 순서가 중간중간에 있는 이유는, 에러 로거 등이 다른 로거에 대해 의존적이기 때문이다. 
+#주석 : 로그를 생성하는 순서가 중간중간에 있는 이유는, 에러 로거 등이 다른 로거에 대해 의존적이기 때문이다.
 
 # 현재 실행 위치를 기준으로 로그 디렉토리 경로 설정
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 LOG_DIR = BASE_DIR / 'logs' / 'errors'
 os.makedirs(LOG_DIR, exist_ok=True)
+
+
+# ============================================================================
+# 민감 정보 필터링 (Sensitive Data Masking)
+# ============================================================================
+
+# 민감 정보 키워드 패턴
+SENSITIVE_KEYS = {
+    'password', 'passwd', 'pwd', 'secret', 'api_key', 'apikey',
+    'api_secret', 'apisecret', 'private_key', 'privatekey',
+    'access_token', 'accesstoken', 'refresh_token', 'refreshtoken',
+    'auth_token', 'authtoken', 'bearer', 'authorization',
+    'passphrase', 'okx_api_key', 'okx_secret_key', 'okx_passphrase',
+    'telegram_token', 'bot_token', 'session_key', 'sessionkey',
+    'encryption_key', 'encryptionkey', 'jwt', 'cookie'
+}
+
+# 정규식 패턴으로 민감 정보 감지
+SENSITIVE_PATTERNS = [
+    (re.compile(r'(["\']?)(?:password|passwd|pwd)(\1)\s*[:=]\s*(["\']?)(.+?)(\3)', re.IGNORECASE), '***MASKED***'),
+    (re.compile(r'(["\']?)(?:api[_-]?key|apikey)(\1)\s*[:=]\s*(["\']?)(.+?)(\3)', re.IGNORECASE), '***MASKED***'),
+    (re.compile(r'(["\']?)(?:secret|api[_-]?secret)(\1)\s*[:=]\s*(["\']?)(.+?)(\3)', re.IGNORECASE), '***MASKED***'),
+    (re.compile(r'(["\']?)(?:token|access[_-]?token)(\1)\s*[:=]\s*(["\']?)(.+?)(\3)', re.IGNORECASE), '***MASKED***'),
+    (re.compile(r'Bearer\s+[A-Za-z0-9\-._~+/]+=*', re.IGNORECASE), 'Bearer ***MASKED***'),
+]
+
+
+def mask_sensitive_data(data: Any) -> Any:
+    """
+    민감 정보를 마스킹합니다.
+
+    Args:
+        data: 마스킹할 데이터 (dict, list, str 등)
+
+    Returns:
+        민감 정보가 마스킹된 데이터
+    """
+    if isinstance(data, dict):
+        return {k: mask_sensitive_value(k, v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [mask_sensitive_data(item) for item in data]
+    elif isinstance(data, str):
+        return mask_sensitive_string(data)
+    else:
+        return data
+
+
+def mask_sensitive_value(key: str, value: Any) -> Any:
+    """
+    키-값 쌍에서 민감한 값을 마스킹합니다.
+
+    Args:
+        key: 딕셔너리 키
+        value: 값
+
+    Returns:
+        마스킹된 값
+    """
+    # 키가 민감 정보 키워드에 해당하는지 확인
+    key_lower = key.lower().replace('-', '_').replace(' ', '_')
+
+    if any(sensitive_key in key_lower for sensitive_key in SENSITIVE_KEYS):
+        if isinstance(value, str) and len(value) > 0:
+            # 문자열 길이에 따라 적절히 마스킹
+            if len(value) <= 4:
+                return '***'
+            elif len(value) <= 8:
+                return value[:2] + '***' + value[-2:]
+            else:
+                return value[:4] + '***' + value[-4:]
+        else:
+            return '***MASKED***'
+
+    # 재귀적으로 중첩된 구조 처리
+    if isinstance(value, dict):
+        return mask_sensitive_data(value)
+    elif isinstance(value, list):
+        return mask_sensitive_data(value)
+    elif isinstance(value, str):
+        return mask_sensitive_string(value)
+    else:
+        return value
+
+
+def mask_sensitive_string(text: str) -> str:
+    """
+    문자열에서 민감 정보 패턴을 찾아 마스킹합니다.
+
+    Args:
+        text: 검사할 문자열
+
+    Returns:
+        마스킹된 문자열
+    """
+    if not isinstance(text, str):
+        return text
+
+    masked_text = text
+    for pattern, replacement in SENSITIVE_PATTERNS:
+        masked_text = pattern.sub(replacement, masked_text)
+
+    return masked_text
 
 
 #get_logger에 대한 활용이 없다.
@@ -498,7 +601,7 @@ def alert_log(
             'alert_type': 'system_alert'
         }
         
-        # 추가 데이터 병합
+        # 추가 데이터 병합 (민감 정보 마스킹 적용)
         if additional_data:
             # 추가 데이터 안전성 확인 - 직렬화 가능한 데이터만 포함
             safe_additional_data = {}
@@ -506,11 +609,12 @@ def alert_log(
                 try:
                     # 직렬화 테스트
                     json.dumps({key: value}, default=str)
-                    safe_additional_data[key] = value
+                    # 민감 정보 마스킹 적용
+                    safe_additional_data[key] = mask_sensitive_value(key, value)
                 except (TypeError, OverflowError, ValueError):
                     # 직렬화 불가능한 경우 문자열로 변환
                     safe_additional_data[key] = str(value)
-            
+
             alert_data.update(safe_additional_data)
         
         # 로거에 추가 정보 전달
@@ -649,14 +753,15 @@ def log_order(
             'quantity': quantity,
             'level': level
         }
-        
-        # None이 아닌 추가 데이터만 포함
+
+        # None이 아닌 추가 데이터만 포함 (민감 정보 마스킹 적용)
         for key, value in additional_data.items():
             if value is not None:
                 # 직렬화 가능한지 확인
                 try:
                     json.dumps({key: value})
-                    log_data[key] = value
+                    # 민감 정보 마스킹 적용
+                    log_data[key] = mask_sensitive_value(key, value)
                 except (TypeError, OverflowError, ValueError):
                     log_data[key] = str(value)
         
@@ -933,10 +1038,21 @@ def get_user_order_logs_from_file(user_id: str, limit: int = 100, offset: int = 
         log_dir = Path(LOG_DIR).parent / 'orders' / 'users'
         log_file = log_dir / f'user_{user_id_str}_orders.log'
 
-        # 사용자별 로그 파일이 없으면 전체 로그에서 필터링
+        # 사용자별 로그 파일이 없으면 자동 생성
         if not log_file.exists():
-            print(f"{user_id_str}의 로그 파일이 없어서 user_id를 기준으로 로그 파일을 가져옵니다.")
-            return get_order_logs_by_user_id(user_id_str, limit, offset)
+            try:
+                # 로그 디렉토리가 없으면 생성
+                os.makedirs(log_dir, exist_ok=True)
+                # 빈 로그 파일 생성
+                with open(log_file, 'w', encoding='utf-8') as f:
+                    pass  # 빈 파일 생성
+                error_logger.info(f"사용자 {user_id_str}의 새 로그 파일 생성됨: {log_file}")
+                # 새로 생성된 파일이므로 빈 리스트 반환
+                return []
+            except Exception as e:
+                error_logger.error(f"로그 파일 생성 실패: {str(e)}")
+                # 파일 생성 실패 시 전체 로그에서 필터링 시도
+                return get_order_logs_by_user_id(user_id_str, limit, offset)
         
         user_logs = []
         count = 0

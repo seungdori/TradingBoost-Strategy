@@ -164,7 +164,7 @@ async def handle_no_position(
         # ============================================================================
         # Long Entry Logic
         # ============================================================================
-        print(f"[{user_id}] 롱 진입 체크 시작 - direction: {settings['direction']}", flush=True)
+        #print(f"[{user_id}] 롱 진입 체크 시작 - direction: {settings['direction']}", flush=True)
         if settings['direction'] in [DIRECTION_LONG_SHORT, DIRECTION_LONG]:
             # Check if position is locked
             is_locked, locked_direction, remaining = await check_any_direction_locked(
@@ -213,7 +213,7 @@ async def handle_no_position(
         # ============================================================================
         # Short Entry Logic
         # ============================================================================
-        print(f"[{user_id}] 숏 진입 체크 시작 - direction: {settings['direction']}", flush=True)
+        #print(f"[{user_id}] 숏 진입 체크 시작 - direction: {settings['direction']}", flush=True)
         if settings['direction'] in [DIRECTION_LONG_SHORT, DIRECTION_SHORT]:
             # Check if position is locked
             is_locked, locked_direction, remaining = await check_any_direction_locked(

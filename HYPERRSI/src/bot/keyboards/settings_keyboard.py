@@ -199,7 +199,7 @@ def get_settings_keyboard(settings: dict) -> InlineKeyboardMarkup:
                 "setting:use_trend_logic"
             ),
             create_settings_button(
-                f"- 트랜드 로직 타임프레임: {settings.get('trend_timeframe', '1H')}",
+                f"- 트랜드 로직 타임프레임: {settings.get('trend_timeframe', '자동')}",
                 "trend_timeframe_setting"
             ),
             create_settings_button(

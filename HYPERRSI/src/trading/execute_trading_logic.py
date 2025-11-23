@@ -13,7 +13,7 @@ from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.error_handler import ErrorCategory, handle_critical_error
 from HYPERRSI.src.core.logger import log_bot_error, log_bot_start, log_bot_stop, setup_error_logger
 from HYPERRSI.src.services.redis_service import RedisService
-from HYPERRSI.src.trading.models import get_timeframe
+from HYPERRSI.src.trading.models import get_timeframe, get_auto_trend_timeframe
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 from HYPERRSI.src.trading.trading_service import TradingService
 from HYPERRSI.src.trading.utils.position_handler import handle_existing_position, handle_no_position
@@ -515,10 +515,9 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                 candle_data = json.loads(raw_data)
                 current_rsi = candle_data['rsi']
                 #print("current_rsi: ", current_rsi)
+                # 트렌드 타임프레임: '자동'이면 그대로 전달, 수동이면 해당 타임프레임 사용
                 trend_timeframe = user_settings['trend_timeframe']
-                if trend_timeframe is None:
-                    trend_timeframe = str(timeframe)
-                trend_timeframe_str = get_timeframe(trend_timeframe)
+
                 rsi_signals = await trading_service.check_rsi_signals(
                     rsi_values,
                     {
@@ -528,7 +527,11 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                     }
                 )
                 #print("rsi_signals: ", rsi_signals)
-                analysis = await calculator.analyze_market_state_from_redis(symbol, str(timeframe), trend_timeframe_str)
+                analysis = await calculator.analyze_market_state_from_redis(
+                    symbol,
+                    str(timeframe),
+                    trend_timeframe  # '자동', '15m', '30m' 등을 그대로 전달
+                )
                 current_state = analysis['trend_state']
                 # --- (3) 포지션 분기 ---
                 current_position = await trading_service.get_current_position(user_id, symbol)

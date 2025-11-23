@@ -116,3 +116,61 @@ def get_timeframe(timeframe):
         return "1m"
     # 입력값을 소문자로 변환하여 매핑
     return tf_mapping.get(timeframe.lower(), timeframe)
+
+
+def get_auto_trend_timeframe(chart_timeframe: str) -> str:
+    """
+    Pine Script의 자동 트렌드 타임프레임 로직을 Python으로 구현
+
+    Args:
+        chart_timeframe: 차트 타임프레임 (예: '1m', '5m', '15m', '1h', '4h')
+
+    Returns:
+        자동 계산된 트렌드 타임프레임
+
+    Pine Script Logic:
+        res_ = timeframe.isminutes and timeframe.multiplier <= 3 ? '15' :
+               timeframe.isminutes and timeframe.multiplier <= 30 ? '30' :
+               timeframe.isminutes and timeframe.multiplier < 240 ? '60' : '480'
+
+        즉:
+        - 차트 타임프레임 ≤ 3분 → 트렌드 15분
+        - 차트 타임프레임 ≤ 30분 → 트렌드 30분
+        - 차트 타임프레임 < 240분(4시간) → 트렌드 1시간
+        - 그 외 → 트렌드 8시간(480분)
+    """
+    if not chart_timeframe:
+        return '15m'
+
+    # 타임프레임을 소문자로 변환
+    tf_lower = chart_timeframe.lower().strip()
+
+    # 분 단위로 변환
+    try:
+        if 'm' in tf_lower:
+            # 'm'이 있는 경우: '1m', '5m', '15m', '30m' 등
+            minutes = int(tf_lower.replace('m', ''))
+        elif 'h' in tf_lower:
+            # 'h'가 있는 경우: '1h', '2h', '4h', '8h' 등
+            hours = int(tf_lower.replace('h', ''))
+            minutes = hours * 60
+        elif 'd' in tf_lower:
+            # 'd'가 있는 경우: '1d', '2d' 등
+            days = int(tf_lower.replace('d', ''))
+            minutes = days * 24 * 60
+        else:
+            # 숫자만 있는 경우 분으로 간주
+            minutes = int(tf_lower)
+    except (ValueError, AttributeError):
+        # 파싱 실패 시 기본값 반환
+        return '15m'
+
+    # Pine Script 로직 적용
+    if minutes <= 3:
+        return '15m'
+    elif minutes <= 30:
+        return '30m'
+    elif minutes < 240:  # 4시간(240분) 미만
+        return '1h'
+    else:
+        return '8h'

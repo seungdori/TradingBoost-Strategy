@@ -377,7 +377,7 @@ class TrendStateCalculator:
         Args:
             symbol: 심볼 (예: BTC-USDT-SWAP)
             timeframe: 기본 타임프레임
-            trend_timeframe: 트렌드 분석용 타임프레임 (None이면 timeframe 사용)
+            trend_timeframe: 트렌드 분석용 타임프레임 (None이면 timeframe 사용, '자동'이면 auto_trend_state 사용)
 
         Returns:
             Dict: 분석 결과
@@ -389,16 +389,26 @@ class TrendStateCalculator:
         """
         try:
             tf_str = get_timeframe(timeframe)
-            trend_tf_str = get_timeframe(trend_timeframe) if trend_timeframe else tf_str
+
+            # '자동' 타입 처리: auto, 자동, Auto, AUTO 등 모두 인식
+            is_auto_mode = (trend_timeframe and trend_timeframe.lower() in ['auto', '자동'])
+
+            if is_auto_mode:
+                # 자동 모드: 현재 타임프레임 사용
+                trend_tf_str = tf_str
+            else:
+                # 수동 모드: 지정된 타임프레임 사용
+                trend_tf_str = get_timeframe(trend_timeframe) if trend_timeframe else tf_str
 
             # DataFrame 전체 가져오기
             df = await self.get_candles_with_indicators_from_redis(symbol, tf_str)
 
-            # trend_timeframe이 다르면 별도로 가져오기
-            if trend_tf_str != tf_str:
-                trend_df = await self.get_candles_with_indicators_from_redis(symbol, trend_tf_str)
-            else:
+            # 자동 모드이거나 trend_timeframe이 현재와 같으면 df 재사용
+            if is_auto_mode or trend_tf_str == tf_str:
                 trend_df = df
+            # trend_timeframe이 다르면 별도로 가져오기
+            else:
+                trend_df = await self.get_candles_with_indicators_from_redis(symbol, trend_tf_str)
 
             if df.empty or trend_df.empty:
                 logger.error(f"충분한 캔들 데이터를 찾을 수 없습니다: {symbol} / {tf_str}")
@@ -407,8 +417,12 @@ class TrendStateCalculator:
             # 최신 캔들 가져오기
             latest_candle = trend_df.iloc[-1]
 
-            # 저장된 PineScript 기반 trend_state 직접 사용
-            trend_state = int(latest_candle.get('trend_state', 0))
+            # Pine Script '자동' 모드: 현재 타임프레임의 auto_trend_state 사용
+            # 일반 모드: 지정된 타임프레임의 trend_state 사용
+            if is_auto_mode:
+                trend_state = int(latest_candle.get('auto_trend_state', 0))
+            else:
+                trend_state = int(latest_candle.get('trend_state', 0))
 
             # PineScript 기반 추가 정보
             cycle_bull = latest_candle.get('CYCLE_Bull', False)

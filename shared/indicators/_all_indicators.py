@@ -510,3 +510,83 @@ def compute_all_indicators(candles, rsi_period=14, atr_period=14,
         candles[i]["trend_state"] = trend_state_list[i]
 
     return candles
+
+
+def add_auto_trend_state_to_candles(
+    candles,
+    auto_trend_candles,
+    current_timeframe_minutes,
+    rq_lookback=30,
+    rq_rel_weight=0.5,
+    rq_start_bar=5,
+    bb_length=15,
+    bb_mult=1.5,
+    bb_ma_len=100,
+):
+    """
+    각 타임프레임의 캔들에 auto_trend_state 필드를 추가합니다.
+
+    Pine Script의 '자동' 로직을 구현:
+    - 차트 타임프레임에 따라 자동으로 결정된 트렌드 타임프레임의 캔들 데이터로 trend_state 계산
+    - 계산된 trend_state를 auto_trend_state 필드로 저장
+
+    Args:
+        candles: 현재 타임프레임의 캔들 데이터 (auto_trend_state를 추가할 대상)
+        auto_trend_candles: 자동 결정된 트렌드 타임프레임의 캔들 데이터
+        current_timeframe_minutes: 현재 타임프레임 (분 단위)
+        rq_lookback: Rational Quadratic lookback
+        rq_rel_weight: Rational Quadratic relative weight
+        rq_start_bar: Rational Quadratic start bar
+        bb_length: Bollinger Band 길이
+        bb_mult: Bollinger Band 배수
+        bb_ma_len: BBW MA 길이
+
+    Returns:
+        candles: auto_trend_state 필드가 추가된 캔들 데이터
+    """
+    from ._trend import compute_trend_state
+
+    if not auto_trend_candles or len(auto_trend_candles) < 30:
+        # 충분한 데이터가 없으면 auto_trend_state를 0으로 설정
+        for i in range(len(candles)):
+            candles[i]["auto_trend_state"] = 0
+        return candles
+
+    # 자동 트렌드 타임프레임의 캔들로 trend_state 계산
+    # use_longer_trend=False (Pine Script의 자동 로직에서는 일반적으로 False)
+    trend_result = compute_trend_state(
+        auto_trend_candles,
+        use_longer_trend=False,
+        use_custom_length=False,
+        custom_length=10,
+        lookback=rq_lookback,
+        relative_weight=rq_rel_weight,
+        start_at_bar=rq_start_bar,
+        candles_higher_tf=None,  # 자동 모드에서는 추가 MTF 사용 안 함
+        candles_4h=None,
+        candles_bb_mtf=None,
+        current_timeframe_minutes=None,  # 리샘플링 불필요
+        is_confirmed_only=False,
+    )
+
+    # trend_result에서 trend_state 추출
+    auto_trend_state_list = trend_result["trend_state"]
+
+    # 현재 타임프레임 캔들에 auto_trend_state 매핑
+    # Forward-fill 로직: 상위 타임프레임의 값을 하위 타임프레임에 매핑
+    auto_trend_idx = 0
+    for i in range(len(candles)):
+        candle_ts = candles[i]["timestamp"]
+
+        # 현재 캔들의 타임스탬프에 해당하는 auto_trend_candles의 인덱스 찾기
+        while (auto_trend_idx < len(auto_trend_candles) - 1 and
+               auto_trend_candles[auto_trend_idx + 1]["timestamp"] <= candle_ts):
+            auto_trend_idx += 1
+
+        # auto_trend_state 값 할당
+        if auto_trend_idx < len(auto_trend_state_list):
+            candles[i]["auto_trend_state"] = auto_trend_state_list[auto_trend_idx]
+        else:
+            candles[i]["auto_trend_state"] = 0
+
+    return candles

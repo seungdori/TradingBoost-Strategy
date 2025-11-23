@@ -227,6 +227,11 @@ async def lifespan(app: FastAPI):
             from HYPERRSI.src.database.hyperrsi_error_db import initialize_hyperrsi_error_db
             await initialize_hyperrsi_error_db()
             logger_new.info("HYPERRSI error table initialized")
+
+            # Initialize Stop Loss error table
+            from HYPERRSI.src.database.stoploss_error_db import initialize_stoploss_error_db
+            await initialize_stoploss_error_db()
+            logger_new.info("Stop Loss error table initialized")
         except Exception as e:
             logger.warning(f"Error database initialization failed (continuing without it): {e}")
             # Continue even if error DB fails - it's not critical for main operations

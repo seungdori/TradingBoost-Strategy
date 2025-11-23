@@ -48,7 +48,8 @@ class StopLossService(BaseService):
         trigger_price: float,
         order_price: Optional[float] = None,
         pos_side: str = "net",
-        reduce_only: bool = True
+        reduce_only: bool = True,
+        ord_type: str = "trigger"
     ) -> OrderResponse:
         """
         스탑로스 주문 생성
@@ -80,13 +81,18 @@ class StopLossService(BaseService):
         if not is_valid:
             raise HTTPException(status_code=400, detail=error_msg)
 
+        # ordType은 OKX 플랜 주문 규격에 맞춰 trigger/conditional만 허용
+        ord_type_normalized = (ord_type or "trigger").lower()
+        if ord_type_normalized not in {"trigger", "conditional"}:
+            ord_type_normalized = "trigger"
+
         # OKX 스탑로스 주문 파라미터 구성
         params = {
             "instId": symbol,  # 상품 ID (필수)
             "tdMode": "cross",  # 거래 모드
             "side": side.lower(),
             "posSide": pos_side,
-            "ordType": "market" if order_price is None else "limit",
+            "ordType": ord_type_normalized,
             "sz": str(amount),
             "triggerPx": str(trigger_price),
             "orderPx": str(order_price) if order_price else "-1",  # -1은 시장가

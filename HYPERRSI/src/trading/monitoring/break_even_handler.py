@@ -59,16 +59,24 @@ async def move_sl_to_break_even(user_id: str, symbol: str, side: str, break_even
         # SL 주문의 side 결정: 포지션과 반대 방향
         # short 포지션 -> buy SL, long 포지션 -> sell SL
         position_side = side  # 포지션 방향 저장
-        if side.lower() in ["short", "sell"]:
+        if not side:
+            logger.error("알 수 없는 포지션 side: (empty)")
+            await send_telegram_message("SL 이동 실패: 포지션 방향을 확인할 수 없습니다.", okx_uid, debug=True)
+            return None
+
+        side_lower = side.lower()
+        if side_lower in ["short", "sell"]:
             order_side = "buy"
             position_side_normalized = "short"
-        elif side.lower() in ["long", "buy"]:
+        elif side_lower in ["long", "buy"]:
             order_side = "sell"
             position_side_normalized = "long"
         else:
             logger.error(f"알 수 없는 포지션 side: {side}")
-            order_side = "buy"
-            position_side_normalized = "short"
+            await send_telegram_message(
+                f"SL 이동 실패: 알 수 없는 포지션 방향({side}).", okx_uid, debug=True
+            )
+            return None
 
         logger.info(f"[DEBUG] SL 주문 생성 - 포지션 side: {position_side_normalized}, SL order_side: {order_side}, 가격: {break_even_price}")
 
@@ -493,4 +501,3 @@ async def process_break_even_settings(user_id: str, symbol: str, order_type: str
         logger.error(f"브레이크이븐 처리 중 오류: {str(e)}")
         traceback.print_exc()
         return False
-

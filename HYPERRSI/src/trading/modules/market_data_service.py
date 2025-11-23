@@ -159,7 +159,7 @@ class MarketDataService:
                 is_overbought = current_rsi > rsi_overbought
 
             # 디버깅: 결과 로그
-            logger.info(f"🎯 RSI 신호 결과: is_oversold: {is_oversold}, is_overbought: {is_overbought}")
+            #logger.info(f"🎯 RSI 신호 결과: is_oversold: {is_oversold}, is_overbought: {is_overbought}")
             if entry_option == '돌파':
                 logger.info(f"  - '돌파' 조건: 롱(oversold): prev({previous_rsi:.3f}) > {rsi_oversold} and curr({current_rsi:.3f}) <= {rsi_oversold}")
                 logger.info(f"    숏(overbought): prev({previous_rsi:.3f}) < {rsi_overbought} and curr({current_rsi:.3f}) >= {rsi_overbought}")

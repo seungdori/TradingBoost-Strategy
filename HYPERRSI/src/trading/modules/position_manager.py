@@ -571,13 +571,15 @@ class PositionManager:
                 f"contracts={size}, pos_side={side}"
             )
 
+            # 청산 주문은 레버리지가 필요 없음 (기존 포지션을 닫는 것이므로)
             order_state = await self.trading_service.order_manager._try_send_order(
                 user_id=user_id,
                 symbol=symbol,
                 side=order_side,
                 size=size,
                 order_type="market",
-                direction=side  # long or short - correct parameter name
+                direction=side,  # long or short - correct parameter name
+                order_concept="close_position"  # 청산 주문임을 명시 (마진 체크 건너뛰기 위함)
             )
 
             if order_state.status not in ["open", "closed"]:

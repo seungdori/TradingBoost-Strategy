@@ -11,10 +11,10 @@ from celery import Celery
 
 from HYPERRSI.src.config import get_settings
 from HYPERRSI.src.core.config import settings
-from HYPERRSI.src.trading.models import get_timeframe
+from HYPERRSI.src.trading.models import get_timeframe, get_auto_trend_timeframe
 
 # shared indicators에서 가져옴
-from shared.indicators import compute_all_indicators
+from shared.indicators import compute_all_indicators, add_auto_trend_state_to_candles
 from shared.logging import get_logger
 
 ################################################################################
@@ -129,6 +129,45 @@ TIMEFRAMES = [1, 3, 5, 15, 30, 60, 240]   # (분 단위)
 MAX_CANDLE_LEN = 3000
 
 TF_MAP = {1:'1m', 3:'3m', 5:'5m', 15:'15m', 30:'30m', 60:'1h', 240:'4h'}
+
+################################################################################
+# Helper: Redis에서 캔들 데이터 가져오기 (auto_trend_state 계산용)
+################################################################################
+def _get_candles_from_redis(symbol: str, tf_str: str):
+    """
+    Redis에서 지정된 심볼과 타임프레임의 캔들 데이터를 가져옵니다.
+
+    Args:
+        symbol: 심볼 (예: "BTC-USDT-SWAP")
+        tf_str: 타임프레임 문자열 (예: "15m", "30m", "1h")
+
+    Returns:
+        list: 캔들 데이터 리스트 (timestamp, open, high, low, close, volume 포함)
+              데이터가 없으면 빈 리스트 반환
+    """
+    key = f"candles:{symbol}:{tf_str}"
+    try:
+        candle_strs = redis_client.lrange(key, 0, -1)
+        if not candle_strs:
+            return []
+
+        candles = []
+        for candle_str in candle_strs:
+            parts = candle_str.split(',')
+            if len(parts) >= 6:
+                candles.append({
+                    "timestamp": int(parts[0]),
+                    "open": float(parts[1]),
+                    "high": float(parts[2]),
+                    "low": float(parts[3]),
+                    "close": float(parts[4]),
+                    "volume": float(parts[5])
+                })
+        return candles
+    except Exception as e:
+        logger.error(f"Error loading candles from Redis: {symbol} {tf_str} - {e}")
+        return []
+
 ################################################################################
 # 3) 특정 타임프레임(tf)에 대해 캔들 가져오기 + Redis 저장 + 지표 계산
 ################################################################################
@@ -143,6 +182,21 @@ def fetch_candles_for_tf(symbol: str, tf: int) -> None:
 
     # 인디케이터 계산
     candles_with_ind = compute_all_indicators(candles, rsi_period=14, atr_period=14)
+
+    # auto_trend_state 추가
+    tf_str = TF_MAP.get(tf, "1m")
+    auto_trend_tf_str = get_auto_trend_timeframe(tf_str)
+
+    # Redis에서 자동 트렌드 타임프레임의 캔들 데이터 가져오기
+    auto_trend_candles = _get_candles_from_redis(symbol, auto_trend_tf_str)
+
+    # auto_trend_state 계산 및 추가
+    candles_with_ind = add_auto_trend_state_to_candles(
+        candles_with_ind,
+        auto_trend_candles,
+        current_timeframe_minutes=tf
+    )
+
     save_candles_with_indicators_to_redis(symbol, tf, candles_with_ind)
     
 ################################################################################
@@ -473,15 +527,29 @@ def fetch_all_candles():
             for tf in TIMEFRAMES:
                 candles = get_exchange_candles_full(symbol, tf, desired_count=3000)
                 save_candles_to_redis(symbol, tf, candles)
-                
+
                 candles_with_ind = compute_all_indicators(candles, rsi_period=14, atr_period=14)
                 for cndl in candles_with_ind:
                     utc_dt = datetime.utcfromtimestamp(cndl["timestamp"])
                     cndl["human_time"] = utc_dt.strftime("%Y-%m-%d %H:%M:%S")
-                    
+
                     seoul_tz = pytz.timezone("Asia/Seoul")
                     dt_seoul = utc_dt.replace(tzinfo=pytz.utc).astimezone(seoul_tz)
                     cndl["human_time_kr"] = dt_seoul.strftime("%Y-%m-%d %H:%M:%S")
+
+                # auto_trend_state 추가
+                tf_str = TF_MAP.get(tf, "1m")
+                auto_trend_tf_str = get_auto_trend_timeframe(tf_str)
+
+                # Redis에서 자동 트렌드 타임프레임의 캔들 데이터 가져오기
+                auto_trend_candles = _get_candles_from_redis(symbol, auto_trend_tf_str)
+
+                # auto_trend_state 계산 및 추가
+                candles_with_ind = add_auto_trend_state_to_candles(
+                    candles_with_ind,
+                    auto_trend_candles,
+                    current_timeframe_minutes=tf
+                )
 
                 save_candles_with_indicators_to_redis(symbol, tf, candles_with_ind)
 
@@ -538,7 +606,21 @@ def update_symbol_latest_candle(symbol):
 
             # 4. 지표 계산
             updated_candles = compute_all_indicators(latest_candles, rsi_period=14, atr_period=14)
-            
+
+            # 4-1. auto_trend_state 추가
+            tf_str = TF_MAP.get(tf, "1m")
+            auto_trend_tf_str = get_auto_trend_timeframe(tf_str)
+
+            # Redis에서 자동 트렌드 타임프레임의 캔들 데이터 가져오기
+            auto_trend_candles = _get_candles_from_redis(symbol, auto_trend_tf_str)
+
+            # auto_trend_state 계산 및 추가
+            updated_candles = add_auto_trend_state_to_candles(
+                updated_candles,
+                auto_trend_candles,
+                current_timeframe_minutes=tf
+            )
+
             # 5. Redis 저장
             pipe = redis_client.pipeline()
             new_len = len(updated_candles)

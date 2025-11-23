@@ -31,7 +31,7 @@ DEFAULT_PARAMS_SETTINGS = {
     "use_cooldown": True,
     "cooldown_time": 300,
     "use_trend_logic": True,
-    "trend_timeframe": "1H",
+    "trend_timeframe": "auto",  # 내부 저장: 'auto' (UI 표시: '자동')
     "use_trend_close": True,
     # RSI 설정
     "rsi_length": 14,

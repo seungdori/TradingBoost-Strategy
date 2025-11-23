@@ -688,10 +688,10 @@ class TPSLOrderCreator:
                         await send_telegram_message((f"⚠️ 손절 주문 생성 실패\n"f"━━━━━━━━━━━━━━━\n"f"{error_msg}\n"f"가격: {position.sl_price:.2f}\n"f"수량: {position.position_qty}"),okx_uid=user_id,debug=True)
                         sl_order_id = None
 
-                        # 에러 DB에 로깅
+                        # Stop Loss 에러 DB에 로깅
                         try:
-                            from HYPERRSI.src.database.hyperrsi_error_db import log_hyperrsi_error
-                            await log_hyperrsi_error(
+                            from HYPERRSI.src.database.stoploss_error_db import log_stoploss_error
+                            await log_stoploss_error(
                                 error=e,
                                 error_type="SL_ORDER_CREATION_ERROR",
                                 user_id=user_id,
@@ -701,16 +701,24 @@ class TPSLOrderCreator:
                                 function_name="_create_tp_sl_orders",
                                 symbol=symbol,
                                 side=position.side,
+                                order_side="sell" if position.side == "long" else "buy",
+                                new_sl_price=float(position.sl_price) if position.sl_price else None,
+                                position_qty=float(position.position_qty) if position.position_qty else None,
+                                position_side=position.side,
                                 order_type="stop_loss",
+                                failure_reason=error_msg,
                                 position_info={
                                     "sl_price": str(position.sl_price),
                                     "contracts_amount": str(sl_contracts_amount),
                                     "position_qty": str(position.position_qty)
                                 },
-                                metadata={"error_message": error_msg}
+                                metadata={
+                                    "error_message": error_msg,
+                                    "creation_type": "initial_tp_sl_setup"
+                                }
                             )
                         except Exception as log_error:
-                            logger.error(f"에러 로깅 실패: {str(log_error)}")
+                            logger.error(f"Stop Loss 에러 로깅 실패: {str(log_error)}")
             if is_hedge and (hedge_sl_price is not None):
                 dual_side_settings_key = f"user:{user_id}:dual_side"
                 dual_side_settings = await redis.hgetall(dual_side_settings_key)
