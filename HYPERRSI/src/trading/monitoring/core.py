@@ -101,6 +101,7 @@ async def monitor_orders_loop():
     # 루프 카운터 초기화
     loop_count = 0
     
+    running_users_set: set[str] = set()
     while True:
         try:
             # 루프 카운터 증가
@@ -139,6 +140,7 @@ async def monitor_orders_loop():
                     await reconnect_redis()
                     
                 running_users = await get_all_running_users()
+                running_users_set = {str(uid) for uid in running_users}
                 last_active_users_num_logging = await redis.get(f"last_active_users_num_logging")
                 if len(running_users) > 0 and last_active_users_num_logging is None:
                     logger.info(f"[활성 사용자 수: {len(running_users)}]")
@@ -150,6 +152,7 @@ async def monitor_orders_loop():
                 logger.error(f"running_users 조회 실패: {str(users_error)}")
                 logger.error(f"에러 타입: {type(users_error).__name__}, 상세 내용: {traceback.format_exc()}")
                 running_users = []
+                running_users_set = set()
                 
                 # Redis 재연결 시도
                 try:
@@ -191,7 +194,8 @@ async def monitor_orders_loop():
                         symbol = ts_data.get("symbol", "")
                         direction = ts_data.get("direction", "")
 
-                        if not (user_id and symbol and direction) or user_id not in running_users:
+                        # running_users는 int 리스트라 문자열 비교용 집합을 따로 사용
+                        if not (user_id and symbol and direction) or user_id not in running_users_set:
                             continue
                         
                         # 현재가 조회
@@ -402,13 +406,20 @@ async def monitor_orders_loop():
                                     
                                     # 현재 상태를 Redis에 저장 (다음 비교용)
                                     await redis.set(status_key, current_status, ex=3600)  # 1시간 TTL
-                                    
-                                    # 트레일링 스탑이 활성화된 방향의 TP 주문은 스킵 (SL만 확인)
-                                    if position_side in trailing_sides and order_type.startswith("tp"):
-                                        logger.info(f"트레일링 스탑 활성화됨 ({position_side}), TP 주문 ({order_id}) 스킵")
-                                        continue
-                                    
+
                                     check_needed = False
+
+                                    # 7일 이상 된 주문은 모두 체크해서 정리 (오래된 주문 자동 정리)
+                                    last_updated = int(order_data.get("last_updated_time", str(int(current_time))))
+                                    if current_time - last_updated > (7 * 24 * 60 * 60):
+                                        # 오래된 주문은 체크해서 정리
+                                        check_needed = True
+                                        logger.info(f"오래된 주문 정리 체크: {order_id} (타입: {order_type}, 마지막 업데이트: {order_data.get('last_updated_time_kr', 'unknown')})")
+                                    # 트레일링 스탑이 활성화된 방향의 TP 주문은 최근 것도 스킵
+                                    elif position_side in trailing_sides and order_type.startswith("tp"):
+                                        # 최근 주문은 스킵 (로그 레벨 낮춤)
+                                        logger.debug(f"트레일링 스탑 활성화됨 ({position_side}), TP 주문 ({order_id}) 스킵")
+                                        continue
                                     
                                     # 정기 확인 시간이면 강제로 확인
                                     if force_check_orders:
@@ -517,6 +528,10 @@ async def monitor_orders_loop():
                                                         
                                                         if tp_already_processed == "true":
                                                             logger.info(f"TP{tp_index} 이미 처리됨, 중복 처리 방지: {user_id} {symbol} {position_side}")
+                                                            # Redis에서 주문 정보 삭제 (이미 처리된 주문이므로)
+                                                            order_key = f"monitor:user:{user_id}:{symbol}:order:{order_id}"
+                                                            await redis.delete(order_key)
+                                                            logger.info(f"이미 처리된 TP 주문 Redis에서 삭제: {order_id}")
                                                             continue
                                                         
                                                         #get TP 업데이트
@@ -923,7 +938,7 @@ if __name__ == "__main__":
     process = psutil.Process()
     logger.info(f"시작 시 메모리 사용량: {process.memory_info().rss / 1024 / 1024:.2f} MB")
     logger.info(f"CPU 코어: {psutil.cpu_count()} / 논리 코어: {psutil.cpu_count(logical=True)}")
-    
+
     # 메인 루프 시작
     try:
         asyncio.run(start_monitoring())
@@ -932,4 +947,3 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"프로그램 실행 중 치명적인 오류 발생: {str(e)}")
         traceback.print_exc()
-

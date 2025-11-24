@@ -128,6 +128,11 @@ class TradingService:
 
             return instance
         except Exception as e:
+            # 초기화 실패 시 싱글톤 캐시에서 제거 (다음 호출에서 재시도 가능하도록)
+            if user_id in cls._instances:
+                del cls._instances[user_id]
+                logger.warning(f"Removed failed instance from cache for user {user_id}")
+
             logger.error(f"Failed to create trading service for user {user_id}: {str(e)}")
             raise Exception(f"트레이딩 서비스 생성 실패: {str(e)}")
 

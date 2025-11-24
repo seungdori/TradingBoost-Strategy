@@ -411,23 +411,14 @@ async def get_user_api_keys(user_id: str) -> Dict[str, str]:
         raise HTTPException(status_code=500, detail=f"Error fetching API keys: {str(e)}")
 
 
-async def create_exchange_client(user_id: str) -> ccxt.okx:
+async def create_exchange_client(user_id: str):
     """
-    사용자 API 키를 기반으로 새로운 OKX ccxt 클라이언트 인스턴스를 생성합니다.
+    사용자 API 키를 기반으로 OrderWrapper를 사용하여 Exchange 객체를 반환합니다.
+    OrderWrapper는 사용자별로 Exchange 객체를 캐싱하여 재사용합니다 (CCXT 권장사항).
     """
+    from HYPERRSI.src.trading.services.order_wrapper import OrderWrapper
     api_keys = await get_user_api_keys(user_id)
-    return ccxt.okx(
-        {
-            "apiKey": api_keys.get("api_key"),
-            "secret": api_keys.get("api_secret"),
-            "password": api_keys.get("passphrase"),
-            "enableRateLimit": True,
-            "options": {
-                "defaultType": "swap",
-                "adjustForTimeDifference": True,
-            },
-        }
-    )
+    return OrderWrapper(str(user_id), api_keys)
 
 
 async def cancel_all_orders(

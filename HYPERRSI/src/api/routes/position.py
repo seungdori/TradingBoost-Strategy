@@ -368,18 +368,13 @@ async def fetch_okx_position(
         # user_id를 OKX UID로 변환
         okx_uid = await resolve_user_identifier(user_id)
         
-        #  Redis에서 API 키 가져오기        
+        #  Redis에서 API 키 가져오기
         api_keys = await get_user_api_keys(okx_uid)
-        #  OKX 클라이언트 생성
-        client = ccxt.okx({
-            'apiKey': api_keys.get('api_key'),
-            'secret': api_keys.get('api_secret'),
-            'password': api_keys.get('passphrase'),
-            'enableRateLimit': True,
-            'options': {'defaultType': 'swap'}
-        })
+        #  OrderWrapper 사용 (Exchange 객체 재사용 - CCXT 권장사항)
+        from HYPERRSI.src.trading.services.order_wrapper import OrderWrapper
+        client = OrderWrapper(str(okx_uid), api_keys)
 
-        await client.load_markets()
+        # load_markets()는 OrderWrapper 내부에서 자동으로 캐싱됨
 
         #  포지션 조회 (symbol 파라미터가 None이면 모든 포지션 조회)
         if symbol:
@@ -936,17 +931,12 @@ async def set_position_leverage(
         
         # Redis에서 API 키 가져오기
         api_keys = await get_user_api_keys(okx_uid)
-        
-        # OKX 클라이언트 생성
-        client = ccxt.okx({
-            'apiKey': api_keys.get('api_key'),
-            'secret': api_keys.get('api_secret'),
-            'password': api_keys.get('passphrase'),
-            'enableRateLimit': True,
-            'options': {'defaultType': 'swap'}
-        })
 
-        await client.load_markets()
+        # OrderWrapper 사용 (Exchange 객체 재사용 - CCXT 권장사항)
+        from HYPERRSI.src.trading.services.order_wrapper import OrderWrapper
+        client = OrderWrapper(str(okx_uid), api_keys)
+
+        # load_markets()는 OrderWrapper 내부에서 자동으로 캐싱됨
 
         # 레버리지 설정
         params = {

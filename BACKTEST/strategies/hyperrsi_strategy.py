@@ -452,6 +452,20 @@ class HyperrsiStrategy(BaseStrategy):
                 prev_closes = pd.Series([c.close for c in self.price_history[:-1]])
                 previous_rsi = self.signal_generator.calculate_rsi(prev_closes, self.signal_generator.rsi_period)
 
+        # Calculate ATR if not provided
+        atr = None
+        if candle.atr is not None:
+            atr = candle.atr
+        else:
+            # Calculate from price history
+            if len(self.price_history) >= 15:  # Need at least 15 candles for ATR(14)
+                highs = pd.Series([c.high for c in self.price_history])
+                lows = pd.Series([c.low for c in self.price_history])
+                closes_for_atr = pd.Series([c.close for c in self.price_history])
+                atr = self.signal_generator.calculate_atr(highs, lows, closes_for_atr, period=14)
+                if atr is not None:
+                    logger.debug(f"Calculated ATR from price_history: {atr:.2f}")
+
         # Get trend state from candle if available (DB value), otherwise calculate
         trend_state = None
         if self.use_trend_filter:
@@ -501,7 +515,7 @@ class HyperrsiStrategy(BaseStrategy):
                 return TradingSignal(
                     side=TradeSide.LONG,
                     reason=long_reason,
-                    indicators={"rsi": rsi, "previous_rsi": previous_rsi, "trend_state": trend_state}
+                    indicators={"rsi": rsi, "previous_rsi": previous_rsi, "trend_state": trend_state, "atr": atr}
                 )
 
         # Check short signal (if direction allows)
@@ -511,13 +525,13 @@ class HyperrsiStrategy(BaseStrategy):
                 return TradingSignal(
                     side=TradeSide.SHORT,
                     reason=short_reason,
-                    indicators={"rsi": rsi, "previous_rsi": previous_rsi, "trend_state": trend_state}
+                    indicators={"rsi": rsi, "previous_rsi": previous_rsi, "trend_state": trend_state, "atr": atr}
                 )
 
         return TradingSignal(
             side=None,
             reason="No signal",
-            indicators={"rsi": rsi, "previous_rsi": previous_rsi, "trend_state": trend_state}
+            indicators={"rsi": rsi, "previous_rsi": previous_rsi, "trend_state": trend_state, "atr": atr}
         )
 
     def calculate_position_size(

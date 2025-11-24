@@ -42,7 +42,11 @@ class PositionManager:
         stop_loss_price: Optional[float] = None,
         entry_reason: Optional[str] = None,
         entry_rsi: Optional[float] = None,
-        entry_atr: Optional[float] = None
+        entry_atr: Optional[float] = None,
+        is_dual_side: bool = False,
+        main_position_side: Optional[TradeSide] = None,
+        dual_side_entry_index: Optional[int] = None,
+        parent_trade_id: Optional[int] = None
     ) -> Position:
         """
         Open a new position with DCA support.
@@ -59,6 +63,10 @@ class PositionManager:
             entry_reason: Entry signal description
             entry_rsi: RSI at entry
             entry_atr: ATR at entry
+            is_dual_side: Flag indicating hedge/dual-side position
+            main_position_side: Main position side when hedge is opened
+            dual_side_entry_index: Nth dual-side entry trigger
+            parent_trade_id: Main position's trade_number if this is a hedge
 
         Returns:
             Opened Position object
@@ -104,7 +112,11 @@ class PositionManager:
             dca_levels=[],  # Will be set by backtest engine
             initial_investment=investment,
             total_investment=investment,
-            last_filled_price=price
+            last_filled_price=price,
+            is_dual_side=is_dual_side,
+            main_position_side=main_position_side,
+            dual_side_entry_index=dual_side_entry_index,
+            parent_trade_id=parent_trade_id
         )
 
         self.current_position = position
@@ -192,7 +204,12 @@ class PositionManager:
             # DCA metadata
             dca_count=pos.dca_count,
             entry_history=pos.entry_history.copy(),
-            total_investment=pos.total_investment
+            total_investment=pos.total_investment,
+            # Dual-side metadata
+            is_dual_side=pos.is_dual_side,
+            main_position_side=pos.main_position_side,
+            dual_side_entry_index=pos.dual_side_entry_index,
+            parent_trade_id=pos.parent_trade_id
         )
 
         logger.info(
@@ -437,6 +454,16 @@ class PositionManager:
         gross_pnl = price_diff * close_quantity * pos.leverage
         net_pnl = gross_pnl - (entry_fee + exit_fee)
 
+        # 🔍 DEBUG: PNL 계산 상세 로그
+        logger.info(
+            f"[PNL_DEBUG] TP{tp_level} calculation: "
+            f"avg_entry={avg_entry_price:.2f}, exit_price={exit_price:.2f}, "
+            f"price_diff={price_diff:.4f}, close_qty={close_quantity:.6f}, "
+            f"leverage={pos.leverage}x, gross_pnl={gross_pnl:.4f}, "
+            f"entry_fee={entry_fee:.4f}, exit_fee={exit_fee:.4f}, "
+            f"net_pnl={net_pnl:.4f}"
+        )
+
         # Determine exit reason based on TP level
         exit_reason_map = {1: ExitReason.TP1, 2: ExitReason.TP2, 3: ExitReason.TP3}
         exit_reason = exit_reason_map.get(tp_level, ExitReason.TAKE_PROFIT)
@@ -477,7 +504,12 @@ class PositionManager:
             is_partial_exit=True,
             tp_level=tp_level,
             exit_ratio=exit_ratio,
-            remaining_quantity=current_quantity - close_quantity
+            remaining_quantity=current_quantity - close_quantity,
+            # Dual-side metadata
+            is_dual_side=pos.is_dual_side,
+            main_position_side=pos.main_position_side,
+            dual_side_entry_index=pos.dual_side_entry_index,
+            parent_trade_id=pos.parent_trade_id
         )
 
         # Update position state
@@ -504,8 +536,16 @@ class PositionManager:
 
         # If all quantity closed, clear the position
         if new_remaining < 1e-8:  # Use small epsilon for floating point comparison
-            logger.info("All quantity closed via partial exits, clearing position")
+            logger.info(
+                f"✅ All quantity closed via partial exits: "
+                f"new_remaining={new_remaining:.12f} < 1e-8, clearing position"
+            )
             self.current_position = None
+        else:
+            logger.info(
+                f"⚠️ Position still open after TP{tp_level}: "
+                f"new_remaining={new_remaining:.12f} >= 1e-8, keeping position open"
+            )
 
         return trade
 

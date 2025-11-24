@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import json
 import traceback
 from datetime import datetime
 from typing import Dict, List, Optional, TYPE_CHECKING
@@ -18,12 +19,13 @@ from shared.logging import get_logger, log_order
 
 if TYPE_CHECKING:
     from HYPERRSI.src.api.routes.order import ClosePositionRequest, close_position
+    from .position_validator import check_position_exists
 
-from .position_validator import check_position_exists
 from .telegram_service import get_identifier, send_telegram_message
 from .utils import get_user_settings, is_true_value
 
 logger = get_logger(__name__)
+MIN_TRAILING_OFFSET_PERCENT = 0.1
 
 
 # Module-level attribute for backward compatibility
@@ -62,7 +64,6 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
         # tp_data가 Redis 문자열로 올 수 있으니 디코드/파싱
         if tp_data and isinstance(tp_data, (bytes, bytearray)):
             try:
-                import json
                 tp_data = json.loads(tp_data.decode())
             except Exception:
                 tp_data = None
@@ -108,50 +109,68 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
         
         # 트레일링 스탑 오프셋 값 계산
         use_tp2_tp3_diff = is_true_value(settings.get('use_trailing_stop_value_with_tp2_tp3_difference', False))
-        trailing_offset = float(settings.get('trailing_stop_offset_value', '0.5'))
         trailing_offset_value = float(settings.get('trailing_stop_offset_value', '0.5'))
-        logger.info(f"[{okx_uid}] 트레일링 스탑 오프셋 값: {trailing_offset}")
         tp2_price = None
         tp3_price = None
-        if use_tp2_tp3_diff and tp_data:
-            # TP2와 TP3 가격 차이로 오프셋 계산
-            if user_id == 1709556958:
-                await send_telegram_message(f"[{user_id}] 트레일링 스탑 오프셋 값 (초기): {trailing_offset}", user_id, debug=True)
-            if isinstance(tp_data, list):
-                # 타입 안전한 레벨 비교 (정수로 통일)
-                tp2_price = next((float(tp.get('price', 0)) for tp in tp_data
-                             if tp.get('level') == 2), None)
-                tp3_price = next((float(tp.get('price', 0)) for tp in tp_data
-                             if tp.get('level') == 3), None)
+        trailing_offset = 0.0
 
-                if user_id == 1709556958:
-                    await send_telegram_message(f"[{user_id}] TP2 가격: {tp2_price}, TP3 가격: {tp3_price}", user_id, debug=True)
+        def _parse_tp_data(raw_data):
+            if not raw_data:
+                return []
+            parsed = raw_data
+            if isinstance(parsed, (bytes, bytearray)):
+                try:
+                    parsed = parsed.decode()
+                except Exception:
+                    return []
+            if isinstance(parsed, str):
+                try:
+                    parsed = json.loads(parsed)
+                except Exception:
+                    return []
+            return parsed if isinstance(parsed, list) else []
 
-                if tp2_price and tp3_price and tp2_price > 0 and tp3_price > 0:
-                    if direction == "long":
-                        trailing_offset = abs(tp3_price - tp2_price)
+        parsed_tp_data = _parse_tp_data(tp_data)
+        if not parsed_tp_data:
+            parsed_tp_data = _parse_tp_data(position_data.get("tp_data"))
 
-                    else:  # short
-                        trailing_offset = abs(tp2_price - tp3_price)
-                    logger.info(f"[{user_id}] TP2-TP3 가격 차이를 트레일링 스탑 오프셋으로 사용: {trailing_offset}")
-                    if user_id == 1709556958:
-                        await send_telegram_message(f"[{user_id}] 계산된 트레일링 오프셋: {trailing_offset}", user_id, debug=True)
-                else:
-                    # TP2, TP3를 찾지 못한 경우 퍼센트 기반으로 계산
-                    logger.warning(f"[{user_id}] TP2 또는 TP3 가격을 찾지 못해 퍼센트 기반 오프셋 사용")
-                    current_price = await get_current_price(symbol, "1m")
-                    if current_price > 0:
-                        trailing_offset = abs(current_price * trailing_offset_value * 0.01)
-                    if user_id == 1709556958:
-                        await send_telegram_message(f"[{user_id}] TP 데이터 없음. 퍼센트 기반 오프셋: {trailing_offset}", user_id, debug=True)
-        else:
-            current_price = await get_current_price(symbol, "1m")
-            if current_price <= 0:
-                logger.error(f"현재가를 가져올 수 없습니다: {symbol}")
-                return
-            trailing_offset = abs(current_price*trailing_offset_value*0.01)
-            if user_id == 1709556958:
-                await send_telegram_message(f"[{user_id}] 트레일링 스탑 오프셋 값. 그런데 직접 계산: {trailing_offset}", user_id, debug=True)
+        if parsed_tp_data:
+            tp2_price = next((float(tp.get('price', 0)) for tp in parsed_tp_data if tp.get('level') == 2), None)
+            tp3_price = next((float(tp.get('price', 0)) for tp in parsed_tp_data if tp.get('level') == 3), None)
+
+        if (tp2_price is None or tp3_price is None) and position_data.get("tp_prices"):
+            raw_tp_prices = position_data.get("tp_prices")
+            if isinstance(raw_tp_prices, (bytes, bytearray)):
+                raw_tp_prices = raw_tp_prices.decode()
+            price_tokens = [p for p in str(raw_tp_prices).split(",") if p]
+            try:
+                price_values = [float(p) for p in price_tokens]
+            except ValueError:
+                price_values = []
+            if tp2_price is None and len(price_values) >= 2:
+                tp2_price = price_values[1]
+            if tp3_price is None and len(price_values) >= 3:
+                tp3_price = price_values[2]
+
+        if tp2_price is None:
+            try:
+                candidate = float(position_data.get("tp2_price", 0) or 0)
+                tp2_price = candidate if candidate > 0 else None
+            except Exception:
+                tp2_price = None
+        if tp3_price is None:
+            try:
+                candidate = float(position_data.get("tp3_price", 0) or 0)
+                tp3_price = candidate if candidate > 0 else None
+            except Exception:
+                tp3_price = None
+
+        if user_id == 1709556958:
+            await send_telegram_message(
+                f"[{user_id}] TP2 가격: {tp2_price}, TP3 가격: {tp3_price}, 퍼센트 설정: {trailing_offset_value}%",
+                user_id,
+                debug=True
+            )
         
         # 현재 가격 조회
         async with get_exchange_context(str(user_id)) as exchange:
@@ -161,6 +180,26 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
                 if current_price <= 0:
                     logger.warning(f"현재가를 가져올 수 없습니다: {symbol}")
                     return
+                
+                if use_tp2_tp3_diff and tp2_price and tp3_price:
+                    trailing_offset = abs(tp3_price - tp2_price)
+                else:
+                    if use_tp2_tp3_diff and not (tp2_price and tp3_price):
+                        logger.warning(f"[{okx_uid}] TP2/TP3 가격이 없어 퍼센트 기반 오프셋 사용")
+                    trailing_offset = abs(current_price * trailing_offset_value * 0.01)
+
+                min_offset = abs(current_price * MIN_TRAILING_OFFSET_PERCENT * 0.01)
+                if trailing_offset < min_offset:
+                    logger.info(f"[{okx_uid}] 트레일링 오프셋이 최소값보다 작아 0.1%로 보정")
+                    trailing_offset = min_offset
+
+                logger.info(f"[{okx_uid}] 트레일링 스탑 오프셋 값: {trailing_offset}")
+                if user_id == 1709556958:
+                    await send_telegram_message(
+                        f"[{user_id}] 트레일링 오프셋 최종값: {trailing_offset:.6f} (현재가 {current_price:.2f})",
+                        user_id,
+                        debug=True
+                    )
                     
                 # 진입가 정보
             
@@ -244,13 +283,13 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
                         action_type='trailing_stop_activation',
                         position_side=direction,
                         price=current_price,
-                    trailing_offset=trailing_offset,
-                    trailing_stop_price=trailing_stop_price,
-                    highest_price=highest_price if direction == "long" else None,
-                    lowest_price=lowest_price if direction == "short" else None,
-                    entry_price=entry_price,
-                    contracts_amount=contracts_amount
-                )
+                        trailing_offset=trailing_offset,
+                        trailing_stop_price=trailing_stop_price,
+                        highest_price=highest_price if direction == "long" else None,
+                        lowest_price=lowest_price if direction == "short" else None,
+                        entry_price=entry_price,
+                        contracts_amount=contracts_amount
+                    )
                 except Exception as e:
                     logger.error(f"트레일링 스탑 로깅 실패: {str(e)}")
                 
@@ -421,8 +460,11 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
             if current_price <= trailing_stop_price:
                 # 트레일링 스탑 알림
                 await send_telegram_message(f"⚠️ 트레일링 스탑 가격({trailing_stop_price:.2f}) 도달\n"f"━━━━━━━━━━━━━━━\n"f"현재가: {current_price:.2f}\n"f"포지션: {symbol} {direction.upper()}\n"f"트레일링 오프셋: {trailing_offset:.2f}",okx_uid)
-                
+
                 try:
+                    # Lazy import to avoid circular dependency
+                    from .position_validator import check_position_exists
+
                     # 먼저 포지션이 실제로 존재하는지 확인
                     position_exists, _ = await check_position_exists(okx_uid, symbol, direction)
                     
@@ -544,8 +586,11 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                     f"트레일링 오프셋: {trailing_offset:.2f}",
                     user_id 
                 ))
-                
+
                 try:
+                    # Lazy import to avoid circular dependency
+                    from .position_validator import check_position_exists
+
                     # 먼저 포지션이 실제로 존재하는지 확인
                     position_exists, _ = await check_position_exists(user_id, symbol, direction)
                     
@@ -657,4 +702,3 @@ async def get_active_trailing_stops() -> List[Dict]:
     except Exception as e:
         logger.error(f"활성 트레일링 스탑 조회 실패: {str(e)}")
         return []
-

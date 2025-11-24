@@ -281,22 +281,24 @@ class PositionManager:
                 logger.error(f"포지션 평균가 조회 실패: {str(e)}")
                 position_avg_price = current_price
 
-            if not is_DCA:
-                #비헷지 모드일 떄, 포지션 조회. 있으면 오류 반환
+            # ======================== 헷지 첫 진입 (DCA 아님): 기존 포지션 체크 스킵
+            if is_hedge and not is_DCA:
+                # 헷지 포지션은 메인 포지션과 반대 방향으로 열리므로 기존 포지션 조회 불필요
+                pass
+            # ======================== 일반 진입 (DCA 아님, 헷지 아님): 중복 체크
+            elif not is_DCA:
+                # 비헷지 모드일 때, 포지션 조회. 있으면 오류 반환
                 existing = await self.get_current_position(user_id, symbol, direction)
                 print("[USER ID] : {}, [DIRECTION] : {}, [EXSITING] : {}".format(user_id, direction, existing))
                 if existing:
                     raise ValueError(f"이미 {direction} 포지션이 존재합니다. 기존 포지션을 먼저 종료하세요.")
-            #======================== DCA 이면서 HEDGE MODE일 때, 기존 포지션을 조회하지 않음.
-            elif is_DCA and is_hedge:
-                pass
-            #======================== DCA일 때, 기존 포지션 조회
+            # ======================== DCA 진입 (헷지 DCA 포함): 기존 포지션에 사이즈 추가
             else:
                 existing = await self.get_current_position(user_id, symbol, direction)
-                #======================== DCA일 때, 기존 포지션 조회 했는데 있으면, contracts_amount를 기존 포지션 사이즈에 더해서 업데이트
-                #======================== DCA일 때, 기존 포지션 조회 했는데 없으면 contract_size를 그대로 사용 >> 아래 로직이 다 실행되니까, 새로운 포지션 생성임.
+                # DCA일 때, 기존 포지션이 있으면 contracts_amount를 기존 포지션 사이즈에 더해서 업데이트
+                # 기존 포지션이 없으면 contract_size를 그대로 사용 → 새로운 포지션 생성
                 if existing:
-                    contracts_amount = safe_float(existing.size) + size #<-- 기존 포지션 사이즈에 더해서 업데이트
+                    contracts_amount = safe_float(existing.size) + size  # 기존 포지션 사이즈에 더해서 업데이트
                     position_qty = await self.contract_size_to_qty(user_id, symbol, contracts_amount)
             # DCA시 기존 tp/sl주문 삭제
             if is_DCA:

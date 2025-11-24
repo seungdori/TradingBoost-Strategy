@@ -472,6 +472,7 @@ class TPSLOrderCreator:
                             
                             monitor_data = {
                                 "status": "open",
+                                "symbol": symbol,  # symbol 필드 추가
                                 "price": str(tp_price),
                                 "position_side": position.side,
                                 "contracts_amount": contracts_amount_str,
@@ -569,6 +570,7 @@ class TPSLOrderCreator:
                     
                     monitor_data = {
                         "status": "open",
+                        "symbol": symbol,  # symbol 필드 추가
                         "price": str(hedge_tp_price),
                         "position_side": position.side,
                         "contracts_amount": str(contracts_amount),
@@ -664,6 +666,7 @@ class TPSLOrderCreator:
                         
                         monitor_data = {
                             "status": "open",
+                            "symbol": symbol,  # symbol 필드 추가
                             "price": str(position.sl_price),
                             "position_side": position.side,
                             "contracts_amount": str(sl_contracts_amount),
@@ -752,6 +755,7 @@ class TPSLOrderCreator:
 
                         monitor_data = {
                             "status": "open",
+                            "symbol": symbol,  # symbol 필드 추가
                             "price": str(hedge_sl_price),
                             "position_side": position.side,
                             "contracts_amount": str(contracts_amount),

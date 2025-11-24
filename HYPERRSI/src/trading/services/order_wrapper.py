@@ -9,27 +9,56 @@ logger = get_logger(__name__)
 
 class OrderWrapper:
     """ORDER_BACKEND를 통한 주문 처리 통합 래퍼"""
-    
+
+    # 사용자별 Exchange 객체 캐시 (싱글톤 패턴)
+    _exchange_cache: Dict[str, ccxt.okx] = {}
+
     def __init__(self, user_id: str, api_keys: Dict[str, str]):
         self.user_id = user_id
         self.api_keys = api_keys
-        
-        # ORDER_BACKEND는 항상 자기 자신을 가리키므로 사용하지 않음
-        # 항상 로컬 exchange 사용
-        
-        self.exchange = ccxt.okx({
-            'apiKey': api_keys.get('api_key'),
-            'secret': api_keys.get('api_secret'),
-            'password': api_keys.get('passphrase'),
-            'enableRateLimit': True,
-            'options': {'defaultType': 'swap'}
-        })
+
+        # 캐시된 Exchange 객체가 있으면 재사용
+        if user_id in OrderWrapper._exchange_cache:
+            self.exchange = OrderWrapper._exchange_cache[user_id]
+            logger.debug(f"[OrderWrapper] Reusing cached exchange for user {user_id}")
+        else:
+            # 새로운 Exchange 객체 생성 및 캐싱
+            self.exchange = ccxt.okx({
+                'apiKey': api_keys.get('api_key'),
+                'secret': api_keys.get('api_secret'),
+                'password': api_keys.get('passphrase'),
+                'enableRateLimit': True,
+                'options': {
+                    'defaultType': 'swap',
+                    # SPOT 마켓 로딩 오류 무시 설정
+                    'warnOnFetchMarketsTimeout': False,
+                }
+            })
+            OrderWrapper._exchange_cache[user_id] = self.exchange
+            logger.info(f"[OrderWrapper] Created and cached new exchange for user {user_id}")
     
     
     async def close(self):
-        """리소스 정리"""
-        if hasattr(self, 'exchange'):
-            await self.exchange.close()
+        """리소스 정리 (캐시된 객체는 유지)"""
+        # 캐시된 Exchange 객체는 유지 (재사용을 위해)
+        # 명시적으로 캐시를 제거하려면 clear_cache() 호출
+        logger.debug(f"[OrderWrapper] close() called for user {self.user_id} (cache maintained)")
+
+    @classmethod
+    async def clear_cache(cls, user_id: Optional[str] = None):
+        """Exchange 캐시 제거 (API 키 변경 시 사용)"""
+        if user_id:
+            # 특정 사용자 캐시만 제거
+            if user_id in cls._exchange_cache:
+                exchange = cls._exchange_cache.pop(user_id)
+                await exchange.close()
+                logger.info(f"[OrderWrapper] Cleared cache for user {user_id}")
+        else:
+            # 모든 캐시 제거
+            for user_id, exchange in cls._exchange_cache.items():
+                await exchange.close()
+            cls._exchange_cache.clear()
+            logger.info(f"[OrderWrapper] Cleared all exchange cache")
     
     async def create_order(self, symbol: str, order_type: str, side: str, amount: float,
                           price: Optional[float] = None, params: Optional[Dict] = None) -> Dict:

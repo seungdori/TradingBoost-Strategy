@@ -12,7 +12,7 @@ from fastapi import APIRouter, Body, HTTPException, Path, Query
 from fastapi.params import Query as QueryParam
 from pydantic import BaseModel
 
-from HYPERRSI.src.api.dependencies import get_exchange_context
+from HYPERRSI.src.api.dependencies import get_connection_pool, get_exchange_context
 from HYPERRSI.src.api.exchange.models import (
     CancelOrdersResponse,
     OrderRequest,
@@ -1635,19 +1635,14 @@ async def cancel_reduce_only_orders_for_symbol(
     except Exception as e:
         logger.error(f"reduceOnly 주문 취소 중 오류: {str(e)}")
 
-async def create_exchange_client(user_id: str) -> ccxt.okx:
-    """Create a new OKX exchange client instance"""
+async def create_exchange_client(user_id: str):
+    """
+    Create a new OKX exchange client instance using OrderWrapper
+    OrderWrapper를 사용하여 Exchange 객체 재사용 (CCXT 권장사항)
+    """
+    from HYPERRSI.src.trading.services.order_wrapper import OrderWrapper
     api_keys = await get_user_api_keys(user_id)
-    return ccxt.okx({
-        "apiKey": api_keys.get("api_key"),
-        "secret": api_keys.get("api_secret"),
-        "password": api_keys.get("passphrase"),
-        "enableRateLimit": True,
-        "options": {
-            "defaultType": "swap",
-            "adjustForTimeDifference": True
-        }
-    })
+    return OrderWrapper(str(user_id), api_keys)
 
 # parse_order_response는 parsers.py에서 import하여 사용
 # 아래 함수는 중복으로 제거됨
@@ -2163,7 +2158,9 @@ async def update_stop_loss_order(
                         side=side_for_close,
                         new_sl_price=new_sl_price
                     )
-    
+
+                    auth_reset_attempted = False
+                    final_error: Optional[Exception] = None
                     try:
                         close_request = ClosePositionRequest(
                             close_type="market",
@@ -2183,13 +2180,52 @@ async def update_stop_loss_order(
                             side=side_for_close,
                             redis_client=redis
                         )
+                        return {
+                            "success": True,
+                            "symbol": symbol,
+                            "message": "Invalid SL price - position closed at market"
+                        }
                     except Exception as e:
-                        if "활성화된 포지션을 찾을 수 없습니다" not in str(e) and "no_position" not in str(e):
-                            logger.error(f"Failed to close position: {str(e)}")
+                        final_error = e
+
+                        if isinstance(e, HTTPException) and getattr(e, "status_code", None) == 401:
+                            try:
+                                auth_reset_attempted = True
+                                pool = get_connection_pool()
+                                await pool.cleanup_user_pool(okx_uid)
+
+                                close_request = ClosePositionRequest(
+                                    close_type="market",
+                                    price=current_price,
+                                    close_percent=100,
+                                )
+                                await close_position(
+                                    symbol=symbol,
+                                    close_request=close_request,
+                                    user_id=okx_uid,
+                                    side=side_for_close
+                                )
+                                await PositionService.init_position_data(
+                                    user_id=okx_uid,
+                                    symbol=symbol,
+                                    side=side_for_close,
+                                    redis_client=redis
+                                )
+                                return {
+                                    "success": True,
+                                    "symbol": symbol,
+                                    "message": "Invalid SL price - position closed at market after auth reset"
+                                }
+                            except Exception as retry_error:
+                                final_error = retry_error
+
+                    if final_error:
+                        if "활성화된 포지션을 찾을 수 없습니다" not in str(final_error) and "no_position" not in str(final_error):
+                            logger.error(f"Failed to close position: {str(final_error)}")
 
                             # Stop Loss Error Logging
                             await log_stoploss_error(
-                                error=e,
+                                error=final_error,
                                 error_type="MarketCloseError",
                                 user_id=okx_uid,
                                 severity="ERROR",
@@ -2208,23 +2244,28 @@ async def update_stop_loss_order(
                                 metadata={
                                     "side_normalized": side_normalized,
                                     "is_hedge": is_hedge,
-                                    "order_type": order_type
+                                    "order_type": order_type,
+                                    "auth_reset_attempted": auth_reset_attempted
                                 }
                             )
 
                             await send_telegram_message(
-                                f"[{okx_uid}] 주문 생성 중 오류 발생: {str(e)}\n"
-                                f"BreakEven의 변경된 SL이 현재 시장가보다 {'높습니다' if side_normalized == 'buy' else '낮습니다'}.\n"
-                                f"{'롱' if side_normalized == 'buy' else '숏'}포지션을 시장가 종료합니다.",
-                                okx_uid=1709556958,
+                                f"⚠️ 시장가 종료 실패\n"
+                                f"━━━━━━━━━━━━━━━\n"
+                                f"심볼: {symbol}\n"
+                                f"사유: {str(final_error)}\n"
+                                f"{'인증 오류로 클라이언트를 재생성했으나 실패했습니다. ' if auth_reset_attempted else ''}"
+                                f"조치: 포지션을 확인하고 수동 종료해주세요.",
+                                okx_uid=okx_uid,
                                 debug=True
                             )
-    
-                    return {
-                        "success": True,
-                        "symbol": symbol,
-                        "message": "Invalid SL price - position closed at market"
-                    }
+
+                        return {
+                            "success": False,
+                            "symbol": symbol,
+                            "message": f"Invalid SL price - failed to close position at market: {str(final_error)}",
+                            "error": str(final_error)
+                        }
     
                 # 4. Get existing SL order from Redis
                 old_sl_data = await StopLossService.get_stop_loss_from_redis(

@@ -104,6 +104,8 @@ DEFAULT_DUAL_SIDE_ENTRY_SETTINGS = {
     "dual_side_entry_ratio_value": 30,
     "dual_side_entry_tp_trigger_type": "last_dca_on_position",
     "dual_side_entry_tp_value": 0.3,
+    "close_main_on_hedge_tp": False,
+    "use_dual_sl": False,
     "dual_side_entry_sl_trigger_type": "percent",
     "dual_side_entry_sl_value": 5,
     "dual_side_pyramiding_limit": 1,

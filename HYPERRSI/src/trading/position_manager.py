@@ -129,6 +129,9 @@ class PositionStateManager:
 
     async def sync_position_state(self, user_id: str, symbol: str, exchange_position: Position | None):
         """거래소 포지션 정보로 Redis 업데이트. 포지션 없으면 전부 삭제."""
+        # Lazy import to avoid circular dependency
+        from HYPERRSI.src.trading.monitoring.trailing_stop_handler import clear_trailing_stop
+
         try:
             position_key = self.get_position_key(user_id, symbol, exchange_position.side)
 
@@ -136,6 +139,11 @@ class PositionStateManager:
                 pipe.multi()
                 if exchange_position is None:
                     pipe.delete(position_key)
+                    # 포지션 청산 시 trailing stop도 비활성화
+                    # side를 추출 (position_key에서)
+                    side = position_key.split(":")[-1]
+                    asyncio.create_task(clear_trailing_stop(user_id, symbol, side))
+                    logger.info(f"[포지션 청산] Trailing stop 비활성화 요청: {user_id}, {symbol}, {side}")
                 else:
                     new_data = {
                         "position_info": json.dumps({
@@ -163,7 +171,14 @@ class PositionStateManager:
         """
         user_id + symbol 관련 포지션 및 부가 데이터(TP, DCA 등)를 전부 삭제
         """
+        # Lazy import to avoid circular dependency
+        from HYPERRSI.src.trading.monitoring.trailing_stop_handler import clear_trailing_stop
+
         try:
+            # 포지션 데이터 삭제 시 trailing stop도 비활성화
+            asyncio.create_task(clear_trailing_stop(user_id, symbol, side))
+            logger.info(f"[포지션 데이터 삭제] Trailing stop 비활성화 요청: {user_id}, {symbol}, {side}")
+
             keys_dict = self.get_position_keys(user_id, symbol, side)
             position_key = self.get_position_key(user_id, symbol, side)
             print("position_key: ", position_key)
@@ -204,6 +219,8 @@ class PositionStateManager:
         포지션 상태 업데이트 및 (새로운 avg_price, size) 반환
         operation_type: "new_position", "add_position", "reduce_position"
         """
+        # Lazy import to avoid circular dependency
+        from HYPERRSI.src.trading.monitoring.trailing_stop_handler import clear_trailing_stop
         if side == "sell":
             side = "short"
         elif side == "buy":
@@ -273,6 +290,9 @@ class PositionStateManager:
                     new_avg_price = old_avg_price
                     if new_contracts_amount <= 0:
                         await pipe.delete(position_key)
+                        # 포지션 수량이 0이 되어 청산될 때 trailing stop 비활성화
+                        asyncio.create_task(clear_trailing_stop(user_id, symbol, side))
+                        logger.info(f"[포지션 수량 0] Trailing stop 비활성화 요청: {user_id}, {symbol}, {side}")
                         result = (0.0, 0.0)
                     else: #직접 가중평균
                         new_avg_price = ((old_avg_price * old_contracts_amount) + (entry_price * contracts_amount_delta)) / new_contracts_amount

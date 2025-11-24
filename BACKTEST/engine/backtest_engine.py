@@ -25,6 +25,17 @@ from BACKTEST.models.result import BacktestResult
 from BACKTEST.models.trade import TradeSide, ExitReason
 from BACKTEST.models.position import Position
 from shared.logging import get_logger
+from BACKTEST.engine.dual_side_utils import (
+    merge_dual_side_params,
+    should_create_dual_side_position,
+    calculate_dual_side_quantity,
+    calculate_dual_side_tp_price,
+    calculate_dual_side_sl_price,
+    can_add_dual_side_position,
+    should_close_main_on_hedge_tp,
+    should_close_dual_on_trend,
+    should_close_dual_on_main_sl
+)
 
 logger = get_logger(__name__)
 
@@ -57,6 +68,7 @@ class BacktestEngine:
         # Core components
         self.balance_tracker = BalanceTracker(initial_balance)
         self.position_manager = PositionManager(fee_rate)
+        self.dual_position_manager = PositionManager(fee_rate)
         self.order_simulator = OrderSimulator(
             slippage_model=SlippageModel.PERCENTAGE,
             slippage_percent=slippage_percent
@@ -67,6 +79,8 @@ class BacktestEngine:
         self.is_running = False
         self.current_candle: Optional[Candle] = None
         self.strategy_params: Dict[str, Any] = {}
+        self.dual_side_params: Dict[str, Any] = {}
+        self.dual_entry_count: int = 0
         self.strategy_executor = None  # Will be set in run()
         self.symbol_info: Optional[Dict[str, Any]] = None  # Symbol specifications (min_size, etc.)
 
@@ -160,6 +174,8 @@ class BacktestEngine:
         # Use strategy executor's params (already mapped Korean → English)
         self.strategy_params = strategy_executor.params
         self.strategy_executor = strategy_executor
+        self.dual_side_params = merge_dual_side_params(self.strategy_params)
+        self.dual_entry_count = 0
 
         logger.info(
             f"Starting backtest: {symbol} {timeframe} "
@@ -236,14 +252,34 @@ class BacktestEngine:
 
             # Check for remaining position (keep as unrealized P&L)
             unrealized_pnl = 0.0
+            last_candle = candles[-1]
             if self.position_manager.has_position():
-                last_candle = candles[-1]
                 position = self.position_manager.get_position()
                 position.update_unrealized_pnl(last_candle.close)
-                unrealized_pnl = position.unrealized_pnl
-                logger.info(
-                    f"Backtest ended with open position: {position.side.value} @ {position.entry_price:.2f}, "
-                    f"current_price={last_candle.close:.2f}, unrealized_pnl={unrealized_pnl:.2f}"
+                unrealized_pnl += position.unrealized_pnl
+                logger.warning(
+                    f"🚨 [MAIN POSITION NOT CLOSED] Backtest ended with open position: "
+                    f"side={position.side.value}, entry_price={position.entry_price:.2f}, "
+                    f"current_price={last_candle.close:.2f}, "
+                    f"total_qty={position.get_total_quantity():.6f}, "
+                    f"remaining_qty={position.get_current_quantity():.6f}, "
+                    f"unrealized_pnl={position.unrealized_pnl:.2f}, "
+                    f"dca_count={position.dca_count}, "
+                    f"tp1_filled={position.tp1_filled}, tp2_filled={position.tp2_filled}, tp3_filled={position.tp3_filled}"
+                )
+
+            if self.dual_position_manager.has_position():
+                dual_position = self.dual_position_manager.get_position()
+                dual_position.update_unrealized_pnl(last_candle.close)
+                unrealized_pnl += dual_position.unrealized_pnl
+                logger.warning(
+                    f"🚨 [DUAL POSITION NOT CLOSED] Backtest ended with open dual position: "
+                    f"side={dual_position.side.value}, entry_price={dual_position.entry_price:.2f}, "
+                    f"current_price={last_candle.close:.2f}, "
+                    f"total_qty={dual_position.get_total_quantity():.6f}, "
+                    f"remaining_qty={dual_position.get_current_quantity():.6f}, "
+                    f"unrealized_pnl={dual_position.unrealized_pnl:.2f}, "
+                    f"dca_count={dual_position.dca_count}"
                 )
 
             # Build result
@@ -317,22 +353,18 @@ class BacktestEngine:
         if self.position_manager.has_position():
             await self._check_exit_conditions(candle)
 
+        # Check dual-side exits (hedge TP/SL)
+        if self.dual_position_manager.has_position():
+            await self._check_dual_exit_conditions(candle)
+
         # Check DCA conditions (if position still open after exit checks)
         if self.position_manager.has_position():
             await self._check_dca_conditions(candle)
 
-        # Update position P&L if still open
+        # Update position P&L and trailing stop if still open
         if self.position_manager.has_position():
-            self.position_manager.update_position(candle.close)
             position = self.position_manager.get_position()
-
-            # Add balance snapshot with unrealized P&L
-            self.balance_tracker.add_snapshot(
-                timestamp=candle.timestamp,
-                position_side=position.side.value,
-                position_size=position.quantity,
-                unrealized_pnl=position.unrealized_pnl
-            )
+            self.position_manager.update_position(candle.close)
 
             # Update trailing stop if activated using strategy parameters
             if position.trailing_stop_activated:
@@ -369,9 +401,6 @@ class BacktestEngine:
             # No position - check for entry signal from strategy
             signal = await strategy_executor.generate_signal(candle)
 
-            # Debug logging for signal result
-
-
             if signal.side:  # Has entry signal (long or short)
                 logger.info(f"✅ Entry signal detected: {signal.side.value}, reason: {signal.reason}")
 
@@ -399,12 +428,7 @@ class BacktestEngine:
                         f"(min_size={min_size_contracts} contracts, contract_size={contract_size})"
                     )
                     # Skip this entry and continue to next candle
-                    self.balance_tracker.add_snapshot(
-                        timestamp=candle.timestamp,
-                        position_side=None,
-                        position_size=0.0,
-                        unrealized_pnl=0.0
-                    )
+                    self._record_snapshot(candle)
                     return
 
                 # Calculate TP/SL levels
@@ -439,24 +463,14 @@ class BacktestEngine:
                     entry_rsi=signal.indicators.get("rsi"),
                     entry_atr=signal.indicators.get("atr")
                 )
-
-                # Log initial position open
-                #logger.info(
-                #    f"Position opened: {signal.side.value} @ {filled_price:.2f}, "
-                #    f"qty={quantity:.4f}, investment={investment:.2f} USDT"
-                #)
+                self.dual_entry_count = 0  # Reset hedge counter for new trade
 
                 # Calculate partial exit levels (TP1/TP2/TP3) if enabled
                 has_calculate_method = hasattr(strategy_executor, 'calculate_tp_levels')
-                #logger.info(f"Checking TP calculation: has_calculate_tp_levels={has_calculate_method}")
 
                 if has_calculate_method:
                     # Get ATR value from signal indicators if available
                     atr_value = signal.indicators.get("atr") if signal.indicators else None
-                    #logger.info(
-                    #    f"Calculating TP levels with: side={signal.side.value}, "
-                    #    f"entry_price={filled_price:.2f}, atr={atr_value}"
-                    #)
 
                     tp1, tp2, tp3 = strategy_executor.calculate_tp_levels(
                         signal.side,
@@ -476,11 +490,6 @@ class BacktestEngine:
                     position.tp1_ratio = strategy_executor.tp1_ratio
                     position.tp2_ratio = strategy_executor.tp2_ratio
                     position.tp3_ratio = strategy_executor.tp3_ratio
-
-                    #logger.info(
-                    #    f"TP flags on position: use_tp1={position.use_tp1}, "
-                    #    f"use_tp2={position.use_tp2}, use_tp3={position.use_tp3}"
-                    #)
 
                     if any([position.use_tp1, position.use_tp2, position.use_tp3]):
                         logger.info(
@@ -527,13 +536,8 @@ class BacktestEngine:
                 if strategy_executor.should_activate_trailing_stop(0.0):
                     self.position_manager.activate_trailing_stop()
 
-            # Add balance snapshot (with or without position)
-            self.balance_tracker.add_snapshot(
-                timestamp=candle.timestamp,
-                position_side=None,
-                position_size=0.0,
-                unrealized_pnl=0.0
-            )
+        # Add balance snapshot (with or without position)
+        self._record_snapshot(candle)
 
     async def _check_exit_conditions(self, candle: Candle) -> None:
         """
@@ -582,6 +586,7 @@ class BacktestEngine:
                             message=f"Trailing stop hit @ {filled_price:.2f}",
                             data={"pnl": trade.pnl}
                         )
+                    self._handle_dual_after_main_close(trade.exit_reason, candle, filled_price)
                 return
 
         # Check partial exits (TP1/TP2/TP3)
@@ -669,6 +674,7 @@ class BacktestEngine:
                 # Check if all TP levels filled - if so, position is fully closed
                 if not self.position_manager.has_position():
                     logger.info("All partial exits completed, position fully closed")
+                    self._handle_dual_after_main_close(trade.exit_reason, candle, filled_price)
                     return
 
                 # Apply break even logic if enabled
@@ -766,6 +772,7 @@ class BacktestEngine:
                             position.take_profit_price,
                             trade.pnl
                         )
+                    self._handle_dual_after_main_close(trade.exit_reason, candle, filled_price)
                 return
 
         # Check stop loss (distinguish break-even from regular stop loss)
@@ -814,6 +821,7 @@ class BacktestEngine:
                             filled_price,
                             trade.pnl
                         )
+                    self._handle_dual_after_main_close(trade.exit_reason, candle, filled_price)
                 return
 
     async def _check_dca_conditions(self, candle: Candle) -> None:
@@ -871,10 +879,7 @@ class BacktestEngine:
             )
             return  # Price hasn't reached DCA level
 
-        logger.info(
-            f"[DCA] ✅ Price condition MET: "
-            f"current={candle.close:.2f} reached DCA level {position.dca_levels[0]:.2f}"
-        )
+
 
         # Check RSI condition (if enabled)
         rsi = candle.rsi if hasattr(candle, 'rsi') else None
@@ -1063,6 +1068,8 @@ class BacktestEngine:
                 f"TP3={tp3 if updated_position.use_tp3 else 'disabled'}"
             )
 
+        await self._handle_dual_side_after_main_dca(candle, updated_position)
+
         logger.info(
             f"[DCA] ✅ DCA entry #{updated_position.dca_count} EXECUTED: "
             f"price={filled_price:.2f}, qty={contracts:.4f}, "
@@ -1072,6 +1079,312 @@ class BacktestEngine:
             f"next_dca_levels={[f'{level:.2f}' for level in new_dca_levels]}"
         )
 
+    async def _handle_dual_side_after_main_dca(self, candle: Candle, main_position: Position) -> None:
+        """
+        Trigger or update dual-side entries after a main DCA fill.
+        """
+        if not self.dual_side_params.get('use_dual_side_entry'):
+            return
+
+        # Always keep hedge TP/SL aligned with the latest main state
+        self._update_dual_targets_from_main(main_position)
+
+        current_dca_count = main_position.dca_count
+        is_last_dca = self._is_last_main_dca(main_position)
+        if not should_create_dual_side_position(current_dca_count, self.dual_side_params):
+            return
+
+        if not can_add_dual_side_position(self.dual_entry_count, self.dual_side_params):
+            logger.info(
+                f"[DUAL] Entry limit reached: "
+                f"count={self.dual_entry_count}, "
+                f"limit={self.dual_side_params.get('dual_side_pyramiding_limit')}"
+            )
+            return
+
+        opposite_side = TradeSide.SHORT if main_position.side == TradeSide.LONG else TradeSide.LONG
+
+        quantity = calculate_dual_side_quantity(main_position.get_current_quantity(), self.dual_side_params)
+        quantity = self.order_simulator.round_to_precision(quantity, precision=0.001, symbol=self.symbol)
+
+        min_size_contracts = self.symbol_info.get('min_size', 1) if self.symbol_info else 1
+        contract_size = self.symbol_info.get('contract_size', 0.001) if self.symbol_info else 0.001
+        base_currency = self.symbol_info.get('base_currency', 'BTC') if self.symbol_info else 'BTC'
+        minimum_qty = min_size_contracts * contract_size
+
+        if quantity <= 0 or quantity < minimum_qty:
+            logger.warning(
+                f"[DUAL] Hedge entry skipped: {quantity:.6f} {base_currency} < "
+                f"minimum {minimum_qty:.6f} {base_currency} "
+                f"(min_size={min_size_contracts} contracts, contract_size={contract_size})"
+            )
+            return
+
+        filled_price = self.order_simulator.simulate_market_order(opposite_side, candle)
+        tp_price = calculate_dual_side_tp_price(
+            entry_price=filled_price,
+            side=opposite_side,
+            params=self.dual_side_params,
+            main_position_sl_price=self._get_main_stop_reference(main_position),
+            last_main_dca_price=main_position.last_filled_price,
+            is_last_main_dca=is_last_dca
+        )
+        main_tp_prices = {
+            'tp1': main_position.tp1_price,
+            'tp2': main_position.tp2_price,
+            'tp3': main_position.tp3_price
+        }
+        sl_price = calculate_dual_side_sl_price(
+            entry_price=filled_price,
+            side=opposite_side,
+            params=self.dual_side_params,
+            main_tp_prices=main_tp_prices,
+            is_last_main_dca=is_last_dca
+        )
+
+        leverage = main_position.leverage
+        investment = (filled_price * quantity) / leverage
+        entry_fee = investment * self.fee_rate
+
+        if not self.dual_position_manager.has_position():
+            self.dual_position_manager.open_position(
+                side=opposite_side,
+                price=filled_price,
+                quantity=quantity,
+                leverage=leverage,
+                timestamp=candle.timestamp,
+                investment=investment,
+                take_profit_price=tp_price,
+                stop_loss_price=sl_price,
+                entry_reason="dual_side_entry",
+                is_dual_side=True,
+                main_position_side=main_position.side,
+                dual_side_entry_index=self.dual_entry_count + 1,
+                parent_trade_id=self.position_manager.trade_counter
+            )
+        else:
+            self.dual_position_manager.add_to_position(
+                price=filled_price,
+                quantity=quantity,
+                investment=investment,
+                timestamp=candle.timestamp,
+                reason=f'dual_side_{self.dual_entry_count + 1}'
+            )
+            dual_position = self.dual_position_manager.get_position()
+            dual_position.take_profit_price = tp_price
+            dual_position.stop_loss_price = sl_price
+
+        self.dual_entry_count += 1
+        self.balance_tracker.update_balance(pnl=0.0, fee=entry_fee)
+
+        if self.event_logger:
+            self.event_logger.log_event(
+                event_type=EventType.POSITION_OPENED,
+                message=f"Dual-side {'open' if self.dual_entry_count == 1 else 'add'} @ {filled_price:.2f}",
+                data={
+                    "side": opposite_side.value,
+                    "qty": quantity,
+                    "tp": tp_price,
+                    "sl": sl_price,
+                    "dca_index": current_dca_count
+                }
+            )
+
+    def _update_dual_targets_from_main(self, main_position: Position) -> None:
+        """
+        Refresh hedge TP/SL after main TP/SL or DCA changes.
+        """
+        if not self.dual_position_manager.has_position():
+            return
+
+        dual_position = self.dual_position_manager.get_position()
+        main_tp_prices = {
+            'tp1': main_position.tp1_price,
+            'tp2': main_position.tp2_price,
+            'tp3': main_position.tp3_price
+        }
+
+        dual_position.take_profit_price = calculate_dual_side_tp_price(
+            entry_price=dual_position.entry_price,
+            side=dual_position.side,
+            params=self.dual_side_params,
+            main_position_sl_price=self._get_main_stop_reference(main_position),
+            last_main_dca_price=main_position.last_filled_price,
+            is_last_main_dca=self._is_last_main_dca(main_position)
+        )
+        dual_position.stop_loss_price = calculate_dual_side_sl_price(
+            entry_price=dual_position.entry_price,
+            side=dual_position.side,
+            params=self.dual_side_params,
+            main_tp_prices=main_tp_prices,
+            is_last_main_dca=self._is_last_main_dca(main_position)
+        )
+
+    async def _check_dual_exit_conditions(self, candle: Candle) -> None:
+        """
+        Check TP/SL for dual-side hedge position.
+        """
+        if not self.dual_position_manager.has_position():
+            return
+
+        position = self.dual_position_manager.get_position()
+
+        # Check take profit
+        if position.take_profit_price:
+            hit, filled_price = self.order_simulator.check_take_profit_hit(
+                candle, position.take_profit_price, position.side
+            )
+            if hit and filled_price:
+                trade = self.dual_position_manager.close_position(
+                    exit_price=filled_price,
+                    timestamp=candle.timestamp,
+                    exit_reason=ExitReason.HEDGE_TP
+                )
+                if trade:
+                    self.balance_tracker.update_balance(trade.pnl, trade.total_fees)
+                    if self.event_logger:
+                        self.event_logger.log_event(
+                            event_type=EventType.TAKE_PROFIT_HIT,
+                            message=f"Dual-side TP hit @ {filled_price:.2f}",
+                            data={"pnl": trade.pnl}
+                        )
+
+                    if should_close_main_on_hedge_tp(self.dual_side_params) and self.position_manager.has_position():
+                        main_trade = self.position_manager.close_position(
+                            exit_price=filled_price,
+                            timestamp=candle.timestamp,
+                            exit_reason=ExitReason.HEDGE_TP
+                        )
+                        if main_trade:
+                            self.balance_tracker.update_balance(main_trade.pnl, main_trade.total_fees)
+                            self._handle_dual_after_main_close(
+                                main_trade.exit_reason,
+                                candle,
+                                filled_price,
+                                close_dual_position=False
+                            )
+                return
+
+        # Check stop loss
+        if position.stop_loss_price:
+            hit, filled_price = self.order_simulator.check_stop_hit(
+                candle, position.stop_loss_price, position.side
+            )
+            if hit and filled_price:
+                trade = self.dual_position_manager.close_position(
+                    exit_price=filled_price,
+                    timestamp=candle.timestamp,
+                    exit_reason=ExitReason.HEDGE_SL
+                )
+                if trade:
+                    self.balance_tracker.update_balance(trade.pnl, trade.total_fees)
+                    if self.event_logger:
+                        self.event_logger.log_stop_loss(
+                            candle.timestamp,
+                            position.stop_loss_price,
+                            filled_price,
+                            trade.pnl
+                        )
+
+    def _close_dual_position(
+        self,
+        exit_price: float,
+        timestamp: datetime,
+        reason: ExitReason
+    ):
+        """
+        Close dual-side position and update balance/event log.
+        """
+        if not self.dual_position_manager.has_position():
+            return None
+
+        trade = self.dual_position_manager.close_position(
+            exit_price=exit_price,
+            timestamp=timestamp,
+            exit_reason=reason
+        )
+
+        if trade:
+            self.balance_tracker.update_balance(trade.pnl, trade.total_fees)
+            if self.event_logger:
+                self.event_logger.log_event(
+                    event_type=EventType.POSITION_CLOSED,
+                    message=f"Dual-side position closed ({reason.value}) @ {exit_price:.2f}",
+                    data={"pnl": trade.pnl, "side": trade.side.value}
+                )
+        return trade
+
+    def _handle_dual_after_main_close(
+        self,
+        exit_reason: ExitReason,
+        candle: Candle,
+        exit_price: float,
+        close_dual_position: bool = True
+    ) -> None:
+        """
+        Close or reset dual-side state when the main position closes.
+
+        FIX: Close dual position based on configuration when main position closes.
+        - BREAK_EVEN/STOP_LOSS: Close dual if dual_side_close_on_main_sl=True
+        - SIGNAL (trend reversal): Close dual if dual_side_trend_close=True
+        - Other exits: Always close dual
+        """
+        if close_dual_position and self.dual_position_manager.has_position():
+            # Close dual position when main hits SL (including break-even SL) - only if configured
+            if exit_reason in (ExitReason.BREAK_EVEN, ExitReason.STOP_LOSS):
+                if should_close_dual_on_main_sl(self.dual_side_params):
+                    logger.info(f"🔄 Closing dual position due to main position {exit_reason.value} (dual_side_close_on_main_sl=True)")
+                    self._close_dual_position(exit_price, candle.timestamp, ExitReason.LINKED_EXIT)
+                else:
+                    logger.info(f"⏳ Keeping dual position open after main {exit_reason.value} (dual_side_close_on_main_sl=False)")
+            elif exit_reason == ExitReason.SIGNAL:
+                if should_close_dual_on_trend(self.dual_side_params):
+                    logger.info("🔄 Closing dual position due to trend reversal (dual_side_trend_close=True)")
+                    self._close_dual_position(exit_price, candle.timestamp, ExitReason.LINKED_EXIT)
+                else:
+                    logger.info("⏳ Keeping dual position open after trend reversal (dual_side_trend_close=False)")
+            else:
+                # For other exit reasons (TP, etc.), always close dual position
+                self._close_dual_position(exit_price, candle.timestamp, ExitReason.LINKED_EXIT)
+
+        # Reset counter for the next trade cycle
+        if not self.position_manager.has_position():
+            self.dual_entry_count = 0
+
+    def _record_snapshot(self, candle: Candle) -> None:
+        """
+        Capture combined unrealized P&L for main and dual-side positions.
+        """
+        total_unrealized = 0.0
+        position_side = None
+        position_size = 0.0
+
+        if self.position_manager.has_position() and self.dual_position_manager.has_position():
+            self._update_dual_targets_from_main(self.position_manager.get_position())
+
+        if self.position_manager.has_position():
+            position = self.position_manager.get_position()
+            position.update_unrealized_pnl(candle.close)
+            total_unrealized += position.unrealized_pnl
+            position_side = position.side.value
+            position_size += position.get_current_quantity()
+
+        if self.dual_position_manager.has_position():
+            dual_position = self.dual_position_manager.get_position()
+            dual_position.update_unrealized_pnl(candle.close)
+            total_unrealized += dual_position.unrealized_pnl
+            position_size += dual_position.get_current_quantity()
+            if position_side and dual_position.side.value != position_side:
+                position_side = "hedged"
+            elif not position_side:
+                position_side = dual_position.side.value
+
+        self.balance_tracker.add_snapshot(
+            timestamp=candle.timestamp,
+            position_side=position_side,
+            position_size=position_size,
+            unrealized_pnl=total_unrealized
+        )
     async def _check_trend_reversal_exit(self, candle: Candle, position: Position) -> bool:
         """
         Check if position should be closed due to strong trend reversal.
@@ -1200,6 +1513,7 @@ class BacktestEngine:
                         f"Position closed due to trend reversal: "
                         f"PNL={trade.pnl:.2f}, reason={reason}"
                     )
+                    self._handle_dual_after_main_close(trade.exit_reason, candle, trade.exit_price)
 
                 return True
 
@@ -1207,15 +1521,53 @@ class BacktestEngine:
 
     def _get_all_trades(self) -> List:
         """Get all executed trades."""
-        return self.position_manager.get_trade_history()
+        trades = self.position_manager.get_trade_history() + self.dual_position_manager.get_trade_history()
+        trades.sort(key=lambda t: (t.exit_timestamp or t.entry_timestamp))
+
+        # Re-sequence trade numbers for combined history
+        for idx, trade in enumerate(trades, start=1):
+            try:
+                trade.trade_number = idx
+            except Exception:
+                logger.debug("Failed to resequence trade_number for trade", exc_info=True)
+        return trades
 
     def reset(self) -> None:
         """Reset engine to initial state."""
         self.balance_tracker.reset()
         self.position_manager.reset()
+        self.dual_position_manager.reset()
         if self.event_logger:
             self.event_logger.clear()
         self.is_running = False
         self.current_candle = None
         self.strategy_executor = None
+        self.dual_side_params = {}
+        self.dual_entry_count = 0
         logger.info("BacktestEngine reset to initial state")
+
+    def _is_last_main_dca(self, position: Position) -> bool:
+        """
+        Determine if the latest DCA is the final allowed entry for the main position.
+        """
+        pyramiding_limit = int(
+            self.strategy_params.get(
+                'pyramiding_limit',
+                self.strategy_params.get('dca_max_orders', 0)
+            ) or 0
+        )
+        if pyramiding_limit <= 0:
+            return False
+        return position.dca_count >= pyramiding_limit
+
+    def _get_main_stop_reference(self, position: Position) -> Optional[float]:
+        """
+        Return the current protective stop level of the main position.
+
+        Preference order:
+        1) Trailing stop price if activated
+        2) Static stop loss price
+        """
+        if position.trailing_stop_activated and position.trailing_stop_price:
+            return position.trailing_stop_price
+        return position.stop_loss_price

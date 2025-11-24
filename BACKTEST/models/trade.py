@@ -24,6 +24,9 @@ class ExitReason(str, Enum):
     TRAILING_STOP = "trailing_stop"
     BREAK_EVEN = "break_even"
     SIGNAL = "트렌드 반전 종료"
+    HEDGE_TP = "hedge_take_profit"
+    HEDGE_SL = "hedge_stop_loss"
+    LINKED_EXIT = "linked_exit"
     MANUAL = "manual"  # Legacy: kept for backward compatibility
     BACKTEST_END = "backtest_end"  # Position held until backtest end
 
@@ -99,6 +102,26 @@ class Trade(BaseModel):
     tp_level: Optional[int] = Field(None, description="TP level (1, 2, or 3) for partial exits", ge=1, le=3)
     exit_ratio: Optional[float] = Field(None, description="Exit ratio for partial exits (0-1)", ge=0, le=1)
     remaining_quantity: Optional[float] = Field(None, description="Remaining quantity after partial exit", ge=0)
+    # Dual-side metadata (헤지 포지션 구분)
+    is_dual_side: bool = Field(
+        default=False,
+        description="Trade was executed for dual-side hedge position",
+        serialization_alias="is_dual_side_position"  # API 응답에서는 is_dual_side_position으로 반환
+    )
+    main_position_side: Optional[TradeSide] = Field(
+        default=None,
+        description="Main position side associated with this dual-side trade"
+    )
+    dual_side_entry_index: Optional[int] = Field(
+        default=None,
+        description="Nth dual-side entry attempt for this main position",
+        ge=1
+    )
+    parent_trade_id: Optional[int] = Field(
+        default=None,
+        description="Main trade_number if this is a hedge position (메인 포지션의 trade_id)",
+        ge=0
+    )
 
     class Config:
         json_schema_extra = {
@@ -217,6 +240,11 @@ class Trade(BaseModel):
             'tp_level': self.tp_level,
             'exit_ratio': self.exit_ratio,
             'remaining_quantity': self.remaining_quantity,
+            # Dual-side metadata (프론트엔드 호환성을 위해 is_dual_side_position으로 반환)
+            'is_dual_side_position': self.is_dual_side,
+            'main_position_side': self.main_position_side.value if self.main_position_side else None,
+            'dual_side_entry_index': self.dual_side_entry_index,
+            'parent_trade_id': self.parent_trade_id,
             # Computed fields
             'is_open': self.is_open,
             'duration_seconds': self.duration_seconds,

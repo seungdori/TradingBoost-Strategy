@@ -1311,6 +1311,11 @@ async def update_timescale_api(
                 updated.api.get("passphrase")
             )
 
+            # API 키 변경 시 OrderWrapper 캐시 클리어 (중요!)
+            from HYPERRSI.src.trading.services.order_wrapper import OrderWrapper
+            await OrderWrapper.clear_cache(str(user_id))
+            logger.info(f"[Settings] Cleared OrderWrapper cache for user {user_id} after API key update")
+
         return TimescaleResponse(
             user_info=TimescaleUserInfo(**updated.user) if updated else None,
             api_info=TimescaleAPIInfo(**updated.api) if updated and updated.api else None,
@@ -1518,15 +1523,16 @@ async def check_api_keys(self, user_id: str):
             logger.error(f"사용자 {user_id}의 API 키가 누락되었습니다: key={bool(api_key)}, secret={bool(api_secret)}, passphrase={bool(passphrase)}")
             return False, "API 키 정보가 불완전합니다."
             
-        # CCXT로 간단한 요청 테스트
+        # OrderWrapper를 사용한 API 키 유효성 테스트
         try:
-            exchange = ccxt.okx({
-                'apiKey': api_key,
-                'secret': api_secret,
-                'password': passphrase,
-                'enableRateLimit': True
-            })
-            
+            from HYPERRSI.src.trading.services.order_wrapper import OrderWrapper
+            api_keys_dict = {
+                'api_key': api_key,
+                'api_secret': api_secret,
+                'passphrase': passphrase
+            }
+            exchange = OrderWrapper(str(user_id), api_keys_dict)
+
             # 밸런스 조회로 API 키 유효성 테스트
             await exchange.fetch_balance()
             await exchange.close()

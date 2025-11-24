@@ -259,7 +259,9 @@ async def handle_no_position(
                 # Trend condition not met - send alert
                 await _send_trend_alert(user_id, symbol, timeframe, "short", redis)
             else:
-                print(f"[{user_id}] 숏 진입 조건3 - is_overbought: {rsi_signals['is_overbought']}, should_enter: {should_enter}, reason: {reason}, current_state: {current_state}", flush=True)
+                print(f"[{user_id}] 숏 진입 조건3 - is_overbought: {rsi_signals['is_overbought']}, should_enter: {should_enter},current_state: {current_state}", flush=True)
+                if not should_enter:
+                    print(f"[{user_id}] Should enter is False - reason: {reason}", flush=True)
 
         # Check if trading should be stopped due to failures
         if fail_count >= 3:

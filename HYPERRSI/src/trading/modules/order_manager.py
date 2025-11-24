@@ -67,14 +67,9 @@ class OrderManager:
 
             exchange = None
             api_keys = await self.trading_service.okx_fetcher.get_user_api_keys(user_id)
-            # ✅ OKX 클라이언트 생성
-            exchange = ccxt.okx({
-                'apiKey': api_keys.get('api_key'),
-                'secret': api_keys.get('api_secret'),
-                'password': api_keys.get('passphrase'),
-                'enableRateLimit': True,
-                'options': {'defaultType': 'swap'}
-            })
+            # ✅ OrderWrapper 사용 (Exchange 객체 재사용 - CCXT 권장사항)
+            from HYPERRSI.src.trading.services.order_wrapper import OrderWrapper
+            exchange = OrderWrapper(str(user_id), api_keys)
 
             # 2) Algo 주문인지 여부를 order_type이나 order_id 저장방식으로 판단
             #    예: order_type이 'stop_loss'나 'take_profit'이면 algo 취소로 분기
@@ -108,7 +103,7 @@ class OrderManager:
 
             else:
                 # ---- 일반 주문 취소 ----
-                await exchange.cancelOrder(order_id, symbol)
+                await exchange.cancel_order(order_id, symbol)
                 logger.info(f"Canceled normal order {order_id} for {symbol}")
 
         except Exception as e:

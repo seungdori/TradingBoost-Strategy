@@ -53,6 +53,12 @@ class TradeResponse(BaseModel):
     exit_ratio: Optional[float] = Field(None, description="Exit ratio for partial exits (0-1)")
     remaining_quantity: Optional[float] = Field(None, description="Remaining quantity after partial exit")
 
+    # Dual-side metadata (헤지 포지션 구분)
+    is_dual_side_position: bool = Field(default=False, description="Trade was executed for dual-side hedge position")
+    main_position_side: Optional[str] = Field(None, description="Main position side associated with this dual-side trade")
+    dual_side_entry_index: Optional[int] = Field(None, description="Nth dual-side entry attempt for this main position")
+    parent_trade_id: Optional[int] = Field(None, description="Main trade_number if this is a hedge position")
+
 
 class BacktestSummaryResponse(BaseModel):
     """Backtest result summary."""

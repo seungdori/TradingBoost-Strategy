@@ -52,8 +52,8 @@ async def check_position_exists(user_id: str, symbol: str, direction: str) -> tu
     """
     try:
         from HYPERRSI.src.trading.trading_service import TradingService
-        trading_service = TradingService()
-        
+        trading_service = await TradingService.create_for_user(str(user_id))
+
         # 포지션 조회
         positions = await trading_service.fetch_okx_position(str(user_id), symbol, debug_entry_number=4)
         

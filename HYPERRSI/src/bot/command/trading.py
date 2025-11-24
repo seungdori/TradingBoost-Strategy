@@ -184,7 +184,16 @@ async def stop_command(message: types.Message) -> None:
 
     except Exception as e:
         logger.error(f"Error checking trading status for user {user_id}: {str(e)}")
-        await message.reply("❌ 상태 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
+        try:
+            # 텔레그램 메시지 전송 시도 (타임아웃 5초)
+            await asyncio.wait_for(
+                message.reply("❌ 상태 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."),
+                timeout=5.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"텔레그램 메시지 전송 타임아웃 (user_id: {user_id})")
+        except Exception as telegram_error:
+            logger.error(f"텔레그램 메시지 전송 실패 (user_id: {user_id}): {str(telegram_error)}")
 
 @router.callback_query(F.data == "confirm_stop")
 async def confirm_stop(callback: types.CallbackQuery) -> None:
@@ -997,17 +1006,12 @@ async def status_command(message: types.Message) -> None:
             # API 키 조회 (raise_on_missing=False로 설정하여 키가 없어도 None 반환)
             api_keys = await get_user_api_keys(str(user_id), raise_on_missing=False)
             if api_keys and all([api_keys.get('api_key'), api_keys.get('api_secret'), api_keys.get('passphrase')]):
-                # OKX 클라이언트 생성
-                client = ccxt.okx({
-                    'apiKey': api_keys.get('api_key'),
-                    'secret': api_keys.get('api_secret'),
-                    'password': api_keys.get('passphrase'),
-                    'enableRateLimit': True,
-                    'options': {'defaultType': 'swap'}
-                })
+                # OrderWrapper 사용 (Exchange 객체 재사용 - CCXT 권장사항)
+                from HYPERRSI.src.trading.services.order_wrapper import OrderWrapper
+                client = OrderWrapper(str(user_id), api_keys)
 
                 try:
-                    await client.load_markets()
+                    # load_markets()는 OrderWrapper 내부에서 자동으로 캐싱됨
                     positions = await client.fetch_positions([symbol], params={'instType': 'SWAP'})
 
                     # contracts > 0인 포지션만 필터링

@@ -8,18 +8,21 @@ from datetime import datetime
 from typing import List, Optional
 import pandas as pd
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 import aiohttp
 
 from BACKTEST.data.data_provider import DataProvider
 from BACKTEST.models.candle import Candle
 from shared.database.session import DatabaseConfig
+from shared.config import get_settings
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
 
 # Lazy import to avoid circular dependency
 _okx_provider_instance = None
+_candles_engine = None
+_candles_session_factory = None
 
 
 def _get_okx_provider():
@@ -31,6 +34,39 @@ def _get_okx_provider():
     return _okx_provider_instance
 
 
+def _get_candles_engine():
+    """Get or create candlesdb engine (lazy loading)."""
+    global _candles_engine
+    if _candles_engine is None:
+        settings = get_settings()
+        candles_url = (
+            f"postgresql+asyncpg://{settings.CANDLES_USER}:{settings.CANDLES_PASSWORD}"
+            f"@{settings.CANDLES_HOST}:{settings.CANDLES_PORT}/{settings.CANDLES_DATABASE}"
+        )
+        _candles_engine = create_async_engine(
+            candles_url,
+            pool_size=5,
+            max_overflow=10,
+            pool_pre_ping=True,
+            echo=False
+        )
+        logger.info(f"CandlesDB engine created: {settings.CANDLES_HOST}:{settings.CANDLES_PORT}/{settings.CANDLES_DATABASE}")
+    return _candles_engine
+
+
+def _get_candles_session_factory():
+    """Get or create candlesdb session factory."""
+    global _candles_session_factory
+    if _candles_session_factory is None:
+        engine = _get_candles_engine()
+        _candles_session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False
+        )
+    return _candles_session_factory
+
+
 class TimescaleProvider(DataProvider):
     """TimescaleDB-based data provider for historical candle data."""
 
@@ -39,20 +75,20 @@ class TimescaleProvider(DataProvider):
         Initialize TimescaleDB provider.
 
         Args:
-            session: Optional database session. If not provided, will create one
+            session: Optional database session. If not provided, will create one for candlesdb
         """
         self.session = session
         self._own_session = session is None
         self._session_instance: Optional[AsyncSession] = None
 
     async def _get_session(self) -> AsyncSession:
-        """Get database session."""
+        """Get database session for candlesdb."""
         if self.session:
             return self.session
 
-        # Create session if we own it and haven't created one yet
+        # Create candlesdb session if we own it and haven't created one yet
         if self._own_session and not self._session_instance:
-            session_factory = DatabaseConfig.get_session_factory()
+            session_factory = _get_candles_session_factory()
             self._session_instance = session_factory()
 
         return self._session_instance
@@ -72,47 +108,52 @@ class TimescaleProvider(DataProvider):
     @staticmethod
     def _normalize_symbol(symbol: str) -> str:
         """
-        Normalize symbol format for database query.
+        Normalize symbol format for candlesdb table name.
 
-        Converts OKX format to Binance format stored in database.
+        Converts OKX format to candlesdb table name format (lowercase with underscore).
 
         Args:
-            symbol: Symbol in any format (e.g., "BTC-USDT-SWAP", "BTC/USDT:USDT", or "BTCUSDT")
+            symbol: Symbol in any format (e.g., "BTC-USDT-SWAP", "BTC/USDT:USDT")
 
         Returns:
-            Normalized symbol (e.g., "BTCUSDT")
+            Normalized symbol (e.g., "btc_usdt")
 
         Examples:
-            "BTC-USDT-SWAP" -> "BTCUSDT"
-            "BTC/USDT:USDT" -> "BTCUSDT"
-            "ETH/USDT:USDT" -> "ETHUSDT"
-            "BTCUSDT" -> "BTCUSDT" (unchanged)
+            "BTC-USDT-SWAP" -> "btc_usdt"
+            "ETH-USDT-SWAP" -> "eth_usdt"
+            "BTC/USDT:USDT" -> "btc_usdt"
         """
         # Handle OKX perpetual futures format: BTC/USDT:USDT
         # Remove settlement currency suffix (e.g., :USDT)
         if ":" in symbol:
             symbol = symbol.split(":")[0]  # "BTC/USDT:USDT" -> "BTC/USDT"
 
-        # Remove -SWAP suffix and all separators (/, -)
-        normalized = (symbol
-                     .replace("-SWAP", "")
-                     .replace("/", "")
-                     .replace("-", ""))
+        # Remove -SWAP suffix
+        symbol = symbol.replace("-SWAP", "")
+
+        # Replace separators with underscore and convert to lowercase
+        normalized = symbol.replace("/", "_").replace("-", "_").lower()
+
         logger.debug(f"Symbol normalized: {symbol} -> {normalized}")
         return normalized
 
     @staticmethod
-    def _get_table_name(timeframe: str) -> str:
+    def _get_table_name(symbol: str, timeframe: str = None) -> str:
         """
-        Get table name for given timeframe.
+        Get table name for given symbol in candlesdb.
+
+        In candlesdb, tables are named by symbol (e.g., btc_usdt, eth_usdt).
+        Timeframe is stored as a column, not in the table name.
 
         Args:
-            timeframe: Timeframe (e.g., "15m", "1h", "1d")
+            symbol: Trading symbol (e.g., "BTC-USDT-SWAP")
+            timeframe: Timeframe (unused, kept for backward compatibility)
 
         Returns:
-            Table name (e.g., "okx_candles_15m")
+            Table name (e.g., "btc_usdt")
         """
-        return f"okx_candles_{timeframe}"
+        # Use normalized symbol as table name
+        return TimescaleProvider._normalize_symbol(symbol)
 
     async def get_candles(
         self,
@@ -136,22 +177,23 @@ class TimescaleProvider(DataProvider):
             List of Candle objects sorted by timestamp
         """
         session = await self._get_session()
-        table_name = self._get_table_name(timeframe)
-        normalized_symbol = self._normalize_symbol(symbol)
+        table_name = self._get_table_name(symbol, timeframe)
 
         try:
-            # Build query - note: time column instead of timestamp
+            # Build query for candlesdb schema
+            # Note: candlesdb uses rsi14, ema7, ma20 column names
             query_str = f"""
                 SELECT
                     time as timestamp,
-                    symbol,
                     open, high, low, close, volume,
-                    rsi, atr,
-                    ma7 as ema, ma20 as sma,
+                    rsi14 as rsi,
+                    atr,
+                    ema7 as ema,
+                    ma20 as sma,
                     trend_state,
-                    cycle_bull, cycle_bear, bb_state
+                    timeframe
                 FROM {table_name}
-                WHERE symbol = :symbol
+                WHERE timeframe = :timeframe
                     AND time >= :start_date
                     AND time <= :end_date
                 ORDER BY time ASC
@@ -163,7 +205,7 @@ class TimescaleProvider(DataProvider):
             result = await session.execute(
                 text(query_str),
                 {
-                    "symbol": normalized_symbol,
+                    "timeframe": timeframe,
                     "start_date": start_date,
                     "end_date": end_date
                 }
@@ -174,29 +216,29 @@ class TimescaleProvider(DataProvider):
             candles = [
                 Candle(
                     timestamp=row.timestamp,
-                    symbol=symbol,  # Use original symbol from parameter, not DB
-                    timeframe=timeframe,  # Add timeframe from parameter
+                    symbol=symbol,  # Use original symbol from parameter
+                    timeframe=row.timeframe,  # Use timeframe from DB
                     open=float(row.open),
                     high=float(row.high),
                     low=float(row.low),
                     close=float(row.close),
                     volume=float(row.volume),
-                    rsi=float(row.rsi) if row.rsi else None,
-                    atr=float(row.atr) if row.atr else None,
-                    ema=float(row.ema) if row.ema else None,
-                    sma=float(row.sma) if row.sma else None,
-                    trend_state=int(row.trend_state) if hasattr(row, 'trend_state') and row.trend_state is not None else None,
-                    # PineScript components
-                    CYCLE_Bull=bool(row.cycle_bull) if hasattr(row, 'cycle_bull') and row.cycle_bull is not None else None,
-                    CYCLE_Bear=bool(row.cycle_bear) if hasattr(row, 'cycle_bear') and row.cycle_bear is not None else None,
-                    BB_State=int(row.bb_state) if hasattr(row, 'bb_state') and row.bb_state is not None else None,
-                    bollinger_upper=None,  # Not available in this schema
+                    rsi=float(row.rsi) if row.rsi is not None else None,
+                    atr=float(row.atr) if row.atr is not None else None,
+                    ema=float(row.ema) if row.ema is not None else None,
+                    sma=float(row.sma) if row.sma is not None else None,
+                    trend_state=int(row.trend_state) if row.trend_state is not None else None,
+                    # PineScript components - not available in candlesdb schema
+                    CYCLE_Bull=None,
+                    CYCLE_Bear=None,
+                    BB_State=None,
+                    bollinger_upper=None,
                     bollinger_middle=None,
                     bollinger_lower=None,
                     macd=None,
                     macd_signal=None,
                     macd_histogram=None,
-                    data_source="timescaledb",
+                    data_source="candlesdb",
                     is_complete=True
                 )
                 for row in rows
@@ -381,28 +423,27 @@ class TimescaleProvider(DataProvider):
             return
 
         session = await self._get_session()
-        table_name = self._get_table_name(timeframe)
-        normalized_symbol = self._normalize_symbol(symbol)
+        table_name = self._get_table_name(symbol, timeframe)
 
         try:
-            # Use INSERT ... ON CONFLICT DO UPDATE
+            # Use INSERT ... ON CONFLICT DO UPDATE for candlesdb schema
             insert_query = f"""
                 INSERT INTO {table_name} (
-                    time, symbol, open, high, low, close, volume,
-                    rsi, atr, ma7, ma20, trend_state
+                    time, timeframe, open, high, low, close, volume,
+                    rsi14, atr, ema7, ma20, trend_state
                 ) VALUES (
-                    :time, :symbol, :open, :high, :low, :close, :volume,
-                    :rsi, :atr, :ma7, :ma20, :trend_state
+                    :time, :timeframe, :open, :high, :low, :close, :volume,
+                    :rsi14, :atr, :ema7, :ma20, :trend_state
                 )
-                ON CONFLICT (time, symbol) DO UPDATE SET
+                ON CONFLICT (time, timeframe) DO UPDATE SET
                     open = EXCLUDED.open,
                     high = EXCLUDED.high,
                     low = EXCLUDED.low,
                     close = EXCLUDED.close,
                     volume = EXCLUDED.volume,
-                    rsi = EXCLUDED.rsi,
+                    rsi14 = EXCLUDED.rsi14,
                     atr = EXCLUDED.atr,
-                    ma7 = EXCLUDED.ma7,
+                    ema7 = EXCLUDED.ema7,
                     ma20 = EXCLUDED.ma20,
                     trend_state = EXCLUDED.trend_state
             """
@@ -416,15 +457,15 @@ class TimescaleProvider(DataProvider):
                 for candle in batch:
                     await session.execute(text(insert_query), {
                         'time': candle.timestamp,
-                        'symbol': normalized_symbol,
+                        'timeframe': candle.timeframe,
                         'open': candle.open,
                         'high': candle.high,
                         'low': candle.low,
                         'close': candle.close,
                         'volume': candle.volume,
-                        'rsi': candle.rsi,
+                        'rsi14': candle.rsi,
                         'atr': candle.atr,
-                        'ma7': candle.ema,
+                        'ema7': candle.ema,
                         'ma20': candle.sma,
                         'trend_state': candle.trend_state
                     })
@@ -496,15 +537,14 @@ class TimescaleProvider(DataProvider):
             Validation results dict
         """
         session = await self._get_session()
-        table_name = self._get_table_name(timeframe)
-        normalized_symbol = self._normalize_symbol(symbol)
+        table_name = self._get_table_name(symbol, timeframe)
 
         try:
-            # Count available candles
+            # Count available candles in candlesdb
             count_query = text(f"""
                 SELECT COUNT(*) as count
                 FROM {table_name}
-                WHERE symbol = :symbol
+                WHERE timeframe = :timeframe
                     AND time >= :start_date
                     AND time <= :end_date
             """)
@@ -512,7 +552,7 @@ class TimescaleProvider(DataProvider):
             result = await session.execute(
                 count_query,
                 {
-                    "symbol": normalized_symbol,
+                    "timeframe": timeframe,
                     "start_date": start_date,
                     "end_date": end_date
                 }
@@ -568,18 +608,19 @@ class TimescaleProvider(DataProvider):
             Latest timestamp or None
         """
         session = await self._get_session()
-        table_name = self._get_table_name(timeframe)
+        table_name = self._get_table_name(symbol, timeframe)
 
         try:
+            # Get latest timestamp from candlesdb
             query = text(f"""
                 SELECT MAX(time) as latest
                 FROM {table_name}
-                WHERE symbol = :symbol
+                WHERE timeframe = :timeframe
             """)
 
             result = await session.execute(
                 query,
-                {"symbol": symbol}
+                {"timeframe": timeframe}
             )
 
             latest = result.scalar()
@@ -728,18 +769,17 @@ class TimescaleProvider(DataProvider):
             df: DataFrame with calculated indicators
         """
         session = await self._get_session()
-        table_name = self._get_table_name(timeframe)
-        normalized_symbol = self._normalize_symbol(symbol)
+        table_name = self._get_table_name(symbol, timeframe)
 
         try:
-            # Prepare bulk update values
+            # Prepare bulk update values for candlesdb schema
             update_values = []
             for timestamp, row in df.iterrows():
                 update_values.append({
                     'timestamp': timestamp,
-                    'rsi': float(row['rsi']) if not pd.isna(row['rsi']) else None,
+                    'rsi14': float(row['rsi']) if not pd.isna(row['rsi']) else None,
                     'atr': float(row['atr']) if not pd.isna(row['atr']) else None,
-                    'ma7': float(row['ema']) if not pd.isna(row['ema']) else None,
+                    'ema7': float(row['ema']) if not pd.isna(row['ema']) else None,
                     'ma20': float(row['sma']) if not pd.isna(row['sma']) else None,
                     'trend_state': int(row['trend_state']) if not pd.isna(row['trend_state']) else None
                 })
@@ -751,12 +791,12 @@ class TimescaleProvider(DataProvider):
             update_query_template = f"""
                 UPDATE {table_name}
                 SET
-                    rsi = :rsi,
+                    rsi14 = :rsi14,
                     atr = :atr,
-                    ma7 = :ma7,
+                    ema7 = :ema7,
                     ma20 = :ma20,
                     trend_state = :trend_state
-                WHERE symbol = :symbol
+                WHERE timeframe = :timeframe
                     AND time = :timestamp
             """
 
@@ -765,11 +805,11 @@ class TimescaleProvider(DataProvider):
 
                 for val in batch:
                     await session.execute(text(update_query_template), {
-                        'symbol': normalized_symbol,
+                        'timeframe': timeframe,
                         'timestamp': val['timestamp'],
-                        'rsi': val['rsi'],
+                        'rsi14': val['rsi14'],
                         'atr': val['atr'],
-                        'ma7': val['ma7'],
+                        'ema7': val['ema7'],
                         'ma20': val['ma20'],
                         'trend_state': val['trend_state']
                     })
@@ -803,23 +843,20 @@ class TimescaleProvider(DataProvider):
             candles: List of Candle objects with calculated indicators
         """
         session = await self._get_session()
-        table_name = self._get_table_name(timeframe)
-        normalized_symbol = self._normalize_symbol(symbol)
+        table_name = self._get_table_name(symbol, timeframe)
 
         try:
-            # Prepare bulk update values
+            # Prepare bulk update values for candlesdb schema
+            # Note: candlesdb doesn't have cycle_bull, cycle_bear, bb_state columns
             update_values = []
             for candle in candles:
                 update_values.append({
                     'timestamp': candle.timestamp,
-                    'rsi': candle.rsi,
+                    'rsi14': candle.rsi,
                     'atr': candle.atr,
-                    'ma7': candle.ema,  # JMA5 stored as ma7
+                    'ema7': candle.ema,  # JMA5 stored as ema7
                     'ma20': candle.sma,  # SMA20 stored as ma20
-                    'trend_state': candle.trend_state,
-                    'cycle_bull': candle.CYCLE_Bull,
-                    'cycle_bear': candle.CYCLE_Bear,
-                    'bb_state': candle.BB_State
+                    'trend_state': candle.trend_state
                 })
 
             # Execute bulk update with progress logging
@@ -829,15 +866,12 @@ class TimescaleProvider(DataProvider):
             update_query_template = f"""
                 UPDATE {table_name}
                 SET
-                    rsi = :rsi,
+                    rsi14 = :rsi14,
                     atr = :atr,
-                    ma7 = :ma7,
+                    ema7 = :ema7,
                     ma20 = :ma20,
-                    trend_state = :trend_state,
-                    cycle_bull = :cycle_bull,
-                    cycle_bear = :cycle_bear,
-                    bb_state = :bb_state
-                WHERE symbol = :symbol
+                    trend_state = :trend_state
+                WHERE timeframe = :timeframe
                     AND time = :timestamp
             """
 
@@ -846,16 +880,13 @@ class TimescaleProvider(DataProvider):
 
                 for val in batch:
                     await session.execute(text(update_query_template), {
-                        'symbol': normalized_symbol,
+                        'timeframe': timeframe,
                         'timestamp': val['timestamp'],
-                        'rsi': val['rsi'],
+                        'rsi14': val['rsi14'],
                         'atr': val['atr'],
-                        'ma7': val['ma7'],
+                        'ema7': val['ema7'],
                         'ma20': val['ma20'],
-                        'trend_state': val['trend_state'],
-                        'cycle_bull': val['cycle_bull'],
-                        'cycle_bear': val['cycle_bear'],
-                        'bb_state': val['bb_state']
+                        'trend_state': val['trend_state']
                     })
 
                 # Progress logging

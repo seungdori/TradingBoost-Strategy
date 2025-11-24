@@ -56,6 +56,21 @@ class Position(BaseModel):
 
     # Position identity
     side: TradeSide = Field(..., description="Position side (long/short)")
+    is_dual_side: bool = Field(default=False, description="True if this is a dual-side hedge position")
+    main_position_side: Optional[TradeSide] = Field(
+        default=None,
+        description="Main position side when acting as hedge"
+    )
+    dual_side_entry_index: Optional[int] = Field(
+        default=None,
+        description="Nth dual-side entry that created this position",
+        ge=1
+    )
+    parent_trade_id: Optional[int] = Field(
+        default=None,
+        description="Main trade_number if this is a hedge position",
+        ge=0
+    )
     entry_timestamp: datetime = Field(..., description="Entry time (UTC)")
     entry_price: float = Field(..., description="Average entry price", gt=0)
 

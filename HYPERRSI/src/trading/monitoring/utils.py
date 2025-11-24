@@ -79,7 +79,8 @@ async def add_recent_symbol(user_id: str, symbol: str) -> None:
     shared.utils.add_recent_symbol을 사용하세요.
     """
     from shared.utils import add_recent_symbol as _add_recent_symbol
-    await _add_recent_symbol(user_id, symbol)
+    redis = await get_redis_client()
+    await _add_recent_symbol(redis, user_id, symbol)
 
 
 async def get_recent_symbols(user_id: str) -> list:
@@ -90,7 +91,8 @@ async def get_recent_symbols(user_id: str) -> list:
     shared.utils.get_recent_symbols을 사용하세요.
     """
     from shared.utils import get_recent_symbols as _get_recent_symbols
-    result = await _get_recent_symbols(user_id)
+    redis = await get_redis_client()
+    result = await _get_recent_symbols(redis, user_id)
     return list(result) if result else []
 
 

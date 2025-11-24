@@ -586,7 +586,7 @@ async def manage_dual_side_entry(
             if entry_amount <= 0.02:
                 logger.error(f"[manage_dual_side_entry] 헷지 포지션 오픈 실패: entry_amount={entry_amount}")
                 return
-            contract_size = await trading_service.get_contract_size(symbol)
+            contract_size = await trading_service.get_contract_size(user_id, symbol)
             new_entering_position = entry_amount * contract_size
             #new_entering_position = await trading_service.round_to_qty(new_entering_position, symbol)
             # (G-3) 알림
@@ -727,8 +727,8 @@ async def calculate_hedge_sl_tp(
 
         # (1) 트레이딩 서비스 인스턴스가 없으면 생성
         if not trading_service:
-            trading_service = TradingService()
-            
+            trading_service = await TradingService.create_for_user(user_id)
+
             log_dual_side_debug(
                 user_id=user_id,
                 symbol=symbol,

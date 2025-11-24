@@ -22,6 +22,7 @@ if TYPE_CHECKING:
         get_algo_order_info,
         get_order_detail,
     )
+
 from shared.logging import get_logger, log_order
 from shared.utils import contracts_to_qty
 
@@ -248,6 +249,9 @@ async def check_order_status(user_id: str, symbol: str, order_id: str, order_typ
             logger.debug(f"SL 주문 조회: {order_id}, 알고리즘 주문 API 사용")
         
         try:
+            # Lazy import to avoid circular dependency
+            from HYPERRSI.src.api.routes.order.order import get_algo_order_info, get_order_detail
+
             # src/api/routes/order.py의 get_order_detail 함수 사용
             response: Any
             if is_algo:
