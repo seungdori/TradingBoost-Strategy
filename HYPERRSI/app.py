@@ -1,5 +1,6 @@
 # app.py
 import uvicorn
+#실행해야하는 것 -> start_celery worker,app.py, bot.py, position_monitor.py, integrated_data_collector.py, HYPERRSI.src.trading.monitoring.core
 
 # Celery 실행 방법 (monorepo 절대 경로 필요):
 #

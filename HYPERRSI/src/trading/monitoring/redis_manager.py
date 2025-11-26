@@ -163,6 +163,45 @@ async def check_redis_connection_task():
         traceback.print_exc()
 
 
+async def check_websocket_health() -> bool:
+    """
+    WebSocket(position_monitor.py) 연결 상태를 확인합니다.
+    Redis에 저장된 heartbeat 키를 기반으로 WebSocket이 정상 동작 중인지 판단합니다.
+
+    Returns:
+        bool: WebSocket이 정상이면 True, 비정상이면 False
+    """
+    try:
+        redis = await get_redis_client()
+
+        # position_monitor.py에서 주기적으로 업데이트하는 heartbeat 키 확인
+        heartbeat_key = "ws:position_monitor:heartbeat"
+        last_heartbeat = await redis.get(heartbeat_key)
+
+        if not last_heartbeat:
+            logger.debug("WebSocket heartbeat 키가 없습니다. (position_monitor.py 미실행 또는 초기 상태)")
+            return False
+
+        # bytes 타입 처리
+        if isinstance(last_heartbeat, bytes):
+            last_heartbeat = last_heartbeat.decode()
+
+        # 60초 이내에 heartbeat가 있으면 정상
+        import time
+        current_time = time.time()
+        time_diff = current_time - float(last_heartbeat)
+
+        if time_diff < 60:
+            return True
+        else:
+            logger.warning(f"WebSocket heartbeat 오래됨: {time_diff:.1f}초 전 (기준: 60초)")
+            return False
+
+    except Exception as e:
+        logger.error(f"WebSocket 상태 확인 중 오류: {str(e)}")
+        return False
+
+
 async def get_user_monitor_orders(user_id: str) -> Dict[str, Dict]:
     """
     사용자의 모든 모니터링 중인 주문을 조회합니다.

@@ -19,6 +19,10 @@ from .telegram_service import get_identifier, send_telegram_message
 from .trailing_stop_handler import activate_trailing_stop
 from .utils import get_user_settings, is_true_value
 
+# PostgreSQL SSOT - State Change Logger
+from HYPERRSI.src.services.state_change_logger import get_state_change_logger
+from HYPERRSI.src.core.models.state_change import ChangeType, TriggeredBy
+
 # Lazy import for circular dependency resolution
 if TYPE_CHECKING:
     from HYPERRSI.src.api.routes.order import (
@@ -117,7 +121,8 @@ async def move_sl_to_break_even(user_id: str, symbol: str, side: str, break_even
                 telegram_message += f"🔒 TP{tp_index} 체결 후 SL을 브레이크이븐({break_even_price:.2f})으로 이동\n"
                 
                 try:
-                    dual_side_settings = await get_user_dual_side_settings(okx_uid)
+                    # 심볼별 양방향 설정 조회 (멀티심볼 지원)
+                    dual_side_settings = await get_user_dual_side_settings(okx_uid, symbol)
                     dual_side_sl_type = dual_side_settings.get('dual_side_entry_sl_trigger_type', 'percent')
                     dual_side_sl_value = dual_side_settings.get('dual_side_entry_sl_value', 10)
                     if dual_side_settings.get('use_dual_side', False):
@@ -156,14 +161,37 @@ async def move_sl_to_break_even(user_id: str, symbol: str, side: str, break_even
             )
         except Exception as e:
             logger.error(f"브레이크이븐 이동 로깅 실패: {str(e)}")
+
+        # PostgreSQL 상태 변경 로깅 - 브레이크이븐 활성화
+        try:
+            state_change_logger = get_state_change_logger()
+            await state_change_logger.log_change(
+                okx_uid=okx_uid,
+                symbol=symbol,
+                change_type=ChangeType.BREAK_EVEN_ACTIVATED,
+                new_state={
+                    'break_even_price': break_even_price,
+                    'tp_index': tp_index,
+                    'side': position_side_normalized,
+                    'is_hedge': is_hedge,
+                },
+                price=break_even_price,
+                triggered_by=TriggeredBy.TP_SL,
+                trigger_source='break_even_handler.py:move_sl_to_break_even',
+                extra_data={
+                    'contracts_amount': contracts_amount,
+                }
+            )
+        except Exception as log_err:
+            logger.warning(f"[{okx_uid}] 브레이크이븐 로깅 실패 (무시됨): {log_err}")
             
         # dual_side_position이 있는지 확인
         dual_side_key = f"user:{okx_uid}:{symbol}:dual_side_position"
         dual_side_position_exists = await redis.exists(dual_side_key)
         
         if dual_side_position_exists:
-            # dual_side_entry_tp_trigger_type 설정 확인
-            dual_settings = await get_user_dual_side_settings(okx_uid)
+            # dual_side_entry_tp_trigger_type 설정 확인 (심볼별 설정 지원)
+            dual_settings = await get_user_dual_side_settings(okx_uid, symbol)
             dual_side_entry_tp_trigger_type = dual_settings.get('dual_side_entry_tp_trigger_type', 'percent')
             dual_side_tp_value = dual_settings.get('dual_side_entry_tp_value', 10)
             dual_side_sl_value = dual_settings.get('dual_side_entry_sl_value', 10)
@@ -271,15 +299,41 @@ async def process_break_even_settings(user_id: str, symbol: str, order_type: str
         
         if not (order_type.startswith('tp') or order_type.startswith('take_profit')):
             return False
-            
+
         # TP 레벨 확인 (tp1, tp2, tp3)
         tp_level = int(order_type[2]) if len(order_type) > 2 and order_type[2].isdigit() else 1
+
+        # PostgreSQL 상태 변경 로깅 - TP 체결
+        try:
+            # TP 레벨에 따른 change_type 선택
+            tp_change_types = {
+                1: ChangeType.TP1_HIT,
+                2: ChangeType.TP2_HIT,
+                3: ChangeType.TP3_HIT,
+            }
+            tp_change_type = tp_change_types.get(tp_level, ChangeType.TP_HIT)
+
+            state_change_logger = get_state_change_logger()
+            await state_change_logger.log_change(
+                okx_uid=okx_uid,
+                symbol=symbol,
+                change_type=tp_change_type,
+                previous_state=dict(position_data) if position_data else None,
+                new_state={
+                    'tp_level': tp_level,
+                    'order_type': order_type,
+                },
+                triggered_by=TriggeredBy.TP_SL,
+                trigger_source='break_even_handler.py:process_break_even_settings',
+            )
+        except Exception as log_err:
+            logger.warning(f"[{okx_uid}] TP{tp_level} 체결 로깅 실패 (무시됨): {log_err}")
         
         # 사용자 설정 가져오기
-        settings = await get_user_settings(okx_uid) 
-        dual_side_settings = await get_user_dual_side_settings(okx_uid)
+        settings = await get_user_settings(okx_uid)
+        # 심볼별 양방향 설정 조회 (멀티심볼 지원)
+        dual_side_settings = await get_user_dual_side_settings(okx_uid, symbol)
 
-        
         # 안전하게 값 처리
         use_break_even_tp1 = is_true_value(settings.get('use_break_even', False))
         use_break_even_tp2 = is_true_value(settings.get('use_break_even_tp2', False))

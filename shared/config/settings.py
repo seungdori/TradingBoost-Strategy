@@ -356,6 +356,22 @@ class Settings(BaseSettings):
         description="Comma-separated user IDs for targeted migration testing"
     )
 
+    # Multi-Symbol Trading Feature Flags
+    PRESET_SYSTEM_ENABLED: bool = Field(
+        default=True,
+        description="Phase 1: 프리셋 시스템 활성화"
+    )
+    MULTI_SYMBOL_ENABLED: bool = Field(
+        default=True,
+        description="Phase 2: 멀티심볼 지원 활성화"
+    )
+    MAX_SYMBOLS_PER_USER: int = Field(
+        default=99,
+        ge=1,
+        le=999,
+        description="사용자당 최대 동시 트레이딩 심볼 수"
+    )
+
     # ============================================================================
     # Validation
     # ============================================================================

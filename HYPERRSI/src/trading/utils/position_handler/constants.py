@@ -29,9 +29,9 @@ TP_DATA_KEY = "user:{user_id}:position:{symbol}:{side}:tp_data"
 COOLDOWN_KEY = "user:{user_id}:cooldown:{symbol}:{side}"
 POSITION_LOCK_KEY = "user:{user_id}:position_lock:{symbol}:{side}:{timeframe}"
 
-# Entry Management
-ENTRY_FAIL_COUNT_KEY = "user:{user_id}:entry_fail_count"
-TREND_SIGNAL_ALERT_KEY = "user:{user_id}:trend_signal_alert"
+# Entry Management (심볼별로 분리 - 멀티심볼 지원)
+ENTRY_FAIL_COUNT_KEY = "user:{user_id}:{symbol}:entry_fail_count"
+TREND_SIGNAL_ALERT_KEY = "user:{user_id}:{symbol}:trend_signal_alert"
 
 # Dual Side Trading
 DUAL_SIDE_COUNT_KEY = "user:{user_id}:{symbol}:dual_side_count"

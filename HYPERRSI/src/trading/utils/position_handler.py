@@ -170,7 +170,7 @@ async def handle_no_position(
         print(f"[{user_id}][{timeframe_str}] 포지션 없는 경우의 디버깅 : {current_rsi}, rsi signals : {rsi_signals},current state : {current_state}", flush=True)
 
 
-        entry_fail_count_key = f"user:{user_id}:entry_fail_count"
+        entry_fail_count_key = f"user:{user_id}:{symbol}:entry_fail_count"
         fail_count = int(await redis.get(entry_fail_count_key) or 0)
         print(f"[{user_id}] fail_count: {fail_count}")
         main_position_direction_key = f"user:{user_id}:position:{symbol}:main_position_direction"
@@ -349,7 +349,7 @@ async def handle_no_position(
                         
                         await send_telegram_message(f"[{user_id}]⚠️ 롱 포지션 주문 실패\n"f"━━━━━━━━━━━━━━━\n"f"{error_msg}\n"f"재시도 횟수: {fail_count}/3",1709556958)
             elif rsi_signals['is_oversold'] and not trend_condition:
-                alert_key = f"user:{user_id}:trend_signal_alert"
+                alert_key = f"user:{user_id}:{symbol}:trend_signal_alert"
                 is_alerted = await redis.get(alert_key)
                 if not is_alerted:
                     await send_telegram_message(    f"⚠️ 롱 포지션 진입 조건 불충족\n"    f"━━━━━━━━━━━━━━━\n"f"RSI가 과매수 상태이지만 트랜드 조건이 맞지 않아 진입을 유보합니다.",user_id)
@@ -492,7 +492,7 @@ async def handle_no_position(
                             
                         await send_telegram_message(f"[{user_id}]⚠️ 숏 포지션 주문 실패\n"f"━━━━━━━━━━━━━━━\n"f"{error_msg}\n"f"재시도 횟수: {fail_count}/5",user_id, debug=True)
             elif rsi_signals['is_overbought'] and not trend_condition:
-                alert_key = f"user:{user_id}:trend_signal_alert"
+                alert_key = f"user:{user_id}:{symbol}:trend_signal_alert"
                 is_alerted = await redis.get(alert_key)
                 if not is_alerted:
                     await send_telegram_message(f"⚠️ 숏 포지션 진입 조건 불충족\n"f"━━━━━━━━━━━━━━━\n"f"RSI가 과매수 상태이지만 트랜드 조건이 맞지 않아 진입을 유보합니다.",user_id)
@@ -1002,7 +1002,7 @@ async def handle_existing_position(
                             await send_telegram_message(f"⚠️[{user_id}] 추가진입 실패 (롱)\n"f"━━━━━━━━━━━━━━━\n"f"{error_msg}\n"f"현재가격: {current_price}\n"f"시도한 추가물량: {new_position_qty}\n"f"시도한 추가 계약: {new_position_contract_size}",user_id, debug=True)
                     else:
                         print("하락 트랜드이므로 추가 진입을 하지 않습니다.")
-                        alert_key = f"user:{user_id}:trend_signal_alert"
+                        alert_key = f"user:{user_id}:{symbol}:trend_signal_alert"
                         is_alerted = await redis.get(alert_key)
                         if not is_alerted:
                             await send_telegram_message(f"⚠️ 롱 추가진입 진입 조건 불충족\n"f"━━━━━━━━━━━━━━━\n"f"추가 진입 조건에는 부합하지만 트랜드 조건이 맞지 않아 진입을 유보합니다.",user_id)
@@ -1282,7 +1282,7 @@ async def handle_existing_position(
                         
                 elif (rsi_short_signals_condition and not trend_condition) and dca_order_count + 1 <= settings.get('pyramiding_limit', 1):
                     print("상승 트랜드이므로 진입을 하지 않습니다.")
-                    alert_key = f"user:{user_id}:trend_signal_alert"
+                    alert_key = f"user:{user_id}:{symbol}:trend_signal_alert"
                     is_alerted = await redis.get(alert_key)
                     if not is_alerted:
                         await send_telegram_message(f"⚠️ 숏 추가진입 진입 조건 불충족\n"f"━━━━━━━━━━━━━━━\n"f"추가 진입 조건에는 부합하지만 트랜드 조건이 맞지 않아 진입을 유보합니다.",user_id)
@@ -1349,16 +1349,27 @@ async def handle_existing_position(
                         position_qty = await contracts_to_qty(symbol, int(size))
                         if position_qty is None:
                             position_qty = 0.0
+
+                        # Get DCA count and leverage from Redis
+                        dca_count_key = f"user:{user_id}:position:{symbol}:{side}:dca_count"
+                        dca_count_str = await redis.get(dca_count_key)
+                        dca_count = int(dca_count_str) if dca_count_str else 0
+                        leverage = int(position_info.get("leverage", 1)) if position_info.get("leverage") else 1
+
                         await update_trading_stats(
-                        user_id=user_id,
-                        symbol=symbol,
-                        entry_price=float(entry_price),
-                        exit_price=float(current_price),
-                        position_size=float(position_qty),
-                        pnl=float(pnl),
-                        side=side,
-                        entry_time=position_info.get("entry_time", str(datetime.now())),
-                        exit_time=str(datetime.now()),
+                            user_id=user_id,
+                            symbol=symbol,
+                            entry_price=float(entry_price),
+                            exit_price=float(current_price),
+                            position_size=float(position_qty),
+                            pnl=float(pnl),
+                            side=side,
+                            entry_time=position_info.get("entry_time", str(datetime.now())),
+                            exit_time=str(datetime.now()),
+                            close_type='trend_reversal',
+                            leverage=leverage,
+                            dca_count=dca_count,
+                            avg_entry_price=float(position_info.get("avg_entry_price", entry_price)) if position_info.get("avg_entry_price") else None,
                         )
                     except Exception as e:
                         error_logger.error(f"[{user_id}]: 포지션 청산 통계 업데이트 실패", exc_info=True)

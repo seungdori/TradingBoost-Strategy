@@ -420,7 +420,7 @@ async def run_backtest(
             strategy_executor=strategy
         )
 
-        return BacktestDetailResponse(**result.model_dump())
+        return BacktestDetailResponse(**result.model_dump(by_alias=True))
 
     except ValueError as e:
         logger.error(f"Validation error: {e}")
@@ -1313,18 +1313,17 @@ async def recalculate_indicators(request: RecalculateIndicatorsRequest):
 
         # Determine date range
         if request.start_date is None:
-            # Get earliest available data
-            table_name = f"okx_candles_{request.timeframe}"
-            normalized_symbol = TimescaleProvider._normalize_symbol(request.symbol)
+            # Get earliest available data from candlesdb (btc_usdt, eth_usdt, etc.)
+            table_name = TimescaleProvider._get_table_name(request.symbol)
 
             query_str = f"""
                 SELECT MIN(time) as min_time, MAX(time) as max_time
                 FROM {table_name}
-                WHERE symbol = :symbol
+                WHERE timeframe = :timeframe
             """
             result = await session.execute(
                 text(query_str),
-                {"symbol": normalized_symbol}
+                {"timeframe": request.timeframe}
             )
             row = result.fetchone()
 
@@ -1398,8 +1397,8 @@ async def recalculate_indicators(request: RecalculateIndicatorsRequest):
         )
 
         # Update database (only candles within original date range)
-        table_name = f"okx_candles_{request.timeframe}"
-        normalized_symbol = TimescaleProvider._normalize_symbol(request.symbol)
+        # Using candlesdb tables (btc_usdt, eth_usdt, etc.)
+        table_name = TimescaleProvider._get_table_name(request.symbol)
 
         update_count = 0
         for i, candle_with_ind in enumerate(candles_with_indicators):
@@ -1411,31 +1410,25 @@ async def recalculate_indicators(request: RecalculateIndicatorsRequest):
 
             # Extract PineScript indicators
             trend_state = candle_with_ind.get('trend_state')
-            cycle_bull = candle_with_ind.get('CYCLE_Bull')
-            cycle_bear = candle_with_ind.get('CYCLE_Bear')
-            bb_state = candle_with_ind.get('BB_State')
+            auto_trend_state = candle_with_ind.get('auto_trend_state')
 
-            # Update query
+            # Update query for candlesdb schema
             update_query = f"""
                 UPDATE {table_name}
                 SET
                     trend_state = :trend_state,
-                    cycle_bull = :cycle_bull,
-                    cycle_bear = :cycle_bear,
-                    bb_state = :bb_state
-                WHERE symbol = :symbol
+                    auto_trend_state = :auto_trend_state
+                WHERE timeframe = :timeframe
                   AND time = :time
             """
 
             await session.execute(
                 text(update_query),
                 {
-                    "symbol": normalized_symbol,
+                    "timeframe": request.timeframe,
                     "time": original_candle.timestamp,
                     "trend_state": trend_state,
-                    "cycle_bull": cycle_bull,
-                    "cycle_bear": cycle_bear,
-                    "bb_state": bb_state
+                    "auto_trend_state": auto_trend_state
                 }
             )
             update_count += 1

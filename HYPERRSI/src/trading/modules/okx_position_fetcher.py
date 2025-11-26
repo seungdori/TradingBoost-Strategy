@@ -65,7 +65,8 @@ class OKXPositionFetcher:
                 })
                 return positions
             except Exception as e:
-                wait_time = (2 ** attempt)  # 1초, 2초, 4초
+                # 지수 백오프: 2초, 4초, 8초 (네트워크 안정화 대기)
+                wait_time = 2 * (2 ** attempt)
                 logger.warning(f"Attempt {attempt + 1}/{max_retries} failed for {symbol}. "
                                f"Retrying in {wait_time}s... Error: {str(e)}")
 
@@ -148,6 +149,16 @@ class OKXPositionFetcher:
             except Exception as e:
                 logger.error(f"Error in fetch_okx_position for {symbol}: {str(e)}")
                 traceback.print_exc()
+                # errordb 로깅
+                from HYPERRSI.src.utils.error_logger import log_error_to_db
+                log_error_to_db(
+                    error=e,
+                    error_type="PositionFetchError",
+                    user_id=user_id,
+                    severity="ERROR",
+                    symbol=symbol,
+                    metadata={"side": side, "component": "OKXPositionFetcher.fetch_okx_position"}
+                )
                 try:
                     if side is None:
                         positions_long = await redis.hgetall(f"user:{user_id}:position:{symbol}:long")
@@ -157,8 +168,8 @@ class OKXPositionFetcher:
                     else:
                         positions = await redis.hgetall(f"user:{user_id}:position:{symbol}:{side}")
                         return positions
-                except Exception as e:
-                    logger.error(f"Error in fetch_okx_position for {symbol}: {str(e)}")
+                except Exception as e2:
+                    logger.error(f"Error in fetch_okx_position fallback for {symbol}: {str(e2)}")
                     traceback.print_exc()
                     fail_to_fetch_position = True
                     fetched_redis_position = True

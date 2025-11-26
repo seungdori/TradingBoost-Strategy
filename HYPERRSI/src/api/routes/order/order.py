@@ -51,6 +51,9 @@ from .services import AlgoOrderService, OrderService, PositionService, StopLossS
 # Stop Loss Error Logging
 from HYPERRSI.src.database.stoploss_error_db import log_stoploss_error
 
+# Error DB Logging
+from HYPERRSI.src.utils.error_logger import log_error_to_db
+
 # ORDER_BACKEND는 항상 자기 자신을 가리키므로 사용하지 않음
 order_backend_client = None
 
@@ -155,6 +158,14 @@ async def get_user_api_keys(user_id: str) -> Dict[str, str]:
         raise
     except Exception as e:
         error_logger.error(f"API 키 조회 실패: {str(e)}")
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="APIKeyFetchError",
+            user_id=user_id,
+            severity="ERROR",
+            metadata={"component": "order.get_user_api_keys"}
+        )
         raise HTTPException(status_code=500, detail=f"Error fetching API keys: {str(e)}")
 
 # safe_float는 shared.utils.type_converters에서 import하여 사용
@@ -386,6 +397,15 @@ async def get_open_orders(
             return orders_data
         except Exception as e:
             logger.error(f"Backend request failed, falling back to local: {e}")
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="BackendRequestError",
+                user_id=user_id,
+                severity="WARNING",
+                symbol=symbol,
+                metadata={"component": "order.get_open_orders", "fallback": "local"}
+            )
     
     # 로컬 처리
     # user_id를 OKX UID로 변환
@@ -439,12 +459,30 @@ async def get_open_orders(
                     # 디버깅을 위해 에러가 발생한 주문 데이터의 구조를 더 자세히 기록
                     error_logger.error(f"주문 데이터 구조: client_order_id={order.get('clOrdId')}, order_type={order.get('ordType')}")
                     error_logger.error(f"주문 데이터 모든 필드: {', '.join([f'{k}={v}' for k, v in order.items()])}")
+                    # errordb 로깅
+                    log_error_to_db(
+                        error=e,
+                        error_type="OrderParsingError",
+                        user_id=okx_uid,
+                        severity="WARNING",
+                        symbol=order.get('instId'),
+                        metadata={"component": "order.get_open_orders", "order_id": order.get('ordId'), "order_type": order.get('ordType')}
+                    )
                     continue
             #print("RESULT : ", result)
             return result
 
         except Exception as e:
             error_logger.error(f"Failed to fetch open orders: {str(e)}", exc_info=True)
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="FetchOpenOrdersError",
+                user_id=okx_uid,
+                severity="ERROR",
+                symbol=symbol,
+                metadata={"component": "order.get_open_orders"}
+            )
             await handle_exchange_error(e)
             
             
@@ -739,6 +777,15 @@ async def get_order_detail(
             return order_data
         except Exception as e:
             logger.error(f"Backend request failed, falling back to local: {e}")
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="BackendRequestError",
+                user_id=user_id,
+                severity="WARNING",
+                symbol=symbol,
+                metadata={"component": "order.get_order_detail", "order_id": order_id, "is_algo": is_algo, "fallback": "local"}
+            )
     
     # 로컬 처리
     # user_id를 OKX UID로 변환
@@ -759,6 +806,15 @@ async def get_order_detail(
                     return parse_algo_order_to_order_response(algo_data, algo_type)
                 except Exception as e:
                     error_logger.error(f"알고주문 조회 실패: {str(e)}")
+                    # errordb 로깅
+                    log_error_to_db(
+                        error=e,
+                        error_type="AlgoOrderQueryError",
+                        user_id=okx_uid,
+                        severity="ERROR",
+                        symbol=symbol,
+                        metadata={"component": "order.get_order_detail", "order_id": order_id, "algo_type": algo_type}
+                    )
                     raise HTTPException(status_code=404, detail=f"알고주문 조회 실패: {str(e)}")
 
             # ----------------------------------------
@@ -767,7 +823,133 @@ async def get_order_detail(
             try:
                 # 1) 열린 주문(open orders)에서 찾기
                 open_orders = await exchange.fetch_open_orders(symbol=symbol) if symbol else await exchange.fetch_open_orders()
-                logger.info(f"열린 주문 조회 결과: {len(open_orders)}개")
+
+                # 2) 알고리즘 주문도 함께 조회
+                algo_orders = []
+                sl_orders_by_pos_side = {}  # 포지션 방향별 SL 주문 목록
+                tp_orders_by_pos_side = {}  # 포지션 방향별 TP 주문 목록
+                try:
+                    params = {"instId": symbol, "ordType": "trigger"} if symbol else {"ordType": "trigger"}
+                    pending_resp = await exchange.privateGetTradeOrdersAlgoPending(params=params)
+
+                    if pending_resp.get("code") == "0":
+                        algo_orders = pending_resp.get("data", [])
+
+                        # 포지션 방향별 SL/TP 주문 수집 및 검증
+                        for algo_order in algo_orders:
+                            pos_side = algo_order.get("posSide", "unknown")
+                            sl_trigger_px = algo_order.get("slTriggerPx", "")
+                            tp_trigger_px = algo_order.get("tpTriggerPx", "")
+                            reduce_only = algo_order.get("reduceOnly", "false")
+                            algo_id = algo_order.get("algoId", "")
+                            u_time = int(algo_order.get("uTime", "0"))  # 업데이트 시간 (밀리초)
+
+                            # SL 주문인 경우 (slTriggerPx가 빈 문자열이 아니면)
+                            if sl_trigger_px:
+                                if pos_side not in sl_orders_by_pos_side:
+                                    sl_orders_by_pos_side[pos_side] = []
+                                sl_orders_by_pos_side[pos_side].append({
+                                    "algoId": algo_id,
+                                    "slTriggerPx": sl_trigger_px,
+                                    "reduceOnly": reduce_only,
+                                    "uTime": u_time
+                                })
+
+                                # SL 주문의 reduceOnly가 true가 아니면 경고
+                                if reduce_only.lower() != "true":
+                                    logger.warning(f"⚠️ SL 주문이 reduceOnly가 아닙니다! algoId: {algo_id}, posSide: {pos_side}, reduceOnly: {reduce_only}")
+
+                            # TP 주문인 경우 (tpTriggerPx가 빈 문자열이 아니면)
+                            elif tp_trigger_px:
+                                if pos_side not in tp_orders_by_pos_side:
+                                    tp_orders_by_pos_side[pos_side] = []
+                                tp_orders_by_pos_side[pos_side].append({
+                                    "algoId": algo_id,
+                                    "tpTriggerPx": tp_trigger_px,
+                                    "reduceOnly": reduce_only,
+                                    "uTime": u_time
+                                })
+
+                        # 한 포지션 방향에 SL 주문이 2개 이상이면 오래된 것 취소
+                        for pos_side, sl_orders in sl_orders_by_pos_side.items():
+                            if len(sl_orders) >= 2:
+                                logger.warning(f"🚨 포지션 방향 {pos_side}에 SL 주문이 {len(sl_orders)}개 있습니다! (symbol: {symbol})")
+
+                                # uTime 기준으로 정렬 (최신순)
+                                sl_orders_sorted = sorted(sl_orders, key=lambda x: x["uTime"], reverse=True)
+
+                                # 가장 최신 것만 남기고 나머지 취소
+                                for sl_order in sl_orders_sorted[1:]:
+                                    logger.warning(f"  ❌ 오래된 SL 주문 취소: algoId={sl_order['algoId']}, slTriggerPx={sl_order['slTriggerPx']}")
+                                    try:
+                                        cancel_resp = await exchange.privatePostTradeCancelAlgos(params=[{
+                                            "algoId": sl_order["algoId"],
+                                            "instId": symbol
+                                        }])
+                                        if cancel_resp.get("code") == "0":
+                                            logger.info(f"  ✅ SL 주문 취소 성공: {sl_order['algoId']}")
+                                        else:
+                                            logger.error(f"  ⚠️ SL 주문 취소 실패: {cancel_resp.get('msg', 'Unknown error')}")
+                                    except Exception as cancel_err:
+                                        logger.error(f"  ⚠️ SL 주문 취소 중 오류: {str(cancel_err)}")
+                                        # errordb 로깅
+                                        log_error_to_db(
+                                            error=cancel_err,
+                                            error_type="SLOrderCancelError",
+                                            user_id=okx_uid,
+                                            severity="WARNING",
+                                            symbol=symbol,
+                                            metadata={"component": "order.get_order_detail", "algo_id": sl_order['algoId'], "pos_side": pos_side}
+                                        )
+
+                                logger.info(f"  ✅ 최신 SL 주문 유지: algoId={sl_orders_sorted[0]['algoId']}, slTriggerPx={sl_orders_sorted[0]['slTriggerPx']}")
+
+                        # 한 포지션 방향에 TP 주문이 4개 이상이면 오래된 것 취소 (최대 3개까지만)
+                        for pos_side, tp_orders in tp_orders_by_pos_side.items():
+                            if len(tp_orders) > 3:
+                                logger.warning(f"🚨 포지션 방향 {pos_side}에 TP 주문이 {len(tp_orders)}개 있습니다! (최대 3개, symbol: {symbol})")
+
+                                # uTime 기준으로 정렬 (최신순)
+                                tp_orders_sorted = sorted(tp_orders, key=lambda x: x["uTime"], reverse=True)
+
+                                # 최신 3개만 남기고 나머지 취소
+                                for tp_order in tp_orders_sorted[3:]:
+                                    logger.warning(f"  ❌ 오래된 TP 주문 취소: algoId={tp_order['algoId']}, tpTriggerPx={tp_order['tpTriggerPx']}")
+                                    try:
+                                        cancel_resp = await exchange.privatePostTradeCancelAlgos(params=[{
+                                            "algoId": tp_order["algoId"],
+                                            "instId": symbol
+                                        }])
+                                        if cancel_resp.get("code") == "0":
+                                            logger.info(f"  ✅ TP 주문 취소 성공: {tp_order['algoId']}")
+                                        else:
+                                            logger.error(f"  ⚠️ TP 주문 취소 실패: {cancel_resp.get('msg', 'Unknown error')}")
+                                    except Exception as cancel_err:
+                                        logger.error(f"  ⚠️ TP 주문 취소 중 오류: {str(cancel_err)}")
+                                        # errordb 로깅
+                                        log_error_to_db(
+                                            error=cancel_err,
+                                            error_type="TPOrderCancelError",
+                                            user_id=okx_uid,
+                                            severity="WARNING",
+                                            symbol=symbol,
+                                            metadata={"component": "order.get_order_detail", "algo_id": tp_order['algoId'], "pos_side": pos_side}
+                                        )
+
+                                logger.info(f"  ✅ 최신 TP 주문 3개 유지: {[tp['algoId'] for tp in tp_orders_sorted[:3]]}")
+                except Exception as e:
+                    logger.warning(f"알고리즘 주문 조회 실패: {str(e)}")
+                    # errordb 로깅
+                    log_error_to_db(
+                        error=e,
+                        error_type="AlgoOrderFetchWarning",
+                        user_id=okx_uid,
+                        severity="WARNING",
+                        symbol=symbol,
+                        metadata={"component": "order.get_order_detail", "order_id": order_id}
+                    )
+
+                logger.info(f"열린 주문 조회 결과: 일반 {len(open_orders)}개, 알고 {len(algo_orders)}개")
 
                 # 디버깅을 위한 로그 추가
 
@@ -800,6 +982,15 @@ async def get_order_detail(
                     except Exception as e:
                         #traceback.print_exc()
                         logger.warning(f"닫힌 주문 조회 실패: {str(e)}")
+                        # errordb 로깅 (WARNING 레벨 - 알고주문 fallback 시도)
+                        log_error_to_db(
+                            error=e,
+                            error_type="ClosedOrderFetchWarning",
+                            user_id=okx_uid,
+                            severity="WARNING",
+                            symbol=symbol,
+                            metadata={"component": "order.get_order_detail", "order_id": order_id}
+                        )
                         order_data = None
 
                 if order_data:
@@ -838,6 +1029,15 @@ async def get_order_detail(
                 raise
             except Exception as e:
                 logger.error(f"주문 조회 중 예외 발생: {str(e)}")
+                # errordb 로깅
+                log_error_to_db(
+                    error=e,
+                    error_type="OrderQueryError",
+                    user_id=okx_uid,
+                    severity="ERROR",
+                    symbol=symbol,
+                    metadata={"component": "order.get_order_detail", "order_id": order_id}
+                )
                 if "Not authenticated" in str(e):
                     raise HTTPException(status_code=401, detail="인증 오류가 발생했습니다")
                 elif "Network" in str(e):
@@ -849,6 +1049,15 @@ async def get_order_detail(
             raise
         except Exception as e:
             logger.error(f"주문 상세 조회 실패: {str(e)}")
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="OrderDetailQueryError",
+                user_id=okx_uid,
+                severity="ERROR",
+                symbol=symbol,
+                metadata={"component": "order.get_order_detail", "order_id": order_id}
+            )
             raise HTTPException(status_code=500, detail="주문 조회 중 오류가 발생했습니다")
 
 
@@ -1064,6 +1273,15 @@ async def create_order(
             return response_data
         except Exception as e:
             logger.error(f"Backend request failed, falling back to local: {e}")
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="BackendRequestError",
+                user_id=user_id,
+                severity="WARNING",
+                symbol=order.symbol,
+                metadata={"component": "order.create_order", "fallback": "local"}
+            )
 
     # 로컬 처리 - OrderService 사용
     okx_uid = await get_identifier(user_id)
@@ -1077,6 +1295,15 @@ async def create_order(
                 })
             except Exception as e:
                 logger.warning(f"Failed to set leverage: {str(e)}")
+                # errordb 로깅
+                log_error_to_db(
+                    error=e,
+                    error_type="LeverageSetError",
+                    user_id=okx_uid,
+                    severity="WARNING",
+                    symbol=order.symbol,
+                    metadata={"component": "order.create_order", "leverage": order.leverage}
+                )
 
         # OrderService를 사용하여 주문 생성
         return await OrderService.create_order(
@@ -1461,6 +1688,16 @@ async def close_position(
             return response_data
         except Exception as e:
             logger.error(f"Backend request failed, falling back to local: {e}")
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="BackendRequestError",
+                user_id=user_id,
+                severity="WARNING",
+                symbol=symbol,
+                side=side,
+                metadata={"component": "order.close_position", "fallback": "local"}
+            )
 
     # user_id를 OKX UID로 변환
     okx_uid = await get_identifier(user_id)
@@ -1526,12 +1763,20 @@ async def fetch_algo_order_by_id(exchange_or_wrapper: Any, order_id: str, symbol
                 
     except Exception as e:
         traceback.print_exc()
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="FetchAlgoOrderError",
+            severity="ERROR",
+            symbol=symbol,
+            metadata={"component": "order.fetch_algo_order_by_id", "order_id": order_id, "algo_type": algo_type}
+        )
         if "Not authenticated" in str(e):
             raise HTTPException(status_code=401, detail="Authentication error")
         elif "Network" in str(e):
             raise HTTPException(status_code=503, detail="Exchange connection error")
         logger.error(f"Error fetching algo order: {str(e)}")
-        
+
     return None
 
 # Order cancellation utilities
@@ -1546,10 +1791,8 @@ async def cancel_algo_orders_for_symbol(
     - pos_side가 None이면 모든 알고주문 취소 (One-way 모드)
     """
     try:
-        resp = await exchange.fetch2(
-            path=API_ENDPOINTS['ALGO_ORDERS_PENDING'],
-            api="private",
-            method="GET",
+        # CCXT 표준 메서드 사용 (서명 생성을 위해)
+        resp = await exchange.privateGetTradeOrdersAlgoPending(
             params={"instId": symbol}
         )
         code = resp.get("code")
@@ -1572,20 +1815,22 @@ async def cancel_algo_orders_for_symbol(
                     cancel_list.append({"algoId": algo_id, "instId": inst_id})
 
             if cancel_list:
-                cancel_resp = await exchange.fetch2(
-                    path=API_ENDPOINTS['CANCEL_ALGO_ORDERS'],
-                    api="private",
-                    method="POST",
-                    params={},
-                    headers=None,
-                    body=json.dumps({"data": cancel_list})
-                )
+                # CCXT 표준 메서드 사용 (서명 생성을 위해)
+                cancel_resp = await exchange.privatePostTradeCancelAlgos(params=cancel_list)
                 c_code = cancel_resp.get("code")
                 if c_code != "0":
                     c_msg = cancel_resp.get("msg", "")
                     logger.warning(f"알고주문 취소 실패: {c_msg}")
     except Exception as e:
         logger.error(f"알고주문 취소 중 오류: {str(e)}")
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="CancelAlgoOrdersError",
+            severity="ERROR",
+            symbol=symbol,
+            metadata={"component": "order.cancel_algo_orders_for_symbol", "pos_side": pos_side}
+        )
 
 async def cancel_reduce_only_orders_for_symbol(
     exchange: Any,
@@ -1620,20 +1865,22 @@ async def cancel_reduce_only_orders_for_symbol(
                     cancel_list.append({"ordId": ord_id, "instId": inst_id})
 
             if cancel_list:
-                resp = await exchange.fetch2(
-                    path=API_ENDPOINTS['CANCEL_BATCH_ORDERS'],
-                    api="private",
-                    method="POST",
-                    params={},
-                    headers=None,
-                    body=json.dumps({"data": cancel_list})
-                )
+                # CCXT 표준 메서드 사용 (서명 생성을 위해)
+                resp = await exchange.privatePostTradeCancelBatchOrders(params=cancel_list)
                 code = resp.get("code")
                 if code != "0":
                     msg = resp.get("msg", "")
                     logger.warning(f"reduceOnly 주문 취소 실패: {msg}")
     except Exception as e:
         logger.error(f"reduceOnly 주문 취소 중 오류: {str(e)}")
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="CancelReduceOnlyOrdersError",
+            severity="ERROR",
+            symbol=symbol,
+            metadata={"component": "order.cancel_reduce_only_orders_for_symbol", "pos_side": pos_side}
+        )
 
 async def create_exchange_client(user_id: str):
     """
@@ -2103,6 +2350,16 @@ async def update_stop_loss_order(
             return response_data
         except Exception as e:
             logger.error(f"Backend request failed, falling back to local: {e}")
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="BackendRequestError",
+                user_id=user_id,
+                severity="WARNING",
+                symbol=symbol,
+                side=side,
+                metadata={"component": "order.update_stop_loss", "new_sl_price": new_sl_price, "fallback": "local"}
+            )
 
     # Side 파라미터 정규화
     side_normalized = "buy" if side in ["long", "buy"] else "sell"
@@ -2276,15 +2533,67 @@ async def update_stop_loss_order(
                 )
     
                 # 5. Cancel existing algo orders
+                cancel_result = None
                 try:
-                    await cancel_algo_orders(
+                    cancel_result = await cancel_algo_orders(
                         symbol=symbol,
                         user_id=okx_uid,
                         side=pos_side,
                         algo_type=ord_type_for_algo
                     )
+                    logger.info(f"기존 SL 주문 취소 결과: {cancel_result}")
+
+                    # 취소 결과 검증 - 실패 시 로깅
+                    if cancel_result and cancel_result.get('status') != 'success':
+                        await log_stoploss_error(
+                            error=Exception(f"기존 SL 주문 취소 실패: {cancel_result.get('message', 'Unknown error')}"),
+                            error_type="AlgoOrderCancelFailure",
+                            user_id=okx_uid,
+                            severity="WARNING",
+                            module="order",
+                            function_name="update_stop_loss_order",
+                            symbol=symbol,
+                            side=pos_side,
+                            order_side=order_side_normalized,
+                            new_sl_price=new_sl_price,
+                            current_price=current_price,
+                            position_qty=position_qty,
+                            position_side=pos_side,
+                            algo_type=ord_type_for_algo,
+                            order_type=order_type,
+                            failure_reason=f"취소 결과: {cancel_result}",
+                            metadata={
+                                "component": "order.update_stop_loss",
+                                "cancel_result": cancel_result,
+                                "old_sl_data": old_sl_data
+                            }
+                        )
                 except Exception as e:
-                    logger.warning(f"기존 SL algo 주문 취소 중 오류: {str(e)}")
+                    logger.error(f"기존 SL algo 주문 취소 중 오류: {str(e)}")
+                    # stoploss_error_logs에 로깅
+                    await log_stoploss_error(
+                        error=e,
+                        error_type="AlgoOrderCancelException",
+                        user_id=okx_uid,
+                        severity="ERROR",
+                        module="order",
+                        function_name="update_stop_loss_order",
+                        symbol=symbol,
+                        side=pos_side,
+                        order_side=order_side_normalized,
+                        new_sl_price=new_sl_price,
+                        current_price=current_price,
+                        position_qty=position_qty,
+                        position_side=pos_side,
+                        algo_type=ord_type_for_algo,
+                        order_type=order_type,
+                        old_sl_data=old_sl_data,
+                        failure_reason=f"기존 SL 주문 취소 중 예외 발생: {str(e)}",
+                        metadata={
+                            "component": "order.update_stop_loss",
+                            "exception_type": type(e).__name__
+                        }
+                    )
     
                 # 6. Create new SL order using StopLossService
                 try:
@@ -3044,6 +3353,15 @@ async def cancel_all_orders(
             return response_data
         except Exception as e:
             logger.error(f"Backend request failed, falling back to local: {e}")
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="BackendRequestError",
+                user_id=user_id,
+                severity="WARNING",
+                symbol=symbol,
+                metadata={"component": "order.cancel_all_orders", "fallback": "local"}
+            )
 
     # Side 파라미터 정규화
     side_str: Optional[str] = None
@@ -3089,6 +3407,15 @@ async def cancel_all_orders(
                 logger.info(f"Successfully cancelled algo orders for {symbol}")
             except Exception as e:
                 logger.error(f"Failed to cancel algo orders: {str(e)}")
+                # errordb 로깅
+                log_error_to_db(
+                    error=e,
+                    error_type="CancelAlgoOrdersError",
+                    user_id=okx_uid,
+                    severity="ERROR",
+                    symbol=symbol,
+                    metadata={"component": "order.cancel_all_orders", "pos_side": pos_side_for_algo}
+                )
                 # Continue execution even if algo order cancellation fails
 
             # 3. Cancel regular orders using OrderService
@@ -3140,6 +3467,15 @@ async def cancel_all_orders(
 
                 except Exception as e:
                     logger.error(f"Failed to cancel regular orders: {str(e)}")
+                    # errordb 로깅
+                    log_error_to_db(
+                        error=e,
+                        error_type="RegularOrdersCancelError",
+                        user_id=okx_uid,
+                        severity="ERROR",
+                        symbol=symbol,
+                        metadata={"component": "order.cancel_all_orders", "side": side, "order_count": len(open_orders) if open_orders else 0}
+                    )
                     raise
 
             return CancelOrdersResponse(
@@ -3153,6 +3489,16 @@ async def cancel_all_orders(
             raise
         except Exception as e:
             logger.error(f"Failed to cancel all orders: {str(e)}", exc_info=True)
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="CancelAllOrdersError",
+                user_id=okx_uid,
+                severity="CRITICAL",
+                symbol=symbol,
+                side=side,
+                metadata={"component": "order.cancel_all_orders"}
+            )
             raise HTTPException(
                 status_code=500,
                 detail=CancelOrdersResponse(
@@ -3380,6 +3726,16 @@ async def cancel_algo_orders(
             "message": f"{symbol} 심볼에 대한 모든 알고리즘 주문 취소 완료"
         }
     except Exception as e:
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="CancelAlgoOrdersEndpointError",
+            user_id=user_id,
+            severity="ERROR",
+            symbol=symbol,
+            side=side,
+            metadata={"component": "order.cancel_algo_orders", "algo_type": algo_type}
+        )
         raise HTTPException(status_code=500, detail=str(e))
     
     
@@ -3700,6 +4056,15 @@ async def get_algo_order_info(
             return response_data
         except Exception as e:
             logger.error(f"Backend request failed, falling back to local: {e}")
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="BackendRequestError",
+                user_id=user_id,
+                severity="WARNING",
+                symbol=symbol,
+                metadata={"component": "order.get_algo_order_info", "order_id": order_id, "algo_type": algo_type, "fallback": "local"}
+            )
     
     # 로컬 처리
     async with get_exchange_context(user_id) as exchange:
@@ -3726,6 +4091,15 @@ async def get_algo_order_info(
                     if "51603" in str(e) or "Order does not exist" in str(e):
                         pending_resp = {"code": "0", "data": []}
                     else:
+                        # errordb 로깅
+                        log_error_to_db(
+                            error=e,
+                            error_type="PendingAlgoOrderFetchError",
+                            user_id=user_id,
+                            severity="ERROR",
+                            symbol=symbol,
+                            metadata={"component": "order.get_algo_order_info", "order_id": order_id, "algo_type": algo_type}
+                        )
                         raise e
 
                 if pending_resp.get("code") == "0":
@@ -3756,6 +4130,15 @@ async def get_algo_order_info(
                     if "51603" in str(e) or "Order does not exist" in str(e):
                         history_resp = {"code": "0", "data": []}
                     else:
+                        # errordb 로깅
+                        log_error_to_db(
+                            error=e,
+                            error_type="HistoryAlgoOrderFetchError",
+                            user_id=user_id,
+                            severity="ERROR",
+                            symbol=symbol,
+                            metadata={"component": "order.get_algo_order_info", "order_id": order_id, "algo_type": algo_type}
+                        )
                         raise e
 
                 if history_resp.get("code") == "0":
@@ -3790,6 +4173,15 @@ async def get_algo_order_info(
                 
             except Exception as e:
                 logger.error(f"알고리즘 주문 조회 중 예외 발생: {str(e)}")
+                # errordb 로깅
+                log_error_to_db(
+                    error=e,
+                    error_type="AlgoOrderQueryInnerError",
+                    user_id=user_id,
+                    severity="WARNING",
+                    symbol=symbol,
+                    metadata={"component": "order.get_algo_order_info", "order_id": order_id, "algo_type": algo_type}
+                )
                 return {
                     "status": "not_found",
                     "info": {},
@@ -3799,6 +4191,15 @@ async def get_algo_order_info(
                     
         except Exception as e:
             logger.error(f"알고리즘 주문 조회 실패: {str(e)}", exc_info=True)
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="AlgoOrderQueryOuterError",
+                user_id=user_id,
+                severity="ERROR",
+                symbol=symbol,
+                metadata={"component": "order.get_algo_order_info", "order_id": order_id, "algo_type": algo_type}
+            )
             return {
                 "status": "not_found",
                 "info": {},

@@ -13,6 +13,7 @@ from HYPERRSI.src.api.routes.order.order import cancel_algo_orders, close_positi
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.error_handler import log_error
 from HYPERRSI.src.core.logger import log_dual_side_debug
+from HYPERRSI.src.utils.error_logger import log_error_to_db
 from HYPERRSI.src.services.redis_service import RedisService
 from shared.database.redis_helper import get_redis_client
 from HYPERRSI.src.trading.error_message import map_exchange_error
@@ -26,6 +27,10 @@ from shared.utils.redis_type_converter import (
 )
 from shared.utils.task_tracker import TaskTracker
 
+# Session/State management services (PostgreSQL SSOT)
+from HYPERRSI.src.services.state_change_logger import get_state_change_logger
+from HYPERRSI.src.core.models.state_change import ChangeType, TriggeredBy
+
 logger = get_logger(__name__)
 redis_service = RedisService()
 
@@ -33,23 +38,136 @@ redis_service = RedisService()
 task_tracker = TaskTracker(name="dual-side-entry")
 
 
-async def set_default_dual_side_entry_settings(user_id: str) -> bool:
+async def set_default_dual_side_entry_settings(user_id: str, symbol: str | None = None) -> bool:
     """
     양방향 진입 설정값들을 기본값으로 설정
+
+    멀티심볼 지원:
+    - symbol이 제공되면 심볼별 설정 저장: user:{user_id}:symbol:{symbol}:dual_side
+    - symbol이 None이면 글로벌 설정 저장 (하위 호환): user:{user_id}:dual_side
+
+    Args:
+        user_id: 사용자 ID (OKX UID)
+        symbol: 심볼 (옵션, 멀티심볼 모드에서 사용)
+
+    Returns:
+        bool: 성공 여부
     """
     try:
         redis_client = await get_redis_client()
-        settings = await get_user_dual_side_settings(user_id)
+        settings = await get_user_dual_side_settings(user_id, symbol)
         if not settings:
             from shared.constants.default_settings import DEFAULT_DUAL_SIDE_ENTRY_SETTINGS
 
             # prepare_for_redis를 사용하여 안전하게 변환
             settings = prepare_for_redis(DEFAULT_DUAL_SIDE_ENTRY_SETTINGS)
-            await redis_client.hset(f"user:{user_id}:dual_side", mapping=settings)
+
+            # 심볼별 또는 글로벌 키 결정
+            if symbol:
+                settings_key = f"user:{user_id}:symbol:{symbol}:dual_side"
+            else:
+                settings_key = f"user:{user_id}:dual_side"
+
+            await redis_client.hset(settings_key, mapping=settings)
     except Exception as e:
         logger.error(f"Failed to set default dual side entry settings: {str(e)}")
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="DualSideSettingsError",
+            user_id=user_id,
+            severity="WARNING",
+            metadata={"component": "dual_side_entry.set_default_dual_side_entry_settings", "symbol": symbol}
+        )
         return False
     return True
+
+
+async def save_user_dual_side_settings(user_id: str, symbol: str | None, settings: dict) -> bool:
+    """
+    사용자의 양방향 설정을 Redis에 저장
+
+    멀티심볼 지원:
+    - symbol이 제공되면 심볼별 설정 저장: user:{user_id}:symbol:{symbol}:dual_side
+    - symbol이 None이면 글로벌 설정 저장: user:{user_id}:dual_side
+
+    Args:
+        user_id: 사용자 ID (OKX UID)
+        symbol: 심볼 (옵션, 멀티심볼 모드에서 사용)
+        settings: 저장할 설정 딕셔너리
+
+    Returns:
+        bool: 성공 여부
+    """
+    try:
+        redis_client = await get_redis_client()
+
+        # 심볼별 또는 글로벌 키 결정
+        if symbol:
+            settings_key = f"user:{user_id}:symbol:{symbol}:dual_side"
+        else:
+            settings_key = f"user:{user_id}:dual_side"
+
+        # prepare_for_redis를 사용하여 안전하게 변환
+        settings_to_save = prepare_for_redis(settings)
+        await redis_client.hset(settings_key, mapping=settings_to_save)
+
+        logger.info(f"[{user_id}] dual_side 설정 저장 완료: {settings_key}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save dual side settings: {str(e)}")
+        log_error_to_db(
+            error=e,
+            error_type="DualSideSettingsSaveError",
+            user_id=user_id,
+            severity="WARNING",
+            symbol=symbol,
+            metadata={"component": "dual_side_entry.save_user_dual_side_settings"}
+        )
+        return False
+
+
+async def copy_global_to_symbol_dual_settings(user_id: str, symbol: str) -> bool:
+    """
+    글로벌 dual_side 설정을 심볼별 설정으로 복사
+
+    마이그레이션이나 새 심볼 추가 시 사용
+
+    Args:
+        user_id: 사용자 ID (OKX UID)
+        symbol: 대상 심볼
+
+    Returns:
+        bool: 성공 여부
+    """
+    try:
+        redis_client = await get_redis_client()
+
+        # 글로벌 설정 조회
+        global_key = f"user:{user_id}:dual_side"
+        global_settings = await redis_client.hgetall(global_key)
+
+        if not global_settings:
+            logger.info(f"[{user_id}] 글로벌 dual_side 설정 없음, 기본값 적용")
+            return await set_default_dual_side_entry_settings(user_id, symbol)
+
+        # 심볼별 키로 복사
+        symbol_key = f"user:{user_id}:symbol:{symbol}:dual_side"
+        await redis_client.hset(symbol_key, mapping=global_settings)
+
+        logger.info(f"[{user_id}] 글로벌 dual_side 설정을 {symbol}에 복사 완료")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to copy global dual side settings to symbol: {str(e)}")
+        log_error_to_db(
+            error=e,
+            error_type="DualSideSettingsCopyError",
+            user_id=user_id,
+            severity="WARNING",
+            symbol=symbol,
+            metadata={"component": "dual_side_entry.copy_global_to_symbol_dual_settings"}
+        )
+        return False
 
 
 async def get_last_dca_level(user_id: str, symbol: str, position_side: str) -> float | None:
@@ -73,7 +191,212 @@ async def get_last_dca_level(user_id: str, symbol: str, position_side: str) -> f
 
     except Exception as e:
         logger.error(f"Error getting last DCA level: {e}")
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="DCALevelFetchError",
+            user_id=user_id,
+            severity="WARNING",
+            symbol=symbol,
+            side=position_side,
+            metadata={"component": "dual_side_entry.get_last_dca_level"}
+        )
         return None
+
+
+async def get_effective_stop_price(
+    user_id: str,
+    symbol: str,
+    position_side: str,
+    static_sl_price: Optional[float] = None
+) -> Optional[float]:
+    """
+    메인 포지션의 유효 스탑 가격을 반환합니다.
+    트레일링 스탑이 활성화되어 있으면 트레일링 스탑 가격을 우선 반환합니다.
+
+    백테스트의 _get_main_stop_reference와 동일한 로직:
+    - trailing_stop이 활성화된 경우 → trailing_stop_price 반환
+    - 그 외 → static sl_price 반환
+
+    Args:
+        user_id: 사용자 ID
+        symbol: 거래 심볼
+        position_side: 포지션 방향 ("long" or "short")
+        static_sl_price: 기본 SL 가격 (트레일링 스탑이 비활성화일 때 사용)
+
+    Returns:
+        유효 스탑 가격 (trailing stop price 우선, 없으면 static sl_price)
+    """
+    try:
+        redis = await get_redis_client()
+
+        # 트레일링 스탑 키 확인
+        trailing_key = f"trailing:user:{user_id}:{symbol}:{position_side}"
+        trailing_data = await redis.hgetall(trailing_key)
+
+        if trailing_data:
+            # bytes to str 변환
+            if isinstance(trailing_data, dict):
+                trailing_data = {
+                    (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
+                    for k, v in trailing_data.items()
+                }
+
+            # 트레일링 스탑이 활성화되어 있는지 확인
+            is_active = str(trailing_data.get("active", "false")).lower() == "true"
+
+            if is_active:
+                trailing_stop_price = trailing_data.get("trailing_stop_price")
+                if trailing_stop_price:
+                    try:
+                        return float(trailing_stop_price)
+                    except (ValueError, TypeError):
+                        pass
+
+        # 트레일링 스탑이 비활성화이거나 없으면 기본 SL 반환
+        return static_sl_price
+
+    except Exception as e:
+        logger.error(f"[get_effective_stop_price] Error: {str(e)}")
+        # 오류 발생 시 기본 SL 반환
+        return static_sl_price
+
+
+async def close_hedge_on_main_exit(
+    user_id: str,
+    symbol: str,
+    main_position_side: str,
+    exit_reason: str = "main_sl"
+) -> bool:
+    """
+    메인 포지션이 종료될 때 헷지 포지션도 함께 종료합니다.
+    tp_trigger_type이 "existing_position"인 경우에만 동작합니다.
+
+    Args:
+        user_id: 사용자 ID
+        symbol: 거래 심볼
+        main_position_side: 메인 포지션 방향 ("long" or "short")
+        exit_reason: 종료 사유 ("main_sl", "trailing_stop", "break_even_sl" 등)
+
+    Returns:
+        bool: 헷지 포지션이 종료되었으면 True
+    """
+    try:
+        # 사용자의 양방향 설정 가져오기 (심볼별 설정 지원)
+        dual_side_settings = await get_user_dual_side_settings(user_id, symbol)
+
+        # use_dual_side_entry가 비활성화면 스킵
+        if not dual_side_settings.get('use_dual_side_entry', False):
+            return False
+
+        # tp_trigger_type이 existing_position인지 확인
+        tp_trigger_type = dual_side_settings.get('dual_side_entry_tp_trigger_type', 'do_not_close')
+
+        if tp_trigger_type != "existing_position":
+            logger.debug(f"[close_hedge_on_main_exit] tp_trigger_type이 existing_position이 아님: {tp_trigger_type}")
+            return False
+
+        # 헷지 포지션 방향 (메인의 반대)
+        hedge_side = "short" if main_position_side == "long" else "long"
+
+        # 헷지 포지션 존재 여부 확인
+        redis = await get_redis_client()
+        hedge_position_key = f"user:{user_id}:position:{symbol}:{hedge_side}"
+        hedge_position = await redis.hgetall(hedge_position_key)
+
+        if not hedge_position:
+            logger.debug(f"[close_hedge_on_main_exit] 헷지 포지션 없음: {user_id}:{symbol}:{hedge_side}")
+            return False
+
+        # bytes to str 변환
+        if isinstance(hedge_position, dict):
+            hedge_position = {
+                (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
+                for k, v in hedge_position.items()
+            }
+
+        # 포지션 사이즈 확인
+        hedge_size = float(hedge_position.get("size", 0) or 0)
+        if hedge_size <= 0:
+            logger.debug(f"[close_hedge_on_main_exit] 헷지 포지션 사이즈 0: {user_id}:{symbol}:{hedge_side}")
+            return False
+
+        # 헷지 포지션 종료
+        from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
+        from HYPERRSI.src.api.routes.order.order import close_position
+
+        close_request = ClosePositionRequest(
+            close_type="market",
+            price=0,  # 시장가
+            close_percent=100
+        )
+
+        await close_position(
+            symbol=symbol,
+            close_request=close_request,
+            user_id=user_id,
+            side=hedge_side
+        )
+
+        # 텔레그램 알림
+        exit_reason_text = {
+            "main_sl": "메인 SL 체결",
+            "trailing_stop": "트레일링 스탑",
+            "break_even_sl": "손익분기 SL"
+        }.get(exit_reason, exit_reason)
+
+        await send_telegram_message(
+            f"✅ 양방향 포지션 연동 종료\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"• 종료 사유: {exit_reason_text}\n"
+            f"• 메인 방향: {main_position_side.upper()}\n"
+            f"• 헷지 방향: {hedge_side.upper()}\n"
+            f"• TP 설정: existing_position\n"
+            f"━━━━━━━━━━━━━━━━",
+            user_id
+        )
+
+        logger.info(f"[close_hedge_on_main_exit] 헷지 포지션 종료 완료: {user_id}:{symbol}:{hedge_side} (사유: {exit_reason})")
+
+        # PostgreSQL 상태 변경 로깅 - 헷지 포지션 종료 (main_exit)
+        try:
+            state_change_logger = get_state_change_logger()
+            await state_change_logger.log_change(
+                okx_uid=user_id,
+                symbol=symbol,
+                change_type=ChangeType.HEDGE_CLOSED,
+                new_state={
+                    'hedge_side': hedge_side,
+                    'hedge_size': float(hedge_size),
+                    'exit_reason': exit_reason,
+                    'main_position_side': main_position_side,
+                    'tp_trigger_type': tp_trigger_type
+                },
+                triggered_by=TriggeredBy.TP_SL,
+                trigger_source='dual_side_entry.close_hedge_on_main_exit',
+                extra_data={
+                    'exit_reason_text': exit_reason_text
+                }
+            )
+        except Exception as log_err:
+            logger.warning(f"Failed to log hedge closed (main_exit) state change: {log_err}")
+
+        return True
+
+    except Exception as e:
+        logger.error(f"[close_hedge_on_main_exit] Error: {str(e)}")
+        traceback.print_exc()
+        log_error_to_db(
+            error=e,
+            error_type="HedgeCloseOnMainExitError",
+            user_id=user_id,
+            severity="ERROR",
+            symbol=symbol,
+            side=main_position_side,
+            metadata={"component": "dual_side_entry.close_hedge_on_main_exit", "exit_reason": exit_reason}
+        )
+        return False
+
 
 def validate_dual_side_settings(settings: dict) -> bool:
     """
@@ -99,20 +422,44 @@ def validate_dual_side_settings(settings: dict) -> bool:
             
     return True
 
-async def get_user_dual_side_settings(user_id: str) -> dict:
+async def get_user_dual_side_settings(user_id: str, symbol: str | None = None) -> dict:
     """
     사용자의 양방향 설정을 Redis에서 가져옴
+
+    멀티심볼 지원:
+    - symbol이 제공되면 심볼별 설정 조회: user:{user_id}:symbol:{symbol}:dual_side
+    - symbol이 None이면 글로벌 설정 조회 (하위 호환): user:{user_id}:dual_side
+    - 심볼별 설정이 없으면 글로벌 설정을 fallback으로 사용
+
+    Args:
+        user_id: 사용자 ID (OKX UID)
+        symbol: 심볼 (옵션, 멀티심볼 모드에서 사용)
+
+    Returns:
+        dict: 양방향 설정
     """
     redis_client = await get_redis_client()
-    settings_key = f"user:{user_id}:dual_side"
-    raw_settings = await redis_client.hgetall(settings_key)
-    
+
+    # 심볼별 설정 키와 글로벌 설정 키
+    symbol_settings_key = f"user:{user_id}:symbol:{symbol}:dual_side" if symbol else None
+    global_settings_key = f"user:{user_id}:dual_side"
+
+    raw_settings = None
+
+    # 1. 심볼이 제공된 경우 심볼별 설정 먼저 조회
+    if symbol_settings_key:
+        raw_settings = await redis_client.hgetall(symbol_settings_key)
+
+    # 2. 심볼별 설정이 없으면 글로벌 설정 fallback
+    if not raw_settings:
+        raw_settings = await redis_client.hgetall(global_settings_key)
+
     if not raw_settings:
         return {}
-    
+
     # parse_from_redis를 사용하여 타입 변환
     settings = parse_from_redis(raw_settings, DUAL_SIDE_SETTINGS_SCHEMA)
-    
+
     return settings
 
 
@@ -228,14 +575,23 @@ async def manage_dual_side_entry(
             level='ERROR',
             exception=e
         )
-        
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="PositionModeCheckError",
+            user_id=user_id,
+            severity="ERROR",
+            symbol=symbol,
+            metadata={"component": "dual_side_entry.manage_dual_side_entry"}
+        )
         logger.error(f"[{user_id}] 포지션 모드 조회 실패: {str(e)}")
         is_hedge_mode = False
     #print(f"is_hedge_mode: {is_hedge_mode}")
     try:
-        dual_side_settings = await get_user_dual_side_settings(user_id)
+        # 심볼별 양방향 설정 조회 (멀티심볼 지원)
+        dual_side_settings = await get_user_dual_side_settings(user_id, symbol)
         #print(f"dual side settings: {dual_side_settings}")
-        
+
         log_dual_side_debug(
             user_id=user_id,
             symbol=symbol,
@@ -244,7 +600,7 @@ async def manage_dual_side_entry(
             level='DEBUG',
             dual_side_settings=dual_side_settings
         )
-        
+
         dual_side_enabled = dual_side_settings.get('use_dual_side_entry', False)
         #asyncio.create_task(send_telegram_message(f"[{user_id}] dual_side_enabled: {dual_side_enabled}", user_id, debug=True))
         if not dual_side_enabled:
@@ -278,6 +634,16 @@ async def manage_dual_side_entry(
                 dca_order_count = 1
         except Exception as e:
             logger.error(f"dca_order_count 조회 실패: {str(e)}")
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="DCACountFetchError",
+                user_id=user_id,
+                severity="WARNING",
+                symbol=symbol,
+                side=main_position_side,
+                metadata={"component": "dual_side_entry.manage_dual_side_entry"}
+            )
             dca_order_count = 1
 
         dca_order_count = int(dca_order_count)
@@ -399,6 +765,16 @@ async def manage_dual_side_entry(
                     )
                 except Exception as e:
                     logger.error(f"헷지 포지션 종료 로깅 실패: {str(e)}")
+                    # errordb 로깅
+                    log_error_to_db(
+                        error=e,
+                        error_type="HedgeExitLogError",
+                        user_id=user_id,
+                        severity="WARNING",
+                        symbol=symbol,
+                        side=opposite_side,
+                        metadata={"component": "dual_side_entry.manage_dual_side_entry", "action": "log_order"}
+                    )
                                
                 message = f"✅양방향 포지션 종료\n"
                 message += f"━━━━━━━━━━━━━━━━\n"
@@ -408,13 +784,46 @@ async def manage_dual_side_entry(
                 message += f"━━━━━━━━━━━━━━━━\n"
                 
                 await send_telegram_message(message, user_id)
-                
+
                 dual_side_key = f"user:{user_id}:{symbol}:dual_side_position"
-                
+
                 await redis_client.delete(dual_side_key)
+
+                # PostgreSQL 상태 변경 로깅 - 헷지 포지션 종료 (last_dca)
+                try:
+                    state_change_logger = get_state_change_logger()
+                    await state_change_logger.log_change(
+                        okx_uid=user_id,
+                        symbol=symbol,
+                        change_type=ChangeType.HEDGE_CLOSED,
+                        new_state={
+                            'hedge_side': opposite_side,
+                            'closed_size': float(closed_position_qty),
+                            'exit_reason': 'last_dca_close',
+                            'main_position_side': main_position_side,
+                            'dca_order_count': dca_order_count,
+                            'pyramiding_limit': pyramiding_limit
+                        },
+                        price=current_price,
+                        triggered_by=TriggeredBy.SIGNAL,
+                        trigger_source='dual_side_entry.manage_dual_side_entry.last_dca'
+                    )
+                except Exception as log_err:
+                    logger.warning(f"Failed to log hedge closed (last_dca) state change: {log_err}")
+
                 return
             except Exception as e:
                 logger.error(f"헷지 포지션 종료 실패: {str(e)}")
+                # errordb 로깅
+                log_error_to_db(
+                    error=e,
+                    error_type="HedgePositionCloseError",
+                    user_id=user_id,
+                    severity="ERROR",
+                    symbol=symbol,
+                    side=opposite_side,
+                    metadata={"component": "dual_side_entry.manage_dual_side_entry", "reason": "last_dca_close"}
+                )
                 traceback.print_exc()
                 await send_telegram_message(f"헷지 포지션 종료 실패: {str(e)}", user_id, debug=True)
             
@@ -479,6 +888,15 @@ async def manage_dual_side_entry(
                         return
                 except Exception as e:
                     logger.error(f"헷지 포지션 재계산 실패: {str(e)}")
+                    # errordb 로깅
+                    log_error_to_db(
+                        error=e,
+                        error_type="HedgeRecalculationError",
+                        user_id=user_id,
+                        severity="ERROR",
+                        symbol=symbol,
+                        metadata={"component": "dual_side_entry.manage_dual_side_entry", "main_position_side": main_position_side}
+                    )
                     traceback.print_exc()
                     await send_telegram_message(f"헷지 포지션 재계산 실패. 확인 필수: {str(e)}", user_id, debug=True)
             #asyncio.create_task(send_telegram_message(
@@ -539,8 +957,18 @@ async def manage_dual_side_entry(
                         entry_result=entry_result.__dict__ if hasattr(entry_result, '__dict__') else entry_result
                     )
                 except Exception as e:
-                    logger.error(f"헷지 포지션 오픈 로깅 실패: {str(e)}")   
-                
+                    logger.error(f"헷지 포지션 오픈 로깅 실패: {str(e)}")
+                    # errordb 로깅
+                    log_error_to_db(
+                        error=e,
+                        error_type="HedgeOpenLogError",
+                        user_id=user_id,
+                        severity="WARNING",
+                        symbol=symbol,
+                        side=opposite_side,
+                        metadata={"component": "dual_side_entry.manage_dual_side_entry", "action": "log_hedge_open_success"}
+                    )
+
                 # 양방향 진입 로깅
                 try:
                     log_order(
@@ -560,7 +988,17 @@ async def manage_dual_side_entry(
                     )
                 except Exception as e:
                     logger.error(f"헷지 포지션 진입 로깅 실패: {str(e)}")
-                
+                    # errordb 로깅
+                    log_error_to_db(
+                        error=e,
+                        error_type="HedgeEntryLogError",
+                        user_id=user_id,
+                        severity="WARNING",
+                        symbol=symbol,
+                        side=opposite_side,
+                        metadata={"component": "dual_side_entry.manage_dual_side_entry", "action": "log_order"}
+                    )
+
             except Exception as e:
                 log_dual_side_debug(
                     user_id=user_id,
@@ -578,7 +1016,16 @@ async def manage_dual_side_entry(
                         'hedge_sl_price': hedge_sl_price
                     }
                 )
-                
+                # errordb 로깅
+                log_error_to_db(
+                    error=e,
+                    error_type="HedgePositionOpenError",
+                    user_id=user_id,
+                    severity="ERROR",
+                    symbol=symbol,
+                    side=opposite_side,
+                    metadata={"component": "dual_side_entry.manage_dual_side_entry", "size": new_position_size}
+                )
                 logger.error(f"[manage_dual_side_entry] 헷지 포지션 오픈 실패: {str(e)}")
                 return
             logger.info(f"[manage_dual_side_entry] 헷지 포지션 오픈 결과: {entry_result}")
@@ -601,8 +1048,9 @@ async def manage_dual_side_entry(
                 f"• 수량: {float(new_entering_position):,.4f}\n\n"
         
             )
-            
-            dual_side_settings = await get_user_dual_side_settings(user_id)
+
+            # 심볼별 양방향 설정 조회 (멀티심볼 지원)
+            dual_side_settings = await get_user_dual_side_settings(user_id, symbol)
             use_dual_sl = dual_side_settings.get('use_dual_sl', False)
             if hedge_sl_price or hedge_tp_price:
                 msg += f"🎯 손익 설정\n"
@@ -625,6 +1073,36 @@ async def manage_dual_side_entry(
             
             # dual_side 진입 카운트 증가
             await redis_client.incr(dual_side_count_key)
+
+            # PostgreSQL 상태 변경 로깅 - 헷지 포지션 오픈
+            try:
+                state_change_logger = get_state_change_logger()
+                await state_change_logger.log_change(
+                    okx_uid=user_id,
+                    symbol=symbol,
+                    change_type=ChangeType.HEDGE_OPENED,
+                    new_state={
+                        'hedge_side': opposite_side,
+                        'hedge_size': float(new_position_size),
+                        'hedge_entry_price': float(current_price),
+                        'hedge_sl_price': float(hedge_sl_price) if hedge_sl_price else None,
+                        'hedge_tp_price': float(hedge_tp_price) if hedge_tp_price else None,
+                        'dual_side_count': dual_side_count + 1,
+                        'main_position_side': main_position_side,
+                        'dca_order_count': dca_order_count,
+                        'close_on_last_dca': close_on_last_dca
+                    },
+                    price=current_price,
+                    triggered_by=TriggeredBy.SIGNAL,
+                    trigger_source='dual_side_entry.manage_dual_side_entry',
+                    extra_data={
+                        'ratio_type': ratio_type,
+                        'ratio_value': dual_side_entry_ratio_value,
+                        'trigger_index': trigger_index
+                    }
+                )
+            except Exception as log_err:
+                logger.warning(f"Failed to log hedge opened state change: {log_err}")
             
             if hedge_sl_price:
                 await redis_client.hset(dual_side_key, 'stop_loss', str(hedge_sl_price))
@@ -652,12 +1130,22 @@ async def manage_dual_side_entry(
                 )
             except Exception as e:
                 logger.error(f"헷지 포지션 진입 로깅 실패: {str(e)}")
+                # errordb 로깅
+                log_error_to_db(
+                    error=e,
+                    error_type="HedgeEntryLogError2",
+                    user_id=user_id,
+                    severity="WARNING",
+                    symbol=symbol,
+                    side=opposite_side,
+                    metadata={"component": "dual_side_entry.manage_dual_side_entry", "action": "log_order_dca"}
+                )
 
         except Exception as e:
             error_msg = map_exchange_error(e)
             traceback.print_exc()
             logger.error(f"[manage_dual_side_entry] 헷지 진입 실패: {str(e)}")
-            
+
             log_dual_side_debug(
                 user_id=user_id,
                 symbol=symbol,
@@ -667,7 +1155,17 @@ async def manage_dual_side_entry(
                 exception=e,
                 error_msg=error_msg
             )
-            
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="HedgeEntryProcessError",
+                user_id=user_id,
+                severity="ERROR",
+                symbol=symbol,
+                side=main_position_side,
+                metadata={"component": "dual_side_entry.manage_dual_side_entry", "error_msg": error_msg}
+            )
+
             #await send_telegram_message(
             #    f"⚠️ 헷지 진입 실패:\n"
             #    f"{error_msg}",
@@ -676,7 +1174,7 @@ async def manage_dual_side_entry(
             return
     except Exception as e:
         traceback.print_exc()
-        
+
         log_dual_side_debug(
             user_id=user_id,
             symbol=symbol,
@@ -688,7 +1186,21 @@ async def manage_dual_side_entry(
             dca_order_count=dca_order_count,
             current_price=current_price
         )
-        
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="DualSideEntryTopLevelError",
+            user_id=user_id,
+            severity="CRITICAL",
+            symbol=symbol,
+            side=main_position_side,
+            metadata={
+                "component": "dual_side_entry.manage_dual_side_entry",
+                "dca_order_count": dca_order_count,
+                "current_price": current_price
+            }
+        )
+
         await send_telegram_message(f"양방향 진입 실패: {str(e)}", user_id, debug=True)
         logger.error(f"[manage_dual_side_entry] 헷지 진입 실패: {str(e)}")
         return
@@ -822,7 +1334,12 @@ async def calculate_hedge_sl_tp(
                 level='INFO'
             )
         elif tp_trigger_type == "existing_position":
-            hedge_tp_price = sl_price
+            # 트레일링 스탑이 활성화된 경우 trailing stop price 우선 사용
+            # 백테스트의 _get_main_stop_reference와 동일한 로직
+            static_sl = float(sl_price) if sl_price else None
+            hedge_tp_price = await get_effective_stop_price(
+                user_id, symbol, main_position_side, static_sl
+            )
         elif tp_trigger_type == "last_dca_on_position":
             hedge_tp_price = await get_last_dca_level(user_id, symbol, opposite_side)
         else:
@@ -847,9 +1364,19 @@ async def calculate_hedge_sl_tp(
         )
 
         return (hedge_sl_price, hedge_tp_price)
-    except Exception as e:        
+    except Exception as e:
         traceback.print_exc()
         logger.error(f"[calculate_hedge_sl_tp] Error: {str(e)}")
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="HedgeSLTPCalculationError",
+            user_id=user_id,
+            severity="ERROR",
+            symbol=symbol,
+            side=main_position_side,
+            metadata={"component": "dual_side_entry.calculate_hedge_sl_tp"}
+        )
         return (None, None)
 
 
@@ -881,7 +1408,7 @@ async def update_hedge_sl_tp_after_dca(
     try:
         
         await cancel_algo_orders(symbol = symbol, user_id = user_id, side = hedge_cancel_side, algo_type="trigger")
-    except Exception as e:  
+    except Exception as e:
         log_dual_side_debug(
             user_id=user_id,
             symbol=symbol,
@@ -892,17 +1419,27 @@ async def update_hedge_sl_tp_after_dca(
             hedge_side=hedge_side,
             hedge_cancel_side=hedge_cancel_side
         )
-        
+
         log_error(
-        error=e,
-        user_id=user_id,
-        additional_info={
-            'action': 'cancel_algo_orders',
-            'symbol': symbol,
-            'side': hedge_cancel_side,
-            'position_type': 'hedge'
-        }
-    )
+            error=e,
+            user_id=user_id,
+            additional_info={
+                'action': 'cancel_algo_orders',
+                'symbol': symbol,
+                'side': hedge_cancel_side,
+                'position_type': 'hedge'
+            }
+        )
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="HedgeAlgoOrderCancelError",
+            user_id=user_id,
+            severity="WARNING",
+            symbol=symbol,
+            side=hedge_cancel_side,
+            metadata={"component": "dual_side_entry.update_hedge_sl_tp_after_dca", "hedge_side": hedge_side}
+        )
         logger.warning(f"[{user_id}] 알고주문 취소 실패: {e}")
 
     redis_client = await get_redis_client()
@@ -964,16 +1501,24 @@ async def update_hedge_sl_tp_after_dca(
             
             logger.info(f"새 SL 주문 생성 완료: {sl_order_id} (triggerPx={hedge_sl_price})")
         except Exception as e:
-
-            
             log_error(
-            error=e,
-            user_id=user_id,
-            additional_info={
-                'action': 'create_order',
-                'symbol': symbol,
+                error=e,
+                user_id=user_id,
+                additional_info={
+                    'action': 'create_order',
+                    'symbol': symbol,
                     'side': exit_side
                 }
+            )
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="HedgeSLOrderCreateError",
+                user_id=user_id,
+                severity="WARNING",
+                symbol=symbol,
+                side=exit_side,
+                metadata={"component": "dual_side_entry.update_hedge_sl_tp_after_dca", "hedge_sl_price": hedge_sl_price}
             )
             logger.warning(f"[{user_id}] SL 주문 생성 실패: {e}")
 
@@ -996,17 +1541,25 @@ async def update_hedge_sl_tp_after_dca(
             
             logger.info(f"새 TP 주문 생성 완료: {tp_order_id} (price={hedge_tp_price})")
         except Exception as e:
-
-            
             log_error(
-            error=e,
-            user_id=user_id,
-            additional_info={
-                'action': 'create_order',
-                'symbol': symbol,
-                'side': exit_side
-            }
-            )   
+                error=e,
+                user_id=user_id,
+                additional_info={
+                    'action': 'create_order',
+                    'symbol': symbol,
+                    'side': exit_side
+                }
+            )
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="HedgeTPOrderCreateError",
+                user_id=user_id,
+                severity="WARNING",
+                symbol=symbol,
+                side=exit_side,
+                metadata={"component": "dual_side_entry.update_hedge_sl_tp_after_dca", "hedge_tp_price": hedge_tp_price}
+            )
             logger.warning(f"[{user_id}] TP 주문 생성 실패: {e}")
 
     # (4) Redis 등에 새로운 SL/TP 주문 정보 저장
@@ -1060,10 +1613,10 @@ async def recalc_hedge_sl_tp(
             main_position=main_position,
             hedge_position=hedge_position
         )
-        
-        # 사용자의 양방향 설정 가져오기
-        dual_side_settings = await get_user_dual_side_settings(user_id)
-        
+
+        # 사용자의 양방향 설정 가져오기 (심볼별 설정 지원)
+        dual_side_settings = await get_user_dual_side_settings(user_id, symbol)
+
         # SL/TP 설정 방식 확인
         sl_trigger_type = dual_side_settings.get('dual_side_entry_sl_trigger_type', 'existing_position')
         tp_trigger_type = dual_side_settings.get('dual_side_entry_tp_trigger_type', 'existing_position')
@@ -1105,7 +1658,13 @@ async def recalc_hedge_sl_tp(
             hedge_tp_price = None
         elif tp_trigger_type == "existing_position":
             # 메인 포지션의 SL을 헷지 TP로 사용
-            hedge_tp_price = main_sl_price
+            # 트레일링 스탑이 활성화된 경우 trailing stop price 우선 사용
+            # 백테스트의 _get_main_stop_reference와 동일한 로직
+            main_position_side = "long" if hedge_side == "short" else "short"
+            static_sl = float(main_sl_price) if main_sl_price else None
+            hedge_tp_price = await get_effective_stop_price(
+                user_id, symbol, main_position_side, static_sl
+            )
         elif tp_trigger_type == "last_dca_on_position":
             # 마지막 DCA 레벨에 도달하면 종료 (TP 가격 계산 안함)
             if hedge_side is not None:
@@ -1139,6 +1698,15 @@ async def recalc_hedge_sl_tp(
     except Exception as e:
         logger.error(f"[recalc_hedge_sl_tp] 오류: {str(e)}")
         traceback.print_exc()
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="HedgeSLTPRecalcError",
+            user_id=user_id,
+            severity="ERROR",
+            symbol=symbol,
+            metadata={"component": "dual_side_entry.recalc_hedge_sl_tp"}
+        )
         return (None, None)
 
 

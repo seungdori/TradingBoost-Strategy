@@ -79,6 +79,15 @@ async def resolve_user_id_to_okx_uid(user_id: str) -> str:
                 logger.warning(f"OKX UID not found for telegram_id {user_id}, using original ID")
         except Exception as e:
             logger.warning(f"Failed to resolve telegram_id {user_id}: {e}")
+            # errordb 로깅 (WARNING 레벨)
+            from HYPERRSI.src.utils.error_logger import log_error_to_db
+            log_error_to_db(
+                error=e,
+                error_type="UserIdResolutionError",
+                user_id=user_id,
+                severity="WARNING",
+                metadata={"component": "dependencies.resolve_user_id_to_okx_uid"}
+            )
 
     return user_id
 
@@ -124,6 +133,15 @@ class ExchangeConnectionPool:
                 await client.close()
             except Exception as e:
                 logger.error(f"Error closing client: {e}")
+                # errordb 로깅
+                from HYPERRSI.src.utils.error_logger import log_error_to_db
+                log_error_to_db(
+                    error=e,
+                    error_type="ClientCloseError",
+                    user_id=user_id,
+                    severity="WARNING",
+                    metadata={"component": "ExchangeConnectionPool._remove_client"}
+                )
         
         
     async def get_client(self, user_id: str, retry_count=0) -> ccxt.okx:
@@ -160,10 +178,10 @@ class ExchangeConnectionPool:
             for client in list(pool['clients']):  # list()로 복사하여 안전한 순회
                 if client not in pool['in_use']:
                     try:
-                        # 타임아웃 적용하여 load_markets 호출
+                        # 타임아웃 적용하여 load_markets 호출 (네트워크 지연 대응)
                         await asyncio.wait_for(
                             client.load_markets(),
-                            timeout=5.0
+                            timeout=15.0
                         )
                         pool['in_use'].add(client)
 
@@ -176,6 +194,15 @@ class ExchangeConnectionPool:
                         return client
                     except (asyncio.TimeoutError, Exception) as e:
                         logger.warning(f"Client validation failed for user {user_id}: {e}")
+                        # errordb 로깅
+                        from HYPERRSI.src.utils.error_logger import log_error_to_db
+                        log_error_to_db(
+                            error=e,
+                            error_type="ClientValidationError",
+                            user_id=user_id,
+                            severity="WARNING",
+                            metadata={"component": "ExchangeConnectionPool.get_client"}
+                        )
                         await self._remove_client(user_id, client)
             # 새 클라이언트 생성
             if len(pool['clients']) < self.max_size:
@@ -187,14 +214,19 @@ class ExchangeConnectionPool:
                         'apiKey': api_keys.get('api_key'),
                         'secret': api_keys.get('api_secret'),
                         'password': api_keys.get('passphrase'),
-                        'options': {'defaultType': 'swap'},
                         'enableRateLimit': True,  # API 호출 제한 준수
+                        'timeout': 30000,  # 30초 타임아웃 (네트워크 지연 대응)
+                        'options': {
+                            'defaultType': 'swap',
+                            'adjustForTimeDifference': True,  # 서버 시간 차이 자동 조정
+                            'recvWindow': 10000,  # 요청 수신 윈도우 10초
+                        },
                     })
 
-                    # 초기 market 로드 (타임아웃 적용)
+                    # 초기 market 로드 (타임아웃 적용, 네트워크 지연 대응)
                     await asyncio.wait_for(
                         client.load_markets(),
-                        timeout=5.0
+                        timeout=15.0
                     )
 
                     pool['clients'].append(client)
@@ -217,6 +249,15 @@ class ExchangeConnectionPool:
                 except ccxt.AuthenticationError as e:
                     # API 키 인증 오류 (잘못된 키, 만료된 키, IP 화이트리스트 문제 등)
                     logger.error(f"Failed to create exchange client for user {user_id}: {e}")
+                    # errordb 로깅
+                    from HYPERRSI.src.utils.error_logger import log_error_to_db
+                    log_error_to_db(
+                        error=e,
+                        error_type="ExchangeAuthenticationError",
+                        user_id=user_id,
+                        severity="CRITICAL",
+                        metadata={"component": "ExchangeConnectionPool.get_client"}
+                    )
                     if HAS_METRICS:
                         pool_metrics['client_error'].labels(
                             user_id=user_id,
@@ -236,6 +277,15 @@ class ExchangeConnectionPool:
                     raise
                 except Exception as e:
                     logger.error(f"Failed to create exchange client for user {user_id}: {e}")
+                    # errordb 로깅
+                    from HYPERRSI.src.utils.error_logger import log_error_to_db
+                    log_error_to_db(
+                        error=e,
+                        error_type="ExchangeClientInitError",
+                        user_id=user_id,
+                        severity="CRITICAL",
+                        metadata={"component": "ExchangeConnectionPool.get_client"}
+                    )
                     if HAS_METRICS:
                         pool_metrics['client_error'].labels(
                             user_id=user_id,
@@ -254,6 +304,15 @@ class ExchangeConnectionPool:
                                 "Failed to close exchange client after error for user %s: %s",
                                 user_id,
                                 close_error,
+                            )
+                            # errordb 로깅
+                            from HYPERRSI.src.utils.error_logger import log_error_to_db
+                            log_error_to_db(
+                                error=close_error,
+                                error_type="ClientCleanupError",
+                                user_id=user_id,
+                                severity="WARNING",
+                                metadata={"component": "ExchangeConnectionPool.get_client.finally"}
                             )
 
             # 풀이 가득 찼다면 대기 후 재시도 (지수 백오프)
@@ -357,6 +416,15 @@ async def get_user_api_keys(user_id: str, raise_on_missing: bool = True) -> Opti
                         decrypted_keys[key_name] = decrypt_api_key(encrypted_value)
                     except Exception as e:
                         logger.warning(f"API 키 복호화 실패 ({key_name}): {e}, 평문 사용")
+                        # errordb 로깅
+                        from HYPERRSI.src.utils.error_logger import log_error_to_db
+                        log_error_to_db(
+                            error=e,
+                            error_type="APIKeyDecryptionError",
+                            user_id=resolved_user_id,
+                            severity="WARNING",
+                            metadata={"key_name": key_name, "component": "get_user_api_keys"}
+                        )
                         decrypted_keys[key_name] = encrypted_value
 
                 # Redis에도 캐싱 (향후 빠른 조회를 위해)
@@ -367,10 +435,28 @@ async def get_user_api_keys(user_id: str, raise_on_missing: bool = True) -> Opti
                     logger.debug(f"API 키 Redis 캐싱 완료: {resolved_user_id}")
                 except Exception as cache_error:
                     logger.warning(f"Redis 캐싱 실패: {cache_error}")
+                    # errordb 로깅 (WARNING 레벨)
+                    from HYPERRSI.src.utils.error_logger import log_error_to_db
+                    log_error_to_db(
+                        error=cache_error,
+                        error_type="RedisCachingError",
+                        user_id=resolved_user_id,
+                        severity="WARNING",
+                        metadata={"component": "get_user_api_keys"}
+                    )
 
                 return decrypted_keys
         except Exception as ts_error:
             logger.warning(f"TimescaleDB API 키 조회 실패: {ts_error}, Redis fallback 시도")
+            # errordb 로깅 (WARNING - fallback이 있으므로)
+            from HYPERRSI.src.utils.error_logger import log_error_to_db
+            log_error_to_db(
+                error=ts_error,
+                error_type="TimescaleDBLookupError",
+                user_id=resolved_user_id,
+                severity="WARNING",
+                metadata={"component": "get_user_api_keys", "fallback": "Redis"}
+            )
 
         # 2️⃣ Redis fallback (Cache Layer)
         redis_client = await get_redis_binary()
@@ -393,6 +479,15 @@ async def get_user_api_keys(user_id: str, raise_on_missing: bool = True) -> Opti
                 logger.debug(f"키 디코딩: {k} -> {key_str}, 값 디코딩: {v} -> {val_str}")
             except Exception as e:
                 logger.error(f"키 디코딩 오류: {k}, {v}, 오류: {str(e)}")
+                # errordb 로깅
+                from HYPERRSI.src.utils.error_logger import log_error_to_db
+                log_error_to_db(
+                    error=e,
+                    error_type="KeyDecodingError",
+                    user_id=resolved_user_id,
+                    severity="ERROR",
+                    metadata={"component": "get_user_api_keys"}
+                )
 
         if not all(k in decoded_keys for k in ['api_key', 'api_secret', 'passphrase']):
             logger.error(f"API 키 불완전: {decoded_keys}")
@@ -407,6 +502,15 @@ async def get_user_api_keys(user_id: str, raise_on_missing: bool = True) -> Opti
         raise
     except Exception as e:
         logger.error(f"API 키 조회 중 예외 발생: {str(e)}, user_id: {user_id}")
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="APIKeyRetrievalError",
+            user_id=user_id,
+            severity="CRITICAL",
+            metadata={"component": "get_user_api_keys"}
+        )
         if raise_on_missing:
             raise HTTPException(status_code=500, detail=f"Failed to retrieve API keys: {str(e)}")
         return None
@@ -430,6 +534,15 @@ async def get_exchange_context(user_id: str):
                 await pool.release_client(resolved_user_id, exchange)
             except Exception as e:
                 logger.error(f"클라이언트 해제 중 오류 발생(context manager): {str(e)}, user_id: {user_id} (resolved: {resolved_user_id})")
+                # errordb 로깅
+                from HYPERRSI.src.utils.error_logger import log_error_to_db
+                log_error_to_db(
+                    error=e,
+                    error_type="ClientReleaseError",
+                    user_id=user_id,
+                    severity="WARNING",
+                    metadata={"resolved_user_id": resolved_user_id, "component": "get_exchange_context"}
+                )
                 # 오류는 기록하되 예외가 전파되지 않도록 합니다
                 pass
 
@@ -455,6 +568,15 @@ async def get_exchange_client(user_id: str) -> ccxt.okx:
         raise
     except Exception as e:
         logger.error(f"Failed to get exchange client: {e}")
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="GetExchangeClientError",
+            user_id=user_id,
+            severity="CRITICAL",
+            metadata={"component": "get_exchange_client"}
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 

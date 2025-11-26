@@ -19,6 +19,8 @@ from aiogram.exceptions import TelegramBadRequest
 from HYPERRSI.src.api.dependencies import get_user_api_keys
 from HYPERRSI.src.core.celery_task import celery_app
 from HYPERRSI.src.trading.trading_service import round_to_tick_size
+from HYPERRSI.src.services.multi_symbol_service import multi_symbol_service
+from shared.config import settings as app_settings
 from shared.database.redis_helper import get_redis_client
 
 router = Router()
@@ -303,7 +305,7 @@ async def cancel_stop_return(callback: types.CallbackQuery) -> None:
     
 @router.message(Command("trade"))
 async def trade_command(message: types.Message) -> None:
-    """트레이딩 제어 명령어"""
+    """트레이딩 제어 명령어 (멀티심볼 지원)"""
     redis = await get_redis_client()
     if message.from_user is None:
         return
@@ -329,45 +331,94 @@ async def trade_command(message: types.Message) -> None:
 
     # 텔레그램 ID를 OKX UID로 변환
     okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
-    
-    # 현재 트레이딩 상태 확인 (텔레그램 ID)
-    trading_status = await redis.get(f"user:{user_id}:trading:status")
-    
-    # 바이트 문자열을 디코딩
-    if isinstance(trading_status, bytes):
-        trading_status = trading_status.decode('utf-8')
-    
-    # OKX UID가 있는 경우 해당 상태도 확인
-    okx_trading_status = None
-    if okx_uid:
-        okx_keys = get_redis_keys(okx_uid)
-        okx_trading_status = await redis.get(okx_keys['status'])
-        
-        # 바이트 문자열을 디코딩
-        if isinstance(okx_trading_status, bytes):
-            okx_trading_status = okx_trading_status.decode('utf-8')
-    
-    # 둘 중 하나라도 running이면 실행 중으로 간주
-    is_trading = trading_status == "running" or (okx_uid and okx_trading_status == "running")
-    
-    ## 추가: stop_signal 확인
-    #stop_signal = None
-    #if okx_uid:
-    #    stop_signal = await redis_client.get(f"user:{okx_uid}:stop_signal")
-    #if not stop_signal:
-    #    stop_signal = await redis_client.get(f"user:{user_id}:stop_signal")
-    
-    # stop_signal이 있으면 실행 중이 아님
-    #if stop_signal:
-    #    is_trading = False
 
-    # OKX UID로 preference 조회
+    # === 멀티심볼 모드: 활성 심볼 목록 조회 ===
+    active_symbols_info = []
+    if app_settings.MULTI_SYMBOL_ENABLED and okx_uid:
+        active_symbols_info = await multi_symbol_service.list_symbols_with_info(okx_uid)
+
+    # 레거시 모드 호환: 활성 심볼이 없으면 기존 방식으로 확인
+    if not active_symbols_info:
+        trading_status = await redis.get(f"user:{user_id}:trading:status")
+        if isinstance(trading_status, bytes):
+            trading_status = trading_status.decode('utf-8')
+
+        okx_trading_status = None
+        if okx_uid:
+            okx_keys = get_redis_keys(okx_uid)
+            okx_trading_status = await redis.get(okx_keys['status'])
+            if isinstance(okx_trading_status, bytes):
+                okx_trading_status = okx_trading_status.decode('utf-8')
+
+        is_trading = trading_status == "running" or (okx_uid and okx_trading_status == "running")
+    else:
+        is_trading = len(active_symbols_info) > 0
+
+    # OKX UID로 preference 조회 (새 심볼 선택용)
     preference = await redis.hgetall(f"user:{okx_uid if okx_uid else user_id}:preferences")
     selected_symbol = preference.get("symbol")
     selected_timeframe = preference.get("timeframe")
-    
-    if is_trading:
-        # 실행 중인 경우의 키보드
+
+    # === 멀티심볼 모드: 활성 심볼이 있는 경우 ===
+    if active_symbols_info:
+        # 활성 심볼 목록 표시
+        status_text = "📊 트레이딩 현황 (멀티심볼 모드)\n"
+        status_text += "─────────────────────\n\n"
+
+        for idx, info in enumerate(active_symbols_info, 1):
+            symbol = info.get('symbol', 'N/A')
+            timeframe = info.get('timeframe', 'N/A')
+            status = info.get('status', 'unknown')
+            status_emoji = "🟢" if status == "running" else "🔴"
+            status_text += f"{idx}. {symbol}\n"
+            status_text += f"   {status_emoji} 상태: {status} | ⏱ {timeframe}\n\n"
+
+        max_symbols = app_settings.MAX_SYMBOLS_PER_USER
+        status_text += f"─────────────────────\n"
+        status_text += f"📈 활성: {len(active_symbols_info)}/{max_symbols}개\n\n"
+        status_text += "원하시는 작업을 선택해주세요:"
+
+        # 버튼 구성
+        buttons = []
+
+        # 새 심볼 추가 버튼 (최대 미만인 경우)
+        if len(active_symbols_info) < max_symbols:
+            buttons.append([
+                types.InlineKeyboardButton(
+                    text="➕ 새 심볼 추가",
+                    callback_data="multi_add_symbol"
+                )
+            ])
+
+        # 개별 심볼 중지 버튼
+        buttons.append([
+            types.InlineKeyboardButton(
+                text="⏹ 특정 심볼 중지",
+                callback_data="multi_stop_select"
+            )
+        ])
+
+        # 전체 중지 버튼
+        buttons.append([
+            types.InlineKeyboardButton(
+                text="⛔️ 전체 중지",
+                callback_data="multi_stop_all"
+            )
+        ])
+
+        # 취소 버튼
+        buttons.append([
+            types.InlineKeyboardButton(
+                text="❌ 닫기",
+                callback_data="cancel_stop_return"
+            )
+        ])
+
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+        await message.reply(status_text, reply_markup=keyboard)
+
+    elif is_trading:
+        # 레거시 모드: 실행 중인 경우
         keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
             [
                 types.InlineKeyboardButton(
@@ -381,7 +432,7 @@ async def trade_command(message: types.Message) -> None:
                 callback_data="cancel_stop_return"
             )]
         ])
-        
+
         await message.reply(
             f"트레이딩 제어\n"
             f"현재 상태: 🟢 실행 중\n"
@@ -390,23 +441,21 @@ async def trade_command(message: types.Message) -> None:
             f"원하시는 작업을 선택해주세요:",
             reply_markup=keyboard
         )
-        
+
     else:
-        # 종목 선택 키보드만 먼저 표시
+        # 종목 선택 키보드 (새 트레이딩 시작)
         symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]
-        
+
         symbol_buttons = []
         for symbol in symbols:
-            # 선택된 종목에 체크표시 추가
             text = f"{'✅ ' if selected_symbol and selected_symbol == symbol else ''}{symbol}"
             symbol_buttons.append([
-                types.InlineKeyboardButton( 
+                types.InlineKeyboardButton(
                     text=text,
                     callback_data=f"select_symbol_{symbol}"
                 )
             ])
-            
-        # 선택된 종목이 있는 경우 타임프레임 선택 추가
+
         if selected_symbol:
             timeframes = ['1m', '3m', '5m', '15m', '30m', '1H', '4H']
             timeframe_buttons = []
@@ -418,8 +467,7 @@ async def trade_command(message: types.Message) -> None:
                         callback_data=f"select_timeframe_{tf}"
                     )
                 ])
-            
-            # 시작 버튼 추가 (둘 다 선택된 경우만 활성화)
+
             start_button = [
                 types.InlineKeyboardButton(
                     text="✅ 트레이딩 시작",
@@ -427,7 +475,7 @@ async def trade_command(message: types.Message) -> None:
                     disabled=not (selected_symbol and selected_timeframe)
                 )
             ]
-            
+
             keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(text="⌛ 타임프레임 선택", callback_data="dummy", disabled=True)],
                 *timeframe_buttons,
@@ -437,7 +485,7 @@ async def trade_command(message: types.Message) -> None:
                     callback_data="trade_reset"
                 )]
             ])
-            
+
             status_text = (
                 f"📊 트레이딩 설정\n\n"
                 f"1️⃣ 거래할 종목을 선택해주세요:\n"
@@ -445,15 +493,14 @@ async def trade_command(message: types.Message) -> None:
                 f"2️⃣ 타임프레임을 선택해주세요:\n"
                 f"현재 선택: {selected_timeframe if selected_timeframe else '없음'}"
             )
-            
+
         else:
-            # 종목만 선택하는 초기 화면
             keyboard = types.InlineKeyboardMarkup(inline_keyboard=symbol_buttons)
             status_text = (
                 "📊 트레이딩 설정\n\n"
                 "1️⃣ 거래할 종목을 선택해주세요:"
             )
-        
+
         await message.reply(
             status_text,
             reply_markup=keyboard
@@ -759,24 +806,53 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
                 response.raise_for_status()
                 
             except httpx.HTTPStatusError as e:
-                # 이미 실행 중인 경우 (400 에러)는 성공으로 처리
+                # 이미 실행 중인 경우 (400/409 에러) 처리
                 error_detail = ""
+                error_response_data = {}
                 try:
-                    error_response = e.response.json()
-                    error_detail = error_response.get("detail", "")
-                except Exception as e:
-                    error_detail = str(e)
+                    error_response_data = e.response.json()
+                    error_detail = error_response_data.get("detail", "")
+                    # detail이 dict인 경우 (멀티심볼 에러)
+                    if isinstance(error_detail, dict):
+                        error_detail = error_detail.get("message", str(error_detail))
+                except Exception as parse_err:
+                    error_detail = str(parse_err)
+
+                # 이미 실행 중인 경우 (409 에러)
+                if e.response.status_code == 409 and "이미 트레이딩 태스크가 실행 중입니다" in error_detail:
+                    logger.info(f"Trading already running for user {user_id}, treating as success")
+                    await callback.answer("이미 트레이딩이 실행 중입니다!")
+                    return
+
+                # 멀티심볼 모드: 최대 심볼 수 도달 (409 에러)
+                if e.response.status_code == 409:
+                    detail_data = error_response_data.get("detail", {})
+                    if isinstance(detail_data, dict) and detail_data.get("error") == "MAX_SYMBOLS_REACHED":
+                        active_symbols = detail_data.get("active_symbols", [])
+                        max_symbols = 3  # 기본값
+                        logger.warning(f"[{user_id}] 최대 심볼 수 도달: {active_symbols}")
+
+                        # 사용자에게 친절한 메시지 표시
+                        active_list = "\n".join([f"  • {s}" for s in active_symbols])
+                        await safe_edit_message(
+                            callback.message,
+                            f"⚠️ 최대 심볼 수 도달\n"
+                            f"─────────────────────\n"
+                            f"최대 {max_symbols}개 심볼까지 동시 트레이딩이 가능합니다.\n\n"
+                            f"현재 활성 심볼:\n{active_list}\n\n"
+                            f"💡 기존 심볼 중 하나를 중지한 후 다시 시도해주세요."
+                        )
+                        await callback.answer("최대 심볼 수에 도달했습니다!")
+                        return
 
                 if e.response.status_code == 400 and "이미 트레이딩 태스크가 실행 중입니다" in error_detail:
                     logger.info(f"Trading already running for user {user_id}, treating as success")
-                    # 메시지가 이미 같은 내용인지 확인하기 위해 answer만 호출
-                    # edit_text를 시도하면 Telegram에서 "message is not modified" 에러 발생
                     await callback.answer("이미 트레이딩이 실행 중입니다!")
                     return
 
                 # 다른 오류는 기존 처리 유지
                 logger.error(f"Error starting trading task: {e}, detail: {error_detail}")
-                await callback.answer(f"트레이딩 시작 중 오류: {error_detail[:100]}")
+                await callback.answer(f"트레이딩 시작 중 오류: {str(error_detail)[:100]}")
                 # 오류 발생 시 상태를 stopped로 변경
                 await redis.set(f"user:{user_id}:trading:status", "stopped")
                 if okx_uid:
@@ -955,7 +1031,7 @@ async def handle_reset_callback(callback: types.CallbackQuery) -> None:
         
 @router.message(Command("status"))
 async def status_command(message: types.Message) -> None:
-    """현재 트레이딩 상태와 통계 표시"""
+    """현재 트레이딩 상태와 통계 표시 (멀티심볼 지원)"""
     redis = await get_redis_client()
     if message.from_user is None:
         return
@@ -974,233 +1050,245 @@ async def status_command(message: types.Message) -> None:
             print("접근 권한 없음. trading.py", okx_uid)
             await message.reply("⛔ 접근 권한이 없습니다.")
             return
-        
-        # 1. 기본 트레이딩 상태 확인 (텔레그램 ID)
-        trading_status = await redis.get(f"user:{user_id}:trading:status")
-        
-        # 바이트 문자열을 디코딩
-        if isinstance(trading_status, bytes):
-            trading_status = trading_status.decode('utf-8')
-        
-        # OKX UID가 있는 경우 해당 상태도 확인
-        okx_trading_status = None
-        if okx_uid:
-            okx_trading_status = await redis.get(f"user:{okx_uid}:trading:status")
-            
+
+        # === 멀티심볼 모드: 활성 심볼 목록 조회 ===
+        active_symbols_info = []
+        symbols_to_check = []
+
+        if app_settings.MULTI_SYMBOL_ENABLED and okx_uid:
+            active_symbols_info = await multi_symbol_service.list_symbols_with_info(okx_uid)
+            symbols_to_check = [info.get('symbol') for info in active_symbols_info if info.get('symbol')]
+
+        # 레거시 모드 또는 멀티심볼이 비어있는 경우
+        if not symbols_to_check:
+            # 1. 기본 트레이딩 상태 확인 (텔레그램 ID)
+            trading_status = await redis.get(f"user:{user_id}:trading:status")
+
             # 바이트 문자열을 디코딩
-            if isinstance(okx_trading_status, bytes):
-                okx_trading_status = okx_trading_status.decode('utf-8')
-        
-        # 둘 중 하나라도 running이면 실행 중으로 간주
-        status_emoji = "🟢" if (trading_status == "running" or (okx_uid and okx_trading_status == "running")) else "🔴"
+            if isinstance(trading_status, bytes):
+                trading_status = trading_status.decode('utf-8')
 
-        # 2. 현재 활성 심볼/타임프레임 조회 (OKX UID로 조회)
-        active_key = f"user:{okx_uid if okx_uid else user_id}:preferences"
-        preferences = await redis.hgetall(active_key)
-        symbol = preferences.get('symbol', '')
-        timeframe = preferences.get('timeframe', '')
+            # OKX UID가 있는 경우 해당 상태도 확인
+            okx_trading_status = None
+            if okx_uid:
+                okx_trading_status = await redis.get(f"user:{okx_uid}:trading:status")
 
-        # 3. 현재 포지션 정보 조회 (롱과 숏 모두)
-        position_info_list = []
-        if symbol:
-            # API 키 조회 (raise_on_missing=False로 설정하여 키가 없어도 None 반환)
-            api_keys = await get_user_api_keys(str(user_id), raise_on_missing=False)
-            if api_keys and all([api_keys.get('api_key'), api_keys.get('api_secret'), api_keys.get('passphrase')]):
-                # OrderWrapper 사용 (Exchange 객체 재사용 - CCXT 권장사항)
-                from HYPERRSI.src.trading.services.order_wrapper import OrderWrapper
-                client = OrderWrapper(str(user_id), api_keys)
+                # 바이트 문자열을 디코딩
+                if isinstance(okx_trading_status, bytes):
+                    okx_trading_status = okx_trading_status.decode('utf-8')
 
-                try:
-                    # load_markets()는 OrderWrapper 내부에서 자동으로 캐싱됨
-                    positions = await client.fetch_positions([symbol], params={'instType': 'SWAP'})
+            # 2. 현재 활성 심볼/타임프레임 조회 (OKX UID로 조회)
+            active_key = f"user:{okx_uid if okx_uid else user_id}:preferences"
+            preferences = await redis.hgetall(active_key)
+            symbol = preferences.get('symbol', '')
+            timeframe = preferences.get('timeframe', '')
 
-                    # contracts > 0인 포지션만 필터링
-                    active_positions = [pos for pos in positions if float(pos['contracts']) > 0]
-                    logger.info(f"Active positions: {active_positions}")
+            if symbol:
+                symbols_to_check = [symbol]
+                # 레거시 모드용 상태 이모지
+                status_emoji = "🟢" if (trading_status == "running" or (okx_uid and okx_trading_status == "running")) else "🔴"
+            else:
+                await message.reply(
+                    "📊 트레이딩 상태\n"
+                    "─────────────────────\n\n"
+                    "현재 활성화된 심볼이 없습니다.\n\n"
+                    "/trade 명령어로 트레이딩을 시작하세요."
+                )
+                return
+        else:
+            # 멀티심볼 모드: 전체적으로 running 상태 확인
+            any_running = any(info.get('status') == 'running' for info in active_symbols_info)
+            status_emoji = "🟢" if any_running else "🔴"
+            # 레거시 변수 초기화 (아래 코드 호환용)
+            symbol = None
+            timeframe = None
 
-                    for position in active_positions:
-                        # Redis에 포지션 정보 저장/업데이트
-                        position_key = f"user:{user_id}:position:{symbol}:{position['side']}"
-                        dca_count_key = f"user:{user_id}:position:{symbol}:{position['side']}:dca_count"
-                        
-                        # Redis 키 타입 확인 및 디버깅
-                        key_type = await redis.type(position_key)
-                        existing_data = {}
-                        # key_type이 문자열일 수도 있으므로 조건 수정
-                        if key_type in [b'hash', 'hash']:
-                            existing_data = await redis.hgetall(position_key)
-                            
-                            # bytes 타입 처리
-                            existing_data = {
-                                k.decode('utf-8') if isinstance(k, bytes) else k: 
-                                v.decode('utf-8') if isinstance(v, bytes) else v 
-                                for k, v in existing_data.items()
-                            }
-                        position_qty = float(position['contracts']) * float(position['contractSize'])
-                        # 새로운 포지션 정보 구성
-                        print(f"🔍 position: {position}")
-                        try:
+        # 3. 현재 포지션 정보 조회 (모든 활성 심볼)
+        all_positions_by_symbol = {}  # {symbol: [position_info_list]}
+
+        # API 키 조회 (raise_on_missing=False로 설정하여 키가 없어도 None 반환)
+        api_keys = await get_user_api_keys(str(user_id), raise_on_missing=False)
+        client = None
+
+        if api_keys and all([api_keys.get('api_key'), api_keys.get('api_secret'), api_keys.get('passphrase')]):
+            from HYPERRSI.src.trading.services.order_wrapper import OrderWrapper
+            client = OrderWrapper(str(user_id), api_keys)
+
+            try:
+                for check_symbol in symbols_to_check:
+                    position_info_list = []
+                    try:
+                        positions = await client.fetch_positions([check_symbol], params={'instType': 'SWAP'})
+                        active_positions = [pos for pos in positions if float(pos['contracts']) > 0]
+
+                        for position in active_positions:
+                            position_key = f"user:{user_id}:position:{check_symbol}:{position['side']}"
+                            dca_count_key = f"user:{user_id}:position:{check_symbol}:{position['side']}:dca_count"
+
+                            key_type = await redis.type(position_key)
+                            existing_data = {}
+                            if key_type in [b'hash', 'hash']:
+                                existing_data = await redis.hgetall(position_key)
+                                existing_data = {
+                                    k.decode('utf-8') if isinstance(k, bytes) else k:
+                                    v.decode('utf-8') if isinstance(v, bytes) else v
+                                    for k, v in existing_data.items()
+                                }
+
+                            position_qty = float(position['contracts']) * float(position['contractSize'])
+
+                            try:
                                 liquidation_price = float(position['liquidationPrice']) if position['liquidationPrice'] is not None else 0.0
-                                rounded_liq_price = await round_to_tick_size(liquidation_price, float(position['markPrice']), symbol)
-                        except Exception as e:
-                            logger.error(f"청산가 계산 오류: {str(e)}")
-                            liquidation_price = 0.0
-                            rounded_liq_price = 0.0
-                        position_data = {
-                            'side': position['side'],
-                            'size': str(float(position['contracts'])),
-                            'contracts': str(float(position['contracts'])),
-                            'contracts_amount': str(float(position['contracts'])),
-                            'position_qty': str(position_qty),
-                            'contractSize': str(float(position['contractSize'])),
-                            'entry_price': str(float(position['entryPrice'])),
-                            'mark_price': str(float(position['markPrice'])),
-                            'unrealized_pnl': str(float(position['unrealizedPnl'])),
-                            'leverage': str(float(position['leverage'])),
-                            'liquidation_price': str(rounded_liq_price),
-                            'margin_mode': position['marginMode'],
-                            'updated_at': str(int(time.time()))
-                        }
+                                rounded_liq_price = await round_to_tick_size(liquidation_price, float(position['markPrice']), check_symbol)
+                            except Exception as e:
+                                logger.error(f"청산가 계산 오류: {str(e)}")
+                                rounded_liq_price = 0.0
 
-                        # position_info 객체 생성 전에 existing_data 확인
-                        
-                        position_info = {
-                            'side': position['side'],
-                            'size': float(position['contracts']),
-                            'contracts': float(position['contracts']),
-                            'contracts_amount': float(position['contracts']),
-                            'position_qty': float(position_qty),
-                            'contractSize': float(position['contractSize']),
-                            'entry_price': float(position['entryPrice']),
-                            'mark_price': float(position['markPrice']),
-                            'unrealized_pnl': float(position['unrealizedPnl']),
-                            'leverage': float(position['leverage']),
-                            'liquidation_price': rounded_liq_price if rounded_liq_price else None,
-                            'margin_mode': position['marginMode'],
-                            'sl_price': existing_data.get('sl_price') if existing_data.get('sl_price') else None,
-                            'sl_order_id': existing_data.get('sl_order_id', ''),
-                            'tp_prices': existing_data.get('tp_data', '[]')
-                        }
-                        # closeOrderAlgo 정보 처리 추가
+                            position_info = {
+                                'symbol': check_symbol,
+                                'side': position['side'],
+                                'position_qty': float(position_qty),
+                                'entry_price': float(position['entryPrice']),
+                                'mark_price': float(position['markPrice']),
+                                'unrealized_pnl': float(position['unrealizedPnl']),
+                                'leverage': float(position['leverage']),
+                                'liquidation_price': rounded_liq_price if rounded_liq_price else None,
+                                'sl_price': existing_data.get('sl_price') if existing_data.get('sl_price') else None,
+                                'tp_prices': existing_data.get('tp_data', '[]'),
+                                'tp_state': existing_data.get('tp_state', '0'),
+                            }
 
-                        # TP/SL 정보 처리
-                        if key_type == b'hash':
-                            # TP 데이터 처리
-                            tp_data = existing_data.get('tp_data')
-                            if tp_data:
-                                if isinstance(tp_data, bytes):
-                                    tp_data = tp_data.decode('utf-8')
-                                try:
-                                    tp_info = json.loads(tp_data)
-                                    position_info['tp_info'] = tp_info
-                                except json.JSONDecodeError:
-                                    pass
-                                    
-                            # SL 데이터 처리
-                            sl_data = existing_data.get('sl_data')
-                            if sl_data:
-                                if isinstance(sl_data, bytes):
-                                    sl_data = sl_data.decode('utf-8')
-                                try:
-                                    sl_info = json.loads(sl_data)
-                                    position_info['sl_info'] = sl_info
-                                except json.JSONDecodeError:
-                                    pass
-                        
-                        position_info_list.append(position_info)
-                        
-                        # TP 상태 정보 가져오기
-                        position_key = f"user:{user_id}:position:{symbol}:{position['side']}"
-                        position_data = await redis.hgetall(position_key)
-                        if position_data:
-                            tp_state = position_data.get('tp_state', '0')
-                            # 문자열을 bool로 변환
-                            get_tp1 = position_data.get('get_tp1', 'false').lower() == 'true'
-                            get_tp2 = position_data.get('get_tp2', 'false').lower() == 'true'
-                            get_tp3 = position_data.get('get_tp3', 'false').lower() == 'true'
-                            dca_count = await redis.get(dca_count_key)
-                            print(f" 상태 출력 ! : {tp_state}, {get_tp1}, {get_tp2}, {get_tp3}, {dca_count}")
+                            position_info_list.append(position_info)
 
-                except ccxt.PermissionDenied as e:
-                    # IP 화이트리스트 오류 처리
-                    error_message = str(e)
-                    if "50110" in error_message or "IP whitelist" in error_message:
-                        await message.reply(
-                            "⚠️ API 접근 권한 오류\n"
-                            "─────────────────────\n"
-                            "귀하의 IP 주소가 OKX API 키의 화이트리스트에 등록되어 있지 않습니다.\n\n"
-                            "해결 방법:\n"
-                            "1. OKX 웹사이트에 로그인\n"
-                            "2. API 관리 페이지로 이동\n"
-                            "3. 해당 API 키의 IP 화이트리스트에 현재 IP 주소를 추가\n\n"
-                            f"상세 오류: {error_message}"
-                        )
-                    else:
-                        await message.reply(
-                            f"⚠️ API 접근 권한 오류\n"
-                            f"─────────────────────\n"
-                            f"{error_message}"
-                        )
-                    logger.error(f"PermissionDenied error for user {user_id}: {error_message}")
-                    return
+                    except Exception as e:
+                        logger.error(f"[{check_symbol}] 포지션 조회 오류: {e}")
 
-                finally:
+                    if position_info_list:
+                        all_positions_by_symbol[check_symbol] = position_info_list
+
+            except ccxt.PermissionDenied as e:
+                error_message = str(e)
+                if "50110" in error_message or "IP whitelist" in error_message:
+                    await message.reply(
+                        "⚠️ API 접근 권한 오류\n"
+                        "─────────────────────\n"
+                        "귀하의 IP 주소가 OKX API 키의 화이트리스트에 등록되어 있지 않습니다.\n\n"
+                        "해결 방법:\n"
+                        "1. OKX 웹사이트에 로그인\n"
+                        "2. API 관리 페이지로 이동\n"
+                        "3. 해당 API 키의 IP 화이트리스트에 현재 IP 주소를 추가\n\n"
+                        f"상세 오류: {error_message}"
+                    )
+                else:
+                    await message.reply(
+                        f"⚠️ API 접근 권한 오류\n"
+                        f"─────────────────────\n"
+                        f"{error_message}"
+                    )
+                logger.error(f"PermissionDenied error for user {user_id}: {error_message}")
+                return
+
+            finally:
+                if client:
                     try:
                         await client.close()
                     except Exception as e:
                         logger.warning(f"CCXT 클라이언트 종료 중 오류 발생: {str(e)}")
 
-        symbol_str = symbol.split('-')[0] if symbol else ""
-        
-        # 메시지 구성
-        
-        message_text = f"🔹 트레이딩 상태: {status_emoji}\n"
-        message_text += f"🔹 심볼: {symbol_str}\n"
-        message_text += f"🔹 타임프레임: {timeframe}\n\n"
-        message_text += "-----------------------------------\n"
-        for pos in position_info_list:
-            main_position_side_key = f"user:{user_id}:position:{symbol}:main_position_direction"
-            main_position_side = await redis.get(main_position_side_key)
-            unrealized_pnl = float(pos['unrealized_pnl'])
-            dca_key = f"user:{user_id}:position:{symbol}:{pos['side']}:dca_count"
-            dca_count = await redis.get(dca_key)
-            pnl_emoji = "📈" if unrealized_pnl > 0 else "📉"
-            
-            message_text += f"포지션: {pos['side'].upper()}\n\n"
-            try:
-                if main_position_side == pos['side']:
-                    message_text += f"진입 회차: {dca_count}\n"
-            except Exception as e:
-                logger.error(f"진입 횟수 표시 오류: {str(e)}")
-            message_text += f"수량: {float(pos['position_qty']):.4g} {symbol_str}\n"
-            message_text += f"진입가: {float(pos['entry_price']):,.2f}\n"
-            try:
-                if pos['liquidation_price'] != '0' and pos['liquidation_price'] != '' and pos['liquidation_price'] != None:
-                    message_text += f"청산가: {float(pos['liquidation_price']):,.2f}\n"
-            except Exception as e:
-                logger.error(f"청산가 표시 오류: {str(e)}")
-            message_text += f"현재가: {float(pos['mark_price']):,.2f}\n"
-            message_text += f"레버리지: {pos['leverage']}x\n"
-            message_text += f"미실현 손익: {pnl_emoji} {float(unrealized_pnl):,.2f} USDT\n\n"
-            
-            # SL 정보 추가
-            if pos.get('sl_price') and pos['sl_price'] != '':
-                message_text += f"손절가: {float(pos['sl_price']):,.2f}\n"
-            
-            # TP 정보 추가
-            tp_prices = pos.get('tp_prices', '')
-            if tp_prices:
-                try:
-                    tp_list = json.loads(tp_prices)
-                    for tp in tp_list:
-                        tp_num = tp['level']
-                        tp_status = "✅" if int(tp_state) >= int(tp_num) else "⏳"
-                        message_text += f"TP{tp_num}: {tp['price']} {tp_status}\n"
-                except json.JSONDecodeError:
-                    logger.error(f"TP 가격 파싱 오류: {tp_prices}")
-            
-            message_text += "\n"
+        # === 메시지 구성 ===
+        if active_symbols_info:
+            # 멀티심볼 모드 메시지
+            message_text = f"📊 트레이딩 상태 (멀티심볼)\n"
+            message_text += f"─────────────────────\n\n"
+
+            # 활성 심볼 요약
+            message_text += f"🔸 활성 심볼: {len(active_symbols_info)}개\n"
+            for info in active_symbols_info:
+                sym = info.get('symbol', 'N/A')
+                tf = info.get('timeframe', 'N/A')
+                st = info.get('status', 'unknown')
+                st_emoji = "🟢" if st == "running" else "🔴"
+                message_text += f"   {st_emoji} {sym} ({tf})\n"
+
+            message_text += f"\n─────────────────────\n"
+
+            # 각 심볼별 포지션 정보
+            for sym in symbols_to_check:
+                symbol_str = sym.split('-')[0] if sym else ""
+                positions = all_positions_by_symbol.get(sym, [])
+
+                if positions:
+                    message_text += f"\n📈 {symbol_str} 포지션\n"
+                    for pos in positions:
+                        unrealized_pnl = float(pos['unrealized_pnl'])
+                        pnl_emoji = "📈" if unrealized_pnl > 0 else "📉"
+
+                        message_text += f"  • {pos['side'].upper()}: "
+                        message_text += f"{float(pos['position_qty']):.4g} {symbol_str}\n"
+                        message_text += f"    진입가: {float(pos['entry_price']):,.2f}\n"
+                        message_text += f"    현재가: {float(pos['mark_price']):,.2f}\n"
+                        message_text += f"    손익: {pnl_emoji} {float(unrealized_pnl):,.2f} USDT\n"
+
+            if not all_positions_by_symbol:
+                message_text += f"\n현재 열린 포지션이 없습니다.\n"
+
+        else:
+            # 레거시 모드 메시지 (단일 심볼)
+            symbol_str = symbol.split('-')[0] if symbol else ""
+
+            message_text = f"🔹 트레이딩 상태: {status_emoji}\n"
+            message_text += f"🔹 심볼: {symbol_str}\n"
+            message_text += f"🔹 타임프레임: {timeframe}\n\n"
             message_text += "-----------------------------------\n"
+
+            position_info_list = all_positions_by_symbol.get(symbol, [])
+            for pos in position_info_list:
+                main_position_side_key = f"user:{user_id}:position:{symbol}:main_position_direction"
+                main_position_side = await redis.get(main_position_side_key)
+                unrealized_pnl = float(pos['unrealized_pnl'])
+                dca_key = f"user:{user_id}:position:{symbol}:{pos['side']}:dca_count"
+                dca_count = await redis.get(dca_key)
+                pnl_emoji = "📈" if unrealized_pnl > 0 else "📉"
+
+                message_text += f"포지션: {pos['side'].upper()}\n\n"
+                try:
+                    if main_position_side == pos['side']:
+                        message_text += f"진입 회차: {dca_count}\n"
+                except Exception as e:
+                    logger.error(f"진입 횟수 표시 오류: {str(e)}")
+                message_text += f"수량: {float(pos['position_qty']):.4g} {symbol_str}\n"
+                message_text += f"진입가: {float(pos['entry_price']):,.2f}\n"
+                try:
+                    if pos['liquidation_price'] != '0' and pos['liquidation_price'] != '' and pos['liquidation_price'] != None:
+                        message_text += f"청산가: {float(pos['liquidation_price']):,.2f}\n"
+                except Exception as e:
+                    logger.error(f"청산가 표시 오류: {str(e)}")
+                message_text += f"현재가: {float(pos['mark_price']):,.2f}\n"
+                message_text += f"레버리지: {pos['leverage']}x\n"
+                message_text += f"미실현 손익: {pnl_emoji} {float(unrealized_pnl):,.2f} USDT\n\n"
+
+                # SL 정보 추가
+                if pos.get('sl_price') and pos['sl_price'] != '':
+                    message_text += f"손절가: {float(pos['sl_price']):,.2f}\n"
+
+                # TP 정보 추가
+                tp_prices = pos.get('tp_prices', '')
+                if tp_prices:
+                    try:
+                        tp_list = json.loads(tp_prices)
+                        tp_state = pos.get('tp_state', '0')
+                        for tp in tp_list:
+                            tp_num = tp['level']
+                            tp_status = "✅" if int(tp_state) >= int(tp_num) else "⏳"
+                            message_text += f"TP{tp_num}: {tp['price']} {tp_status}\n"
+                    except json.JSONDecodeError:
+                        logger.error(f"TP 가격 파싱 오류: {tp_prices}")
+
+                message_text += "\n"
+                message_text += "-----------------------------------\n"
+
+            if not position_info_list:
+                message_text += "현재 열린 포지션이 없습니다.\n"
 
         await message.reply(message_text)
 
@@ -1680,3 +1768,668 @@ async def tp_command(message: types.Message) -> None:
         
     else:
         await message.reply("❌ 명령어 형식이 올바르지 않습니다. '/tp'로 사용법을 확인하세요.")
+
+
+# ===== 멀티심볼 콜백 핸들러들 =====
+
+@router.callback_query(lambda c: c.data == "multi_add_symbol")
+async def handle_multi_add_symbol(callback: types.CallbackQuery) -> None:
+    """새 심볼 추가 화면"""
+    redis = await get_redis_client()
+    if not isinstance(callback.message, Message):
+        return
+    if callback.from_user is None:
+        return
+
+    try:
+        user_id = callback.from_user.id
+        okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
+
+        if not okx_uid:
+            await callback.answer("OKX UID를 찾을 수 없습니다.")
+            return
+
+        # 현재 활성 심볼 목록 조회
+        active_symbols = await multi_symbol_service.get_active_symbols(okx_uid)
+
+        # 사용 가능한 심볼 목록
+        all_symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]
+        available_symbols = [s for s in all_symbols if s not in active_symbols]
+
+        if not available_symbols:
+            await callback.answer("추가할 수 있는 심볼이 없습니다.")
+            return
+
+        # 심볼 선택 버튼 생성
+        symbol_buttons = []
+        for symbol in available_symbols:
+            symbol_buttons.append([
+                types.InlineKeyboardButton(
+                    text=f"📊 {symbol}",
+                    callback_data=f"multi_select_symbol_{symbol}"
+                )
+            ])
+
+        # 뒤로가기 버튼
+        symbol_buttons.append([
+            types.InlineKeyboardButton(
+                text="⬅️ 뒤로가기",
+                callback_data="multi_back_to_main"
+            )
+        ])
+
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=symbol_buttons)
+
+        await safe_edit_message(
+            callback.message,
+            f"➕ 새 심볼 추가\n"
+            f"─────────────────────\n\n"
+            f"현재 활성: {', '.join(active_symbols) if active_symbols else '없음'}\n\n"
+            f"추가할 심볼을 선택해주세요:",
+            reply_markup=keyboard
+        )
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in multi_add_symbol: {e}")
+        await callback.answer("오류가 발생했습니다.")
+
+
+@router.callback_query(lambda c: c.data.startswith('multi_select_symbol_'))
+async def handle_multi_select_symbol(callback: types.CallbackQuery) -> None:
+    """새 심볼 선택 후 타임프레임 선택"""
+    redis = await get_redis_client()
+    if not isinstance(callback.message, Message):
+        return
+    if callback.from_user is None or callback.data is None:
+        return
+
+    try:
+        user_id = callback.from_user.id
+        okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
+        symbol = callback.data.replace('multi_select_symbol_', '')
+
+        # 선택된 심볼 임시 저장
+        await redis.set(f"user:{user_id}:multi_temp_symbol", symbol)
+
+        # 타임프레임 선택 버튼 생성
+        timeframes = ['1m', '3m', '5m', '15m', '30m', '1H', '4H']
+        timeframe_buttons = []
+        for tf in timeframes:
+            timeframe_buttons.append([
+                types.InlineKeyboardButton(
+                    text=f"⏱ {tf}",
+                    callback_data=f"multi_select_tf_{tf}"
+                )
+            ])
+
+        # 뒤로가기 버튼
+        timeframe_buttons.append([
+            types.InlineKeyboardButton(
+                text="⬅️ 뒤로가기",
+                callback_data="multi_add_symbol"
+            )
+        ])
+
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=timeframe_buttons)
+
+        await safe_edit_message(
+            callback.message,
+            f"➕ 새 심볼 추가\n"
+            f"─────────────────────\n\n"
+            f"📊 선택된 심볼: {symbol}\n\n"
+            f"⏱ 타임프레임을 선택해주세요:",
+            reply_markup=keyboard
+        )
+        await callback.answer(f"{symbol} 선택됨")
+
+    except Exception as e:
+        logger.error(f"Error in multi_select_symbol: {e}")
+        await callback.answer("오류가 발생했습니다.")
+
+
+@router.callback_query(lambda c: c.data.startswith('multi_select_tf_'))
+async def handle_multi_select_timeframe(callback: types.CallbackQuery) -> None:
+    """타임프레임 선택 후 트레이딩 시작"""
+    redis = await get_redis_client()
+    if not isinstance(callback.message, Message):
+        return
+    if callback.from_user is None or callback.data is None:
+        return
+
+    try:
+        user_id = callback.from_user.id
+        okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
+        timeframe = callback.data.replace('multi_select_tf_', '')
+
+        # 임시 저장된 심볼 조회
+        symbol_bytes = await redis.get(f"user:{user_id}:multi_temp_symbol")
+        if not symbol_bytes:
+            await callback.answer("심볼 정보가 없습니다. 다시 시작해주세요.")
+            return
+
+        symbol = symbol_bytes.decode('utf-8') if isinstance(symbol_bytes, bytes) else symbol_bytes
+
+        # 임시 데이터 삭제
+        await redis.delete(f"user:{user_id}:multi_temp_symbol")
+
+        # 확인 화면 표시
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(
+                text="✅ 트레이딩 시작",
+                callback_data=f"multi_confirm_start_{symbol}_{timeframe}"
+            )],
+            [types.InlineKeyboardButton(
+                text="⬅️ 뒤로가기",
+                callback_data="multi_add_symbol"
+            )]
+        ])
+
+        await safe_edit_message(
+            callback.message,
+            f"✅ 트레이딩 시작 확인\n"
+            f"─────────────────────\n\n"
+            f"📊 심볼: {symbol}\n"
+            f"⏱ 타임프레임: {timeframe}\n\n"
+            f"이 설정으로 트레이딩을 시작하시겠습니까?",
+            reply_markup=keyboard
+        )
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in multi_select_tf: {e}")
+        await callback.answer("오류가 발생했습니다.")
+
+
+@router.callback_query(lambda c: c.data.startswith('multi_confirm_start_'))
+async def handle_multi_confirm_start(callback: types.CallbackQuery) -> None:
+    """멀티심볼 트레이딩 시작 확인"""
+    redis = await get_redis_client()
+    if not isinstance(callback.message, Message):
+        return
+    if callback.from_user is None or callback.data is None:
+        return
+
+    try:
+        user_id = callback.from_user.id
+        okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
+
+        # 파라미터 파싱: multi_confirm_start_{symbol}_{timeframe}
+        parts = callback.data.replace('multi_confirm_start_', '').rsplit('_', 1)
+        symbol = parts[0]
+        timeframe = parts[1]
+
+        # API 호출로 트레이딩 시작
+        client = httpx.AsyncClient()
+        try:
+            request_data = {
+                "user_id": okx_uid,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "start_time": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "type": "start"
+            }
+
+            response = await client.post(
+                f"{API_BASE_URL}/trading/start",
+                json=request_data
+            )
+            response.raise_for_status()
+
+            # 성공 메시지
+            await safe_edit_message(
+                callback.message,
+                f"✅ 트레이딩 시작 완료!\n"
+                f"─────────────────────\n\n"
+                f"📊 심볼: {symbol}\n"
+                f"⏱ 타임프레임: {timeframe}\n\n"
+                f"트레이딩이 시작되었습니다.\n"
+                f"/trade 명령어로 현황을 확인할 수 있습니다."
+            )
+            await callback.answer("트레이딩이 시작되었습니다!")
+
+        except httpx.HTTPStatusError as e:
+            error_detail = ""
+            try:
+                error_response = e.response.json()
+                error_detail = error_response.get("detail", "")
+                if isinstance(error_detail, dict):
+                    error_detail = error_detail.get("message", str(error_detail))
+            except:
+                error_detail = str(e)
+
+            logger.error(f"Error starting multi-symbol trading: {e}, detail: {error_detail}")
+            await safe_edit_message(
+                callback.message,
+                f"❌ 트레이딩 시작 실패\n"
+                f"─────────────────────\n\n"
+                f"오류: {error_detail[:200]}"
+            )
+            await callback.answer("트레이딩 시작 실패")
+        finally:
+            await client.aclose()
+
+    except Exception as e:
+        logger.error(f"Error in multi_confirm_start: {e}")
+        await callback.answer("오류가 발생했습니다.")
+
+
+@router.callback_query(lambda c: c.data == "multi_stop_select")
+async def handle_multi_stop_select(callback: types.CallbackQuery) -> None:
+    """중지할 심볼 선택 화면"""
+    redis = await get_redis_client()
+    if not isinstance(callback.message, Message):
+        return
+    if callback.from_user is None:
+        return
+
+    try:
+        user_id = callback.from_user.id
+        okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
+
+        if not okx_uid:
+            await callback.answer("OKX UID를 찾을 수 없습니다.")
+            return
+
+        # 활성 심볼 목록 조회
+        active_symbols_info = await multi_symbol_service.list_symbols_with_info(okx_uid)
+
+        if not active_symbols_info:
+            await callback.answer("활성 심볼이 없습니다.")
+            return
+
+        # 심볼 선택 버튼 생성
+        symbol_buttons = []
+        for info in active_symbols_info:
+            symbol = info.get('symbol', 'N/A')
+            timeframe = info.get('timeframe', 'N/A')
+            symbol_buttons.append([
+                types.InlineKeyboardButton(
+                    text=f"⏹ {symbol} ({timeframe})",
+                    callback_data=f"multi_stop_symbol_{symbol}"
+                )
+            ])
+
+        # 뒤로가기 버튼
+        symbol_buttons.append([
+            types.InlineKeyboardButton(
+                text="⬅️ 뒤로가기",
+                callback_data="multi_back_to_main"
+            )
+        ])
+
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=symbol_buttons)
+
+        await safe_edit_message(
+            callback.message,
+            f"⏹ 심볼 중지\n"
+            f"─────────────────────\n\n"
+            f"중지할 심볼을 선택해주세요:",
+            reply_markup=keyboard
+        )
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in multi_stop_select: {e}")
+        await callback.answer("오류가 발생했습니다.")
+
+
+@router.callback_query(lambda c: c.data.startswith('multi_stop_symbol_'))
+async def handle_multi_stop_symbol(callback: types.CallbackQuery) -> None:
+    """특정 심볼 중지 확인"""
+    redis = await get_redis_client()
+    if not isinstance(callback.message, Message):
+        return
+    if callback.from_user is None or callback.data is None:
+        return
+
+    try:
+        user_id = callback.from_user.id
+        okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
+        symbol = callback.data.replace('multi_stop_symbol_', '')
+
+        # 확인 화면
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(
+                text=f"✅ 예, {symbol} 중지",
+                callback_data=f"multi_confirm_stop_{symbol}"
+            )],
+            [types.InlineKeyboardButton(
+                text="❌ 아니오, 취소",
+                callback_data="multi_stop_select"
+            )]
+        ])
+
+        await safe_edit_message(
+            callback.message,
+            f"⚠️ 심볼 중지 확인\n"
+            f"─────────────────────\n\n"
+            f"📊 {symbol} 트레이딩을 중지하시겠습니까?\n\n"
+            f"⚠️ 열린 포지션은 유지되며, 자동 트레이딩만 중지됩니다.",
+            reply_markup=keyboard
+        )
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in multi_stop_symbol: {e}")
+        await callback.answer("오류가 발생했습니다.")
+
+
+@router.callback_query(lambda c: c.data.startswith('multi_confirm_stop_'))
+async def handle_multi_confirm_stop(callback: types.CallbackQuery) -> None:
+    """특정 심볼 중지 실행"""
+    redis = await get_redis_client()
+    if not isinstance(callback.message, Message):
+        return
+    if callback.from_user is None or callback.data is None:
+        return
+
+    try:
+        user_id = callback.from_user.id
+        okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
+        symbol = callback.data.replace('multi_confirm_stop_', '')
+
+        # API 호출로 특정 심볼 중지
+        client = httpx.AsyncClient()
+        try:
+            response = await client.post(
+                f"{API_BASE_URL}/trading/stop",
+                params={"user_id": okx_uid, "symbol": symbol}
+            )
+            response.raise_for_status()
+
+            # 성공 메시지
+            await safe_edit_message(
+                callback.message,
+                f"✅ {symbol} 트레이딩 중지 완료!\n"
+                f"─────────────────────\n\n"
+                f"해당 심볼의 자동 트레이딩이 중지되었습니다.\n"
+                f"/trade 명령어로 현황을 확인할 수 있습니다."
+            )
+            await callback.answer("트레이딩이 중지되었습니다!")
+
+        except httpx.HTTPStatusError as e:
+            error_detail = ""
+            try:
+                error_response = e.response.json()
+                error_detail = error_response.get("detail", "")
+            except:
+                error_detail = str(e)
+
+            logger.error(f"Error stopping symbol: {e}, detail: {error_detail}")
+            await callback.answer(f"중지 실패: {error_detail[:50]}")
+        finally:
+            await client.aclose()
+
+    except Exception as e:
+        logger.error(f"Error in multi_confirm_stop: {e}")
+        await callback.answer("오류가 발생했습니다.")
+
+
+@router.callback_query(lambda c: c.data == "multi_stop_all")
+async def handle_multi_stop_all(callback: types.CallbackQuery) -> None:
+    """전체 중지 확인"""
+    redis = await get_redis_client()
+    if not isinstance(callback.message, Message):
+        return
+    if callback.from_user is None:
+        return
+
+    try:
+        user_id = callback.from_user.id
+        okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
+
+        # 활성 심볼 목록 조회
+        active_symbols = await multi_symbol_service.get_active_symbols(okx_uid)
+
+        if not active_symbols:
+            await callback.answer("활성 심볼이 없습니다.")
+            return
+
+        # 확인 화면
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(
+                text="⚠️ 예, 전체 중지",
+                callback_data="multi_confirm_stop_all"
+            )],
+            [types.InlineKeyboardButton(
+                text="❌ 아니오, 취소",
+                callback_data="multi_back_to_main"
+            )]
+        ])
+
+        symbols_list = "\n".join([f"  • {s}" for s in active_symbols])
+        await safe_edit_message(
+            callback.message,
+            f"⛔️ 전체 중지 확인\n"
+            f"─────────────────────\n\n"
+            f"다음 심볼들의 트레이딩을 모두 중지하시겠습니까?\n\n"
+            f"{symbols_list}\n\n"
+            f"⚠️ 열린 포지션은 유지되며, 자동 트레이딩만 중지됩니다.",
+            reply_markup=keyboard
+        )
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in multi_stop_all: {e}")
+        await callback.answer("오류가 발생했습니다.")
+
+
+@router.callback_query(lambda c: c.data == "multi_confirm_stop_all")
+async def handle_multi_confirm_stop_all(callback: types.CallbackQuery) -> None:
+    """전체 중지 실행"""
+    redis = await get_redis_client()
+    if not isinstance(callback.message, Message):
+        return
+    if callback.from_user is None:
+        return
+
+    try:
+        user_id = callback.from_user.id
+        okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
+
+        # 활성 심볼 목록 조회
+        active_symbols = await multi_symbol_service.get_active_symbols(okx_uid)
+
+        # API 호출로 전체 중지
+        client = httpx.AsyncClient()
+        stopped_symbols = []
+        failed_symbols = []
+
+        try:
+            for symbol in active_symbols:
+                try:
+                    response = await client.post(
+                        f"{API_BASE_URL}/trading/stop",
+                        params={"user_id": okx_uid, "symbol": symbol}
+                    )
+                    response.raise_for_status()
+                    stopped_symbols.append(symbol)
+                except Exception as e:
+                    logger.error(f"Failed to stop {symbol}: {e}")
+                    failed_symbols.append(symbol)
+
+            # 결과 메시지
+            result_text = f"⛔️ 전체 중지 결과\n"
+            result_text += f"─────────────────────\n\n"
+
+            if stopped_symbols:
+                result_text += f"✅ 중지 완료:\n"
+                result_text += "\n".join([f"  • {s}" for s in stopped_symbols])
+                result_text += "\n\n"
+
+            if failed_symbols:
+                result_text += f"❌ 중지 실패:\n"
+                result_text += "\n".join([f"  • {s}" for s in failed_symbols])
+                result_text += "\n\n"
+
+            result_text += f"/trade 명령어로 현황을 확인할 수 있습니다."
+
+            await safe_edit_message(callback.message, result_text)
+            await callback.answer("전체 중지 완료!")
+
+        finally:
+            await client.aclose()
+
+    except Exception as e:
+        logger.error(f"Error in multi_confirm_stop_all: {e}")
+        await callback.answer("오류가 발생했습니다.")
+
+
+@router.callback_query(lambda c: c.data == "multi_back_to_main")
+async def handle_multi_back_to_main(callback: types.CallbackQuery) -> None:
+    """멀티심볼 메인 화면으로 돌아가기"""
+    redis = await get_redis_client()
+    if not isinstance(callback.message, Message):
+        return
+    if callback.from_user is None:
+        return
+
+    try:
+        user_id = callback.from_user.id
+        okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
+
+        # 활성 심볼 목록 조회
+        active_symbols_info = await multi_symbol_service.list_symbols_with_info(okx_uid)
+
+        if not active_symbols_info:
+            await safe_edit_message(
+                callback.message,
+                "현재 활성 심볼이 없습니다.\n/trade 명령어로 새 트레이딩을 시작하세요."
+            )
+            await callback.answer()
+            return
+
+        # 활성 심볼 목록 표시
+        status_text = "📊 트레이딩 현황 (멀티심볼 모드)\n"
+        status_text += "─────────────────────\n\n"
+
+        for idx, info in enumerate(active_symbols_info, 1):
+            symbol = info.get('symbol', 'N/A')
+            timeframe = info.get('timeframe', 'N/A')
+            status = info.get('status', 'unknown')
+            status_emoji = "🟢" if status == "running" else "🔴"
+            status_text += f"{idx}. {symbol}\n"
+            status_text += f"   {status_emoji} 상태: {status} | ⏱ {timeframe}\n\n"
+
+        max_symbols = app_settings.MAX_SYMBOLS_PER_USER
+        status_text += f"─────────────────────\n"
+        status_text += f"📈 활성: {len(active_symbols_info)}/{max_symbols}개\n\n"
+        status_text += "원하시는 작업을 선택해주세요:"
+
+        # 버튼 구성
+        buttons = []
+
+        if len(active_symbols_info) < max_symbols:
+            buttons.append([
+                types.InlineKeyboardButton(
+                    text="➕ 새 심볼 추가",
+                    callback_data="multi_add_symbol"
+                )
+            ])
+
+        buttons.append([
+            types.InlineKeyboardButton(
+                text="⏹ 특정 심볼 중지",
+                callback_data="multi_stop_select"
+            )
+        ])
+
+        buttons.append([
+            types.InlineKeyboardButton(
+                text="⛔️ 전체 중지",
+                callback_data="multi_stop_all"
+            )
+        ])
+
+        buttons.append([
+            types.InlineKeyboardButton(
+                text="❌ 닫기",
+                callback_data="cancel_stop_return"
+            )
+        ])
+
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_message(callback.message, status_text, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Error in multi_back_to_main: {e}")
+        await callback.answer("오류가 발생했습니다.")
+
+
+# ===== /symbols 명령어 =====
+
+@router.message(Command("symbols"))
+async def symbols_command(message: types.Message) -> None:
+    """활성 심볼 목록 조회 명령어"""
+    redis = await get_redis_client()
+    if message.from_user is None:
+        return
+    user_id = message.from_user.id
+
+    okx_uid_bytes = await redis.get(f"user:{user_id}:okx_uid")
+    okx_uid = okx_uid_bytes.decode('utf-8') if isinstance(okx_uid_bytes, bytes) else okx_uid_bytes if okx_uid_bytes else None
+
+    if not is_allowed_user(okx_uid):
+        await message.reply("⛔ 접근 권한이 없습니다.")
+        return
+
+    okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
+
+    if not okx_uid:
+        await message.reply("OKX UID를 찾을 수 없습니다.")
+        return
+
+    try:
+        # 활성 심볼 목록 조회
+        active_symbols_info = await multi_symbol_service.list_symbols_with_info(okx_uid)
+
+        if not active_symbols_info:
+            await message.reply(
+                "📊 활성 심볼 목록\n"
+                "─────────────────────\n\n"
+                "현재 활성화된 심볼이 없습니다.\n\n"
+                "/trade 명령어로 트레이딩을 시작하세요."
+            )
+            return
+
+        # 상태 텍스트 생성
+        status_text = "📊 활성 심볼 목록\n"
+        status_text += "─────────────────────\n\n"
+
+        for idx, info in enumerate(active_symbols_info, 1):
+            symbol = info.get('symbol', 'N/A')
+            timeframe = info.get('timeframe', 'N/A')
+            status = info.get('status', 'unknown')
+            started_at = info.get('started_at', '')
+
+            status_emoji = "🟢" if status == "running" else "🔴"
+
+            # 시작 시간 포맷팅
+            start_time_str = ""
+            if started_at:
+                try:
+                    timestamp = float(started_at)
+                    start_dt = datetime.fromtimestamp(timestamp)
+                    start_time_str = start_dt.strftime("%m/%d %H:%M")
+                except:
+                    pass
+
+            status_text += f"{idx}. {symbol}\n"
+            status_text += f"   {status_emoji} 상태: {status}\n"
+            status_text += f"   ⏱ 타임프레임: {timeframe}\n"
+            if start_time_str:
+                status_text += f"   📅 시작: {start_time_str}\n"
+            status_text += "\n"
+
+        max_symbols = app_settings.MAX_SYMBOLS_PER_USER
+        status_text += f"─────────────────────\n"
+        status_text += f"📈 활성: {len(active_symbols_info)}/{max_symbols}개\n\n"
+        status_text += "💡 /trade 명령어로 관리할 수 있습니다."
+
+        await message.reply(status_text)
+
+    except Exception as e:
+        logger.error(f"Error in symbols command: {e}")
+        await message.reply("❌ 심볼 목록 조회 중 오류가 발생했습니다.")

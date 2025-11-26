@@ -49,7 +49,7 @@ async def init_user_position_data(user_id: str, symbol: str, side: str, is_first
 
     tp_state = f"user:{user_id}:position:{symbol}:{side}:tp_state"
     hedging_direction_key = f"user:{user_id}:position:{symbol}:hedging_direction"
-    entry_fail_count_key = f"user:{user_id}:entry_fail_count"
+    entry_fail_count_key = f"user:{user_id}:{symbol}:entry_fail_count"
     initial_size_key = f"user:{user_id}:position:{symbol}:{side}:initial_size"
 
     await redis.delete(position_state_key)

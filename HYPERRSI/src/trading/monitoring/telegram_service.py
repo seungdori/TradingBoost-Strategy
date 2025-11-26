@@ -11,6 +11,8 @@ import traceback
 from typing import Dict, Optional
 
 import telegram
+from telegram.error import NetworkError, RetryAfter, TimedOut
+from telegram.request import HTTPXRequest
 
 from shared.database.redis_helper import get_redis_client
 from shared.database.redis_patterns import scan_keys_pattern
@@ -19,6 +21,10 @@ from shared.logging import get_logger
 from .utils import MESSAGE_PROCESSING_FLAG, MESSAGE_QUEUE_KEY
 
 logger = get_logger(__name__)
+TELEGRAM_REQUEST_TIMEOUT = 10
+MAX_SEND_RETRIES = 3
+MAX_REQUEUE_ATTEMPTS = 3
+REQUEUE_DELAY_BASE_SECONDS = 2
 
 
 # Module-level attribute for backward compatibility
@@ -26,6 +32,91 @@ def __getattr__(name):
     if name == "redis_client":
         return get_redis_client()
     raise AttributeError(f"module has no attribute {name}")
+
+
+def _create_bot(bot_token: str) -> telegram.Bot:
+    """HTTPXRequest로 타임아웃을 강제한 Bot 인스턴스 생성."""
+    request = HTTPXRequest(
+        connect_timeout=TELEGRAM_REQUEST_TIMEOUT,
+        read_timeout=TELEGRAM_REQUEST_TIMEOUT,
+        write_timeout=TELEGRAM_REQUEST_TIMEOUT,
+    )
+    return telegram.Bot(token=bot_token, request=request)
+
+
+async def _send_message_with_retry(
+    bot: telegram.Bot,
+    chat_id: str,
+    message: str,
+    attempt_offset: int = 0,
+) -> bool:
+    """
+    텔레그램 메시지를 재시도하며 전송합니다.
+
+    Returns:
+        bool: 전송 성공 여부
+    """
+    for attempt in range(1, MAX_SEND_RETRIES + 1):
+        try:
+            await bot.send_message(
+                chat_id=str(chat_id),
+                text=message,
+            )
+            return True
+        except RetryAfter as e:
+            wait_seconds = max(float(getattr(e, "retry_after", 0)), 1.0)
+            logger.warning(
+                f"[{chat_id}] 텔레그램 API 제한 - {attempt + attempt_offset}차 시도,"
+                f" {wait_seconds:.1f}s 후 재시도 예정: {str(e)}"
+            )
+            await asyncio.sleep(wait_seconds)
+        except (TimedOut, NetworkError) as e:
+            wait_seconds = min(REQUEUE_DELAY_BASE_SECONDS * (attempt + attempt_offset), 30)
+            logger.warning(
+                f"[{chat_id}] 텔레그램 메시지 전송 타임아웃 -"
+                f" {attempt + attempt_offset}차 시도 실패, {wait_seconds:.1f}s 후 재시도: {str(e)}"
+            )
+            await asyncio.sleep(wait_seconds)
+
+    return False
+
+
+async def _requeue_message(
+    redis,
+    queue_key: str,
+    processing_flag: str,
+    message_data: dict,
+    user_id: str,
+    retry_count: int,
+):
+    """
+    전송 실패한 메시지를 재큐잉하고 다음 처리를 예약합니다.
+    """
+    next_retry_count = retry_count + 1
+    if next_retry_count > MAX_REQUEUE_ATTEMPTS:
+        logger.error(
+            f"[{user_id}] 텔레그램 메시지 전송 재시도 한도 초과 - 메시지 드롭: {message_data.get('message')}"
+        )
+        await redis.expire(processing_flag, 60)
+        asyncio.create_task(process_telegram_messages(user_id))
+        return
+
+    message_data["retry_count"] = next_retry_count
+    await redis.lpush(queue_key, json.dumps(message_data))
+    await redis.expire(processing_flag, 60)
+
+    delay_seconds = min(REQUEUE_DELAY_BASE_SECONDS * next_retry_count, 30)
+    logger.warning(
+        f"[{user_id}] 텔레그램 메시지 전송 실패 - {next_retry_count}차 재시도"
+        f" {delay_seconds:.1f}s 후 진행 예정"
+    )
+
+    asyncio.create_task(_delayed_process(user_id, delay_seconds))
+
+
+async def _delayed_process(user_id: str, delay_seconds: float):
+    await asyncio.sleep(delay_seconds)
+    await process_telegram_messages(user_id)
 
 
 async def send_telegram_message(message: str, okx_uid: str, debug: bool = False):
@@ -216,6 +307,7 @@ async def process_telegram_messages(user_id: str):
         message_type = message_data.get("type")
         message = message_data.get("message")
         debug = message_data.get("debug", False)
+        retry_count = message_data.get("retry_count", 0)
 
         # 메시지 전송
         try:
@@ -243,11 +335,29 @@ async def process_telegram_messages(user_id: str):
                 return
 
             # 텔레그램 봇 생성
-            bot = telegram.Bot(token=bot_token)
+            bot = _create_bot(bot_token)
 
             try:
-                await bot.send_message(chat_id=str(user_telegram_id), text=message)
-                logger.debug(f"[{user_id}] 텔레그램 메시지 전송 성공: chat_id={user_telegram_id}")
+                send_success = await _send_message_with_retry(
+                    bot,
+                    user_telegram_id,
+                    message,
+                    attempt_offset=retry_count,
+                )
+                if not send_success:
+                    await _requeue_message(
+                        redis,
+                        queue_key,
+                        processing_flag,
+                        message_data,
+                        user_id,
+                        retry_count,
+                    )
+                    return
+
+                logger.debug(
+                    f"[{user_id}] 텔레그램 메시지 전송 성공: chat_id={user_telegram_id}"
+                )
             except telegram.error.BadRequest as e:
                 if "Chat not found" in str(e):
                     logger.warning(f"[{user_id}] 텔레그램 메시지 전송 실패 (Chat not found): chat_id={user_telegram_id}")

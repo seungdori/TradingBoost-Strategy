@@ -353,6 +353,11 @@ class BacktestEngine:
         if self.position_manager.has_position():
             await self._check_exit_conditions(candle)
 
+        # Update hedge TP/SL based on main position changes (e.g., break-even SL)
+        # This must happen AFTER main exit checks but BEFORE dual exit checks
+        if self.position_manager.has_position() and self.dual_position_manager.has_position():
+            self._update_dual_targets_from_main(self.position_manager.get_position())
+
         # Check dual-side exits (hedge TP/SL)
         if self.dual_position_manager.has_position():
             await self._check_dual_exit_conditions(candle)
@@ -515,10 +520,7 @@ class BacktestEngine:
                     )
                     position.dca_levels = dca_levels
 
-                    logger.info(
-                        f"Initial DCA levels calculated: {dca_levels}, "
-                        f"pyramiding_limit={self.strategy_params.get('pyramiding_limit', 3)}"
-                    )
+
 
                 # Log position open event
                 if self.event_logger:
@@ -1325,13 +1327,19 @@ class BacktestEngine:
         Close or reset dual-side state when the main position closes.
 
         FIX: Close dual position based on configuration when main position closes.
+        - tp_trigger_type=existing_position: ALWAYS close dual (hedge TP is main SL)
         - BREAK_EVEN/STOP_LOSS: Close dual if dual_side_close_on_main_sl=True
         - SIGNAL (trend reversal): Close dual if dual_side_trend_close=True
         - Other exits: Always close dual
         """
         if close_dual_position and self.dual_position_manager.has_position():
+            # tp_trigger_type이 existing_position이면 메인 종료 시 항상 헷지도 종료
+            tp_trigger_type = self.dual_side_params.get("dual_side_entry_tp_trigger_type", "do_not_close")
+            if tp_trigger_type == "existing_position":
+                logger.info(f"🔄 Closing dual position due to main position {exit_reason.value} (tp_trigger_type=existing_position)")
+                self._close_dual_position(exit_price, candle.timestamp, ExitReason.LINKED_EXIT)
             # Close dual position when main hits SL (including break-even SL) - only if configured
-            if exit_reason in (ExitReason.BREAK_EVEN, ExitReason.STOP_LOSS):
+            elif exit_reason in (ExitReason.BREAK_EVEN, ExitReason.STOP_LOSS):
                 if should_close_dual_on_main_sl(self.dual_side_params):
                     logger.info(f"🔄 Closing dual position due to main position {exit_reason.value} (dual_side_close_on_main_sl=True)")
                     self._close_dual_position(exit_price, candle.timestamp, ExitReason.LINKED_EXIT)

@@ -1,4 +1,20 @@
-"""Shared configuration for TradingBoost-Strategy projects"""
+"""
+DEPRECATED: This file is kept for backward compatibility only.
+
+The canonical configuration is now in shared/config/settings.py.
+When you import 'from shared.config import settings', it uses shared/config/__init__.py
+which re-exports from shared/config/settings.py.
+
+Do NOT import directly from this file (shared/config.py).
+Use: from shared.config import settings, get_settings, Settings
+"""
+
+import warnings
+warnings.warn(
+    "shared/config.py is deprecated. Use 'from shared.config import settings' which uses shared/config/settings.py",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 import os
 from functools import lru_cache
@@ -47,6 +63,11 @@ class Settings(BaseSettings):
     REDIS_MIGRATION_ENABLED: bool = False
     REDIS_MIGRATION_PERCENTAGE: int = 0
     REDIS_MIGRATION_USER_WHITELIST: str = ""  # Comma-separated user IDs
+
+    # Multi-Symbol Trading Feature Flags
+    PRESET_SYSTEM_ENABLED: bool = True  # Phase 1: 프리셋 시스템 활성화
+    MULTI_SYMBOL_ENABLED: bool = True   # Phase 2: 멀티심볼 지원 활성화
+    MAX_SYMBOLS_PER_USER: int = 99      # 사용자당 최대 동시 트레이딩 심볼 수 (실질적 무제한)
 
     def init_redis_url(self):
         if not self.REDIS_URL:

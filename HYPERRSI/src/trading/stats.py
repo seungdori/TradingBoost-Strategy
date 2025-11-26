@@ -383,9 +383,21 @@ async def record_trade_entry(
             logger.info(f"거래 진입 기록 완료: {entry_data}")
 
             # Cooldown management (within same context)
+            # Get cooldown_time from user settings
+            settings_str = await redis.get(f"user:{user_id}:settings")
+            cooldown_seconds = 300  # default
+            if settings_str:
+                try:
+                    user_settings = json.loads(settings_str)
+                    use_cooldown = user_settings.get('use_cooldown', True)
+                    if use_cooldown:
+                        cooldown_seconds = int(user_settings.get('cooldown_time', 300))
+                    else:
+                        cooldown_seconds = 0  # Skip cooldown if disabled
+                except (json.JSONDecodeError, ValueError):
+                    pass
             cooldown_key = f"user:{user_id}:cooldown:{symbol}:{side}"
-            cooldown_seconds = 30  # 30초
-            if not await redis.get(cooldown_key):
+            if cooldown_seconds > 0 and not await redis.get(cooldown_key):
                 await redis.set(cooldown_key, "true", ex=cooldown_seconds)
 
     except Exception as e:
@@ -440,9 +452,21 @@ async def record_trade_exit(user_id: str, symbol: str, position: Position, excha
                 side = "long"
             elif side == "sell":
                 side = "short"
+            # Get cooldown_time from user settings
+            settings_str = await redis.get(f"user:{user_id}:settings")
+            cooldown_seconds = 300  # default
+            if settings_str:
+                try:
+                    user_settings = json.loads(settings_str)
+                    use_cooldown = user_settings.get('use_cooldown', True)
+                    if use_cooldown:
+                        cooldown_seconds = int(user_settings.get('cooldown_time', 300))
+                    else:
+                        cooldown_seconds = 0  # Skip cooldown if disabled
+                except (json.JSONDecodeError, ValueError):
+                    pass
             cooldown_key = f"user:{user_id}:cooldown:{symbol}:{side}"
-            cooldown_seconds = 40  # 40초
-            if not await redis.get(cooldown_key):
+            if cooldown_seconds > 0 and not await redis.get(cooldown_key):
                 await redis.set(cooldown_key, "true", ex=cooldown_seconds)
     
 
@@ -467,9 +491,74 @@ async def update_trading_stats(
     side: str,
     entry_time: str,
     exit_time: str,
+    close_type: str = 'signal',
+    leverage: int = 1,
+    dca_count: int = 0,
+    avg_entry_price: Optional[float] = None,
+    entry_fee: float = 0.0,
+    exit_fee: float = 0.0,
+    is_hedge: bool = False,
+    session_id: Optional[int] = None,
+    entry_order_id: Optional[str] = None,
+    exit_order_id: Optional[str] = None,
+    extra_data: Optional[Dict[str, Any]] = None,
 ) -> None:
+    """
+    거래 통계 업데이트 (Redis + PostgreSQL DB).
+
+    기존 Redis 통계 업데이트를 유지하면서 PostgreSQL에도 거래 기록을 저장합니다.
+    """
     stats_key = get_redis_key(user_id, "stats")
 
+    # 1. PostgreSQL DB에 거래 기록 저장 (비동기, 실패해도 Redis 업데이트 진행)
+    try:
+        from HYPERRSI.src.services.trade_record_service import get_trade_record_service
+
+        trade_service = get_trade_record_service()
+
+        # entry_time, exit_time 파싱
+        try:
+            parsed_entry_time = datetime.strptime(entry_time, '%Y-%m-%d %H:%M:%S')
+        except (ValueError, TypeError):
+            parsed_entry_time = datetime.now()
+
+        try:
+            parsed_exit_time = datetime.strptime(exit_time, '%Y-%m-%d %H:%M:%S')
+        except (ValueError, TypeError):
+            parsed_exit_time = datetime.now()
+
+        # PnL 퍼센트 계산
+        pnl_percent = (pnl / (entry_price * position_size)) * 100 if entry_price > 0 and position_size > 0 else 0.0
+
+        await trade_service.record_trade(
+            okx_uid=user_id,
+            symbol=symbol,
+            side=side,
+            entry_time=parsed_entry_time,
+            entry_price=entry_price,
+            entry_size=position_size,
+            exit_time=parsed_exit_time,
+            exit_price=exit_price,
+            exit_size=position_size,
+            close_type=close_type,
+            realized_pnl=pnl,
+            realized_pnl_percent=pnl_percent,
+            leverage=leverage,
+            dca_count=dca_count,
+            avg_entry_price=avg_entry_price,
+            entry_fee=entry_fee,
+            exit_fee=exit_fee,
+            is_hedge=is_hedge,
+            session_id=session_id,
+            entry_order_id=entry_order_id,
+            exit_order_id=exit_order_id,
+            extra_data=extra_data,
+        )
+        logger.info(f"[{user_id}] Trade recorded to PostgreSQL: {symbol} {side} PnL={pnl:.4f}")
+    except Exception as db_err:
+        logger.warning(f"[{user_id}] Failed to record trade to PostgreSQL (continuing with Redis): {db_err}")
+
+    # 2. 기존 Redis 통계 업데이트
     try:
         # GET + SET operations - use normal timeout
         async with get_redis_context(user_id=str(user_id), timeout=RedisTimeout.NORMAL_OPERATION) as redis:

@@ -1,7 +1,6 @@
 # src/utils/order_utils.py
 
 import datetime as dt
-import json
 import traceback
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -268,14 +267,8 @@ async def cancel_algo_orders_for_symbol_and_side(
                     cancel_list.append({"algoId": algo_id, "instId": inst_id})
 
             if cancel_list:
-                cancel_resp = await exchange.fetch2(
-                    path=API_ENDPOINTS["CANCEL_ALGO_ORDERS"],
-                    api="private",
-                    method="POST",
-                    params={},
-                    headers=None,
-                    body=json.dumps({"data": cancel_list}),
-                )
+                # CCXT 표준 메서드 사용 (서명 생성을 위해)
+                cancel_resp = await exchange.privatePostTradeCancelAlgos(params=cancel_list)
                 if cancel_resp.get("code") != "0":
                     logger.warning(
                         f"[cancel_algo_orders_for_symbol_and_side] 취소 실패: {cancel_resp.get('msg', '')}"
@@ -283,6 +276,15 @@ async def cancel_algo_orders_for_symbol_and_side(
     except Exception as e:
         logger.error(
             f"[cancel_algo_orders_for_symbol_and_side] 오류: {str(e)}", exc_info=True
+        )
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="AlgoCancellationError",
+            severity="ERROR",
+            symbol=symbol,
+            metadata={"pos_side": pos_side, "component": "cancel_algo_orders_for_symbol_and_side"}
         )
 
 
@@ -298,6 +300,14 @@ async def set_position_mode(exchange: Any, hedged: bool = True) -> None:
         await exchange.set_position_mode(hedged)
     except Exception as e:
         logger.error(f"포지션 모드 설정 실패: {str(e)}")
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="PositionModeError",
+            severity="WARNING",
+            metadata={"hedged": hedged, "component": "set_position_mode"}
+        )
         raise
 
 
@@ -309,11 +319,9 @@ async def cancel_algo_orders_for_symbol(
     pos_side가 주어지면 해당 pos_side의 주문만 취소합니다.
     """
     try:
-        resp = await exchange.fetch2(
-            path=API_ENDPOINTS["ALGO_ORDERS_PENDING"],
-            api="private",
-            method="GET",
-            params={"instId": symbol},
+        # CCXT 표준 메서드 사용 (서명 생성을 위해)
+        resp = await exchange.privateGetTradeOrdersAlgoPending(
+            params={"instId": symbol}
         )
         if resp.get("code") != "0":
             logger.warning(f"알고주문 조회 실패: {resp.get('msg', '')}")
@@ -332,20 +340,23 @@ async def cancel_algo_orders_for_symbol(
                 if algo_id and inst_id:
                     cancel_list.append({"algoId": algo_id, "instId": inst_id})
             if cancel_list:
-                cancel_resp = await exchange.fetch2(
-                    path=API_ENDPOINTS["CANCEL_ALGO_ORDERS"],
-                    api="private",
-                    method="POST",
-                    params={},
-                    headers=None,
-                    body=json.dumps({"data": cancel_list}),
-                )
+                # CCXT 표준 메서드 사용 (서명 생성을 위해)
+                cancel_resp = await exchange.privatePostTradeCancelAlgos(params=cancel_list)
                 if cancel_resp.get("code") != "0":
                     logger.warning(
                         f"알고주문 취소 실패: {cancel_resp.get('msg', '')}"
                     )
     except Exception as e:
         logger.error(f"알고주문 취소 중 오류: {str(e)}", exc_info=True)
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="AlgoCancellationError",
+            severity="ERROR",
+            symbol=symbol,
+            metadata={"pos_side": pos_side, "component": "cancel_algo_orders_for_symbol"}
+        )
 
 
 async def cancel_reduce_only_orders_for_symbol(
@@ -377,20 +388,23 @@ async def cancel_reduce_only_orders_for_symbol(
                 if ord_id and inst_id:
                     cancel_list.append({"ordId": ord_id, "instId": inst_id})
             if cancel_list:
-                resp = await exchange.fetch2(
-                    path=API_ENDPOINTS["CANCEL_BATCH_ORDERS"],
-                    api="private",
-                    method="POST",
-                    params={},
-                    headers=None,
-                    body=json.dumps({"data": cancel_list}),
-                )
+                # CCXT 표준 메서드 사용 (서명 생성을 위해)
+                resp = await exchange.privatePostTradeCancelBatchOrders(params=cancel_list)
                 if resp.get("code") != "0":
                     logger.warning(
                         f"reduceOnly 주문 취소 실패: {resp.get('msg', '')}"
                     )
     except Exception as e:
         logger.error(f"reduceOnly 주문 취소 중 오류: {str(e)}", exc_info=True)
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="ReduceOnlyCancellationError",
+            severity="ERROR",
+            symbol=symbol,
+            metadata={"pos_side": pos_side, "component": "cancel_reduce_only_orders_for_symbol"}
+        )
 
 
 # ======================================================
@@ -408,6 +422,15 @@ async def get_user_api_keys(user_id: str) -> Dict[str, str]:
         return dict(api_keys)
     except Exception as e:
         logger.error(f"4API 키 조회 실패: {str(e)}")
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="APIKeyFetchError",
+            user_id=user_id,
+            severity="WARNING",
+            metadata={"component": "get_user_api_keys"}
+        )
         raise HTTPException(status_code=500, detail=f"Error fetching API keys: {str(e)}")
 
 
@@ -477,10 +500,8 @@ async def cancel_all_orders(
                     if algo_id and inst_id:
                         cancel_list.append({"algoId": algo_id, "instId": inst_id})
                 if cancel_list:
-                    cancel_resp = await client.privatePostTradeCancelAlgos(
-                        params={},
-                        body=json.dumps({"data": cancel_list}),
-                    )
+                    # CCXT 표준 메서드 사용 (서명 생성을 위해)
+                    cancel_resp = await client.privatePostTradeCancelAlgos(params=cancel_list)
                     if cancel_resp.get("code") != "0":
                         raise ValueError(f"알고주문 취소 실패: {cancel_resp.get('msg', '')}")
     finally:

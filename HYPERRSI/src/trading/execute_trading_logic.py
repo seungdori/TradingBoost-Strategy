@@ -21,10 +21,16 @@ from HYPERRSI.src.trading.utils.trading_utils import (
     init_user_monitoring_data,
     init_user_position_data,
 )
+from shared.config import settings as app_settings
 from shared.database.redis_helper import get_redis_client
 from shared.database.redis_migration import get_redis_context
 from shared.database.redis_patterns import RedisTimeout
 from shared.logging import get_logger
+from HYPERRSI.src.utils.error_logger import log_error_to_db, async_log_error_to_db
+
+# 멀티심볼 모드 관련 imports
+from HYPERRSI.src.services.multi_symbol_service import multi_symbol_service
+from HYPERRSI.src.services.preset_service import preset_service
 
 logger = get_logger(__name__)
 error_logger = setup_error_logger()
@@ -59,7 +65,6 @@ async def get_okx_uid_from_telegram_id(telegram_id: str) -> str:
         except Exception as e:
             logger.error(f"텔레그램 ID를 OKX UID로 변환 중 오류: {str(e)}")
             # errordb 로깅
-            from HYPERRSI.src.utils.error_logger import log_error_to_db
             log_error_to_db(
                 error=e,
                 user_id=telegram_id,
@@ -107,10 +112,18 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
         # 원본 user_id를 telegram_id로 저장 (텔레그램 메시지 전송용)
         original_user_id = user_id
         telegram_id = user_id if len(str(user_id)) < 13 else None
-        try: 
+        try:
             user_id = await get_identifier(user_id)
         except Exception as e:
             traceback.print_exc()
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="UserIdentifierError",
+                user_id=original_user_id,
+                severity="WARNING",
+                metadata={"component": "execute_trading_logic.get_identifier"}
+            )
             user_id = None
         if not user_id:
             logger.error(f"유효하지 않은 사용자 ID: {original_user_id}")
@@ -150,7 +163,6 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
             logger.error(f"트레이딩 초기화 실패: {str(e)}", exc_info=True)
 
             # errordb 로깅
-            from HYPERRSI.src.utils.error_logger import async_log_error_to_db
             await async_log_error_to_db(
                 error=e,
                 user_id=user_id,
@@ -201,7 +213,16 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                     #await trading_service.close()
                 except Exception as close_error:
                     logger.error(f"트레이딩 서비스 종료 실패: {str(close_error)}", exc_info=True)
-                
+                    # errordb 로깅
+                    await async_log_error_to_db(
+                        error=close_error,
+                        error_type="TradingServiceCleanupError",
+                        user_id=user_id,
+                        severity="WARNING",
+                        symbol=symbol,
+                        metadata={"component": "execute_trading_logic.cleanup"}
+                    )
+
             return
 
         try:
@@ -211,20 +232,50 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                 await send_telegram_message("⚠️ 트레이딩 설정 오류\n""─────────────────────\n""사용자 설정을 찾을 수 없습니다.\n""/settings 명령어로 설정을 확인해주세요.",user_id)
                 await redis.set(f"user:{user_id}:trading:status", "stopped")
                 return
-            entry_fail_count_key = f"user:{user_id}:entry_fail_count"
-            await redis.delete(entry_fail_count_key)
+
+            # === 멀티심볼 모드: 프리셋 설정 로드 및 병합 ===
+            preset_id = None
+            active_preset = None
+            if app_settings.MULTI_SYMBOL_ENABLED:
+                try:
+                    # 이 심볼에 연결된 프리셋 ID 조회
+                    symbol_info = await multi_symbol_service.get_symbol_info(user_id, symbol)
+                    if symbol_info and symbol_info.get('preset_id'):
+                        preset_id = symbol_info['preset_id']
+                        logger.debug(f"[{user_id}] 심볼 {symbol}의 프리셋 ID: {preset_id}")
+
+                        # 프리셋 설정 로드
+                        active_preset = await preset_service.get_preset(user_id, preset_id)
+                        if active_preset:
+                            logger.info(f"[{user_id}] 프리셋 '{active_preset.name}' 로드 완료")
+                            # 프리셋 설정으로 user_settings 오버라이드
+                            preset_settings = active_preset.settings
+                            for key, value in preset_settings.items():
+                                if value is not None:
+                                    user_settings[key] = value
+                                    logger.debug(f"[{user_id}] 프리셋 설정 적용: {key}={value}")
+                        else:
+                            logger.warning(f"[{user_id}] 프리셋 {preset_id}를 찾을 수 없음 - 기본 설정 사용")
+                except Exception as preset_err:
+                    logger.warning(f"[{user_id}] 프리셋 로드 중 오류 (무시됨): {str(preset_err)}")
+                    # 프리셋 로드 실패 시 기본 user_settings 사용
+
             active_key = f"user:{user_id}:preferences"
-        
+
             # 매개변수로 전달된 symbol이 없는 경우에만 Redis에서 가져옴
             if symbol is None:
                 symbol = await redis.hget(active_key, "symbol")
                 if not symbol:
                     symbol = 'BTC-USDT-SWAP'
-                
-            if timeframe is None:   
+
+            if timeframe is None:
                 timeframe = await redis.hget(active_key, "timeframe")
                 if not timeframe:
                     timeframe = '1m'
+
+            # 심볼별 entry_fail_count 초기화 (심볼이 결정된 후에 실행)
+            entry_fail_count_key = f"user:{user_id}:{symbol}:entry_fail_count"
+            await redis.delete(entry_fail_count_key)
             if not symbol or not timeframe:
                 await send_telegram_message("⚠️ 트레이딩 설정 오류\n""─────────────────────\n""심볼 또는 타임프레임이 설정되지 않았습니다.\n""설정을 확인하고 다시 시작해주세요.",user_id)
                 await redis.set(f"user:{user_id}:trading:status", "stopped")
@@ -474,6 +525,15 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                         context={"user_id": user_id, "symbol": symbol, "operation": "monitor_orders"},
                         okx_uid=user_id
                     )
+                    # errordb 로깅
+                    await async_log_error_to_db(
+                        error=e,
+                        error_type="MonitorOrdersError",
+                        user_id=user_id,
+                        severity="ERROR",
+                        symbol=symbol,
+                        metadata={"component": "execute_trading_logic.monitor_orders", "timeframe": timeframe}
+                    )
 
                 # --- (2) RSI / 트랜드 분석 ---
                 tf_str = get_timeframe(timeframe)
@@ -565,7 +625,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                                     side=current_position.side
                                 )
                                 current_position = None
-                    except Exception as e:  
+                    except Exception as e:
                         traceback.print_exc()
                         logger.error(f"[{user_id}]:포지션 청산 오류", exc_info=True)
                         await handle_critical_error(
@@ -579,6 +639,19 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                                 "min_size": min_sustain_contract_size if 'min_sustain_contract_size' in locals() else None
                             },
                             okx_uid=user_id
+                        )
+                        # errordb 로깅
+                        await async_log_error_to_db(
+                            error=e,
+                            error_type="PositionCloseError",
+                            user_id=user_id,
+                            severity="ERROR",
+                            symbol=symbol,
+                            metadata={
+                                "component": "execute_trading_logic.close_min_position",
+                                "position_size": current_contracts_amount if 'current_contracts_amount' in locals() else None,
+                                "min_size": min_sustain_contract_size if 'min_sustain_contract_size' in locals() else None
+                            }
                         )
                         await send_telegram_message(f"⚠️ 포지션 청산 오류: {str(e)}", user_id, debug=True)
                 # 마지막 포지션 출력 시간 체크
@@ -634,6 +707,18 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                     except Exception as e:
                         error_logger.error(f"[{user_id}]:포지션 처리 오류", exc_info=True)
                         error_logger.error(f"[{user_id}] Calling handle_critical_error for position error")
+                        # errordb 로깅
+                        await async_log_error_to_db(
+                            error=e,
+                            error_type="PositionHandlingError",
+                            user_id=user_id,
+                            severity="ERROR",
+                            symbol=symbol,
+                            metadata={
+                                "component": "execute_trading_logic.handle_existing_position",
+                                "position_side": current_position.side if current_position else None
+                            }
+                        )
                         try:
                             await handle_critical_error(
                                 error=e,
@@ -649,7 +734,16 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                             error_logger.error(f"[{user_id}] handle_critical_error completed successfully")
                         except Exception as critical_error:
                             error_logger.error(f"[{user_id}] handle_critical_error failed: {str(critical_error)}", exc_info=True)
-                    
+                            # errordb 로깅 (critical error handler 실패)
+                            await async_log_error_to_db(
+                                error=critical_error,
+                                error_type="CriticalErrorHandlerFailed",
+                                user_id=user_id,
+                                severity="CRITICAL",
+                                symbol=symbol,
+                                metadata={"component": "execute_trading_logic.handle_critical_error", "original_error": str(e)}
+                            )
+
                         await send_telegram_message(f"⚠️ 포지션 처리 오류: {str(e)}", user_id, debug=True)
                 logger.debug(f"[{user_id}] 트레이딩 로직 루프 완료. 현재 RSI: {current_rsi}, 현재 상태: {current_state}") # 디버깅용
 
@@ -670,6 +764,21 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
             #await send_telegram_message(f"[{user_id}]종료되었습니다. 잠시 후 다시 실행해주세요", user_id)
             #await send_telegram_message(f"[{user_id}]종료되었습니다. 잠시 후 다시 실행해주세요: {str(e)}", user_id, debug=True)
             traceback.print_exc()
+
+            # errordb 로깅 (트레이딩 로직 오류)
+            await async_log_error_to_db(
+                error=e,
+                error_type="TradingLogicError",
+                user_id=user_id,
+                telegram_id=int(telegram_id) if telegram_id else None,
+                severity="ERROR",
+                symbol=symbol,
+                metadata={
+                    "timeframe": timeframe,
+                    "restart": restart,
+                    "component": "execute_trading_logic_main"
+                }
+            )
 
         finally:
             if trading_service:

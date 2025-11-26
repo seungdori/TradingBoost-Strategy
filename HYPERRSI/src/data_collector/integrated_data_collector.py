@@ -14,7 +14,8 @@ import redis
 
 from HYPERRSI.src.config import OKX_API_KEY, OKX_PASSPHRASE, OKX_SECRET_KEY
 from HYPERRSI.src.core.config import settings
-from shared.indicators import compute_all_indicators
+from HYPERRSI.src.trading.models import get_auto_trend_timeframe
+from shared.indicators import compute_all_indicators, add_auto_trend_state_to_candles
 from shared.logging import get_logger
 
 # 로깅 설정
@@ -55,8 +56,11 @@ exchange = ccxt.okx({
     'secret': OKX_SECRET,
     'password': OKX_PASSPHRASE,
     'enableRateLimit': True,
+    'timeout': 30000,  # 30초 타임아웃 (네트워크 지연 대응)
     'options': {
         'defaultType': 'swap',
+        'adjustForTimeDifference': True,  # 서버 시간 차이 자동 조정
+        'recvWindow': 10000,  # 요청 수신 윈도우 10초
     }
 })
 
@@ -80,6 +84,35 @@ from shared.utils.time_helpers import align_timestamp, calculate_update_interval
 # CandlesDB Writer
 from HYPERRSI.src.data_collector.candlesdb_writer import get_candlesdb_writer
 candlesdb_writer = get_candlesdb_writer()
+
+
+def _get_candles_from_redis_for_auto_trend(symbol: str, tf_str: str) -> list:
+    """
+    Redis에서 auto_trend_state 계산용 캔들 데이터 가져오기
+
+    Args:
+        symbol: 심볼 (예: "BTC-USDT-SWAP")
+        tf_str: 타임프레임 문자열 (예: "30m", "1h")
+
+    Returns:
+        캔들 리스트 (timestamp, close 포함)
+    """
+    key = f"candles_with_indicators:{symbol}:{tf_str}"
+    try:
+        existing_list = redis_client.lrange(key, 0, -1)
+        candles = []
+        for item in existing_list:
+            try:
+                item_str = item.decode('utf-8') if isinstance(item, bytes) else item
+                obj = json.loads(item_str)
+                if "timestamp" in obj and "close" in obj:
+                    candles.append(obj)
+            except Exception:
+                pass
+        return candles
+    except Exception as e:
+        logger.warning(f"Redis에서 auto_trend 캔들 가져오기 실패: {symbol} {tf_str} - {e}")
+        return []
 
 
 def fetch_latest_candles(symbol, timeframe, limit=POLLING_CANDLES, include_current=False):
@@ -164,6 +197,15 @@ def fetch_latest_candles(symbol, timeframe, limit=POLLING_CANDLES, include_curre
 
     except Exception as e:
         logger.error(f"캔들 데이터 가져오기 오류: {symbol} {tf_str} - {e}", exc_info=True)
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="CandleDataFetchError",
+            severity="ERROR",
+            symbol=symbol,
+            metadata={"timeframe": tf_str, "component": "integrated_data_collector.fetch_latest_candles"}
+        )
         return []
 
 
@@ -204,6 +246,15 @@ def _fetch_ohlcv_with_retry(symbol, tf_str, limit, since):
             time.sleep(wait_time)
         except Exception as e:
             logger.error(f"OHLCV 데이터 가져오기 실패: {symbol} ({tf_str}). 오류: {e}")
+            # errordb 로깅
+            from HYPERRSI.src.utils.error_logger import log_error_to_db
+            log_error_to_db(
+                error=e,
+                error_type="OHLCVFetchError",
+                severity="WARNING",
+                symbol=symbol,
+                metadata={"timeframe": tf_str, "limit": limit, "since": since, "component": "integrated_data_collector._fetch_ohlcv_with_retry"}
+            )
             return []
 
 
@@ -317,6 +368,15 @@ def check_and_fill_gap(symbol, timeframe):
     
     except Exception as e:
         logger.error(f"갭 체크 중 오류: {key} - {e}", exc_info=True)
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="CandleGapCheckError",
+            severity="WARNING",
+            symbol=symbol,
+            metadata={"timeframe": tf_str, "component": "integrated_data_collector.check_and_fill_gap"}
+        )
 
 def fill_gap(symbol, timeframe, from_ts, to_ts):
     """데이터 갭 채우기"""
@@ -373,6 +433,15 @@ def fill_gap(symbol, timeframe, from_ts, to_ts):
         
     except Exception as e:
         logger.error(f"갭 채우기 중 오류: {key} - {e}", exc_info=True)
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="CandleGapFillError",
+            severity="WARNING",
+            symbol=symbol,
+            metadata={"timeframe": tf_str, "from_ts": from_ts, "to_ts": to_ts, "component": "integrated_data_collector.fill_gap"}
+        )
 
 def update_candle_data(symbol, timeframe, new_candles, warm_up_count=0):
     """
@@ -492,6 +561,22 @@ def update_candle_data(symbol, timeframe, new_candles, warm_up_count=0):
         # 인디케이터 계산 (전체 데이터로 계산)
         candles_with_ind = compute_all_indicators(candles, rsi_period=14, atr_period=14)
 
+        # auto_trend_state 추가 (Pine Script '자동' 모드용)
+        auto_trend_tf_str = get_auto_trend_timeframe(tf_str)
+        auto_trend_candles = _get_candles_from_redis_for_auto_trend(symbol, auto_trend_tf_str)
+        if auto_trend_candles and len(auto_trend_candles) >= 30:
+            candles_with_ind = add_auto_trend_state_to_candles(
+                candles_with_ind,
+                auto_trend_candles,
+                current_timeframe_minutes=timeframe
+            )
+            logger.debug(f"auto_trend_state 계산 완료: {symbol} {tf_str} (auto_trend_tf: {auto_trend_tf_str})")
+        else:
+            # auto_trend 캔들이 부족하면 0으로 설정
+            for cndl in candles_with_ind:
+                cndl["auto_trend_state"] = 0
+            logger.debug(f"auto_trend 캔들 부족, auto_trend_state=0으로 설정: {symbol} {tf_str}")
+
         # warm_up_count가 지정된 경우, 처음 해당 개수만큼 제외
         if warm_up_count > 0 and len(candles_with_ind) > warm_up_count:
             logger.info(f"Warm-up 캔들 제외: {symbol} {tf_str} - 처음 {warm_up_count}개 제외, {len(candles_with_ind) - warm_up_count}개 저장")
@@ -512,6 +597,15 @@ def update_candle_data(symbol, timeframe, new_candles, warm_up_count=0):
     
     except Exception as e:
         logger.error(f"캔들 데이터 업데이트 중 오류: {symbol} {tf_str} - {e}", exc_info=True)
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="CandleDataUpdateError",
+            severity="ERROR",
+            symbol=symbol,
+            metadata={"timeframe": tf_str, "component": "integrated_data_collector.update_candle_data"}
+        )
 
 def save_candles_with_indicators(symbol, tf_str, candles_with_ind):
     """인디케이터가 포함된 캔들 데이터 저장"""
@@ -568,13 +662,26 @@ def save_candles_with_indicators(symbol, tf_str, candles_with_ind):
 
     except Exception as e:
         logger.error(f"인디케이터 포함 캔들 저장 중 오류: {symbol} {tf_str} - {e}", exc_info=True)
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="CandleIndicatorSaveError",
+            severity="ERROR",
+            symbol=symbol,
+            metadata={"timeframe": tf_str, "component": "integrated_data_collector.save_candles_with_indicators"}
+        )
 
 def fetch_initial_data():
     """초기 데이터 로드"""
     logger.info("=== 초기 데이터 로드 시작 ===")
 
+    # 1단계: 큰 타임프레임부터 로드 (auto_trend_state 계산을 위해)
+    # 예: 5m은 30m의 auto_trend_state가 필요하므로, 30m을 먼저 로드
+    sorted_timeframes = sorted(TIMEFRAMES, reverse=True)  # [240, 60, 30, 15, 5, 3, 1]
+
     for symbol in SYMBOLS:
-        for timeframe in TIMEFRAMES:
+        for timeframe in sorted_timeframes:
             tf_str = TF_MAP.get(timeframe, "1m")
             key = f"{symbol}:{tf_str}"
 
@@ -591,6 +698,63 @@ def fetch_initial_data():
                 logger.info(f"초기 데이터 로드 성공: {key} - {len(candles)}개 캔들 (warm-up: {MIN_CANDLES_FOR_INDICATORS}개)")
             else:
                 logger.warning(f"초기 데이터 로드 실패: {key}")
+
+    # 2단계: auto_trend_state 재계산 (이제 모든 타임프레임 데이터가 Redis에 있음)
+    logger.info("=== auto_trend_state 재계산 시작 ===")
+    for symbol in SYMBOLS:
+        for timeframe in TIMEFRAMES:
+            tf_str = TF_MAP.get(timeframe, "1m")
+            key = f"{symbol}:{tf_str}"
+
+            # 현재 캔들 데이터 가져오기
+            candles_key = f"candles_with_indicators:{symbol}:{tf_str}"
+            existing_list = redis_client.lrange(candles_key, 0, -1)
+
+            if not existing_list:
+                continue
+
+            # 캔들 파싱
+            candles = []
+            for item in existing_list:
+                try:
+                    item_str = item.decode('utf-8') if isinstance(item, bytes) else item
+                    obj = json.loads(item_str)
+                    candles.append(obj)
+                except Exception:
+                    pass
+
+            if not candles:
+                continue
+
+            # auto_trend_state 계산
+            auto_trend_tf_str = get_auto_trend_timeframe(tf_str)
+            auto_trend_candles = _get_candles_from_redis_for_auto_trend(symbol, auto_trend_tf_str)
+
+            if auto_trend_candles and len(auto_trend_candles) >= 30:
+                candles = add_auto_trend_state_to_candles(
+                    candles,
+                    auto_trend_candles,
+                    current_timeframe_minutes=timeframe
+                )
+                logger.info(f"auto_trend_state 재계산 완료: {key} (auto_trend_tf: {auto_trend_tf_str})")
+
+                # Redis에 업데이트
+                with redis_client.pipeline() as pipe:
+                    pipe.delete(candles_key)
+                    for cndl in candles:
+                        pipe.rpush(candles_key, json.dumps(cndl))
+                    pipe.execute()
+
+                # CandlesDB에도 업데이트
+                if candlesdb_writer.enabled:
+                    try:
+                        candlesdb_writer.upsert_candles(symbol, timeframe, candles)
+                    except Exception as db_e:
+                        logger.warning(f"CandlesDB auto_trend_state 업데이트 실패: {key} - {db_e}")
+            else:
+                logger.warning(f"auto_trend 캔들 부족, 재계산 불가: {key} (필요: {auto_trend_tf_str})")
+
+    logger.info("=== auto_trend_state 재계산 완료 ===")
 
     # 초기 로드 완료 플래그 설정
     initial_data_loaded.set()
@@ -649,6 +813,15 @@ def update_current_candle(symbol, timeframe):
     
     except Exception as e:
         logger.error(f"현재 캔들 업데이트 중 오류: {key} - {e}", exc_info=True)
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="CurrentCandleUpdateError",
+            severity="WARNING",
+            symbol=symbol,
+            metadata={"timeframe": tf_str, "component": "integrated_data_collector.update_current_candle"}
+        )
 
 def update_current_candle_with_indicators(symbol, timeframe, current_candle):
     """현재 진행 중인 캔들에 인디케이터 계산하여 업데이트"""
@@ -717,7 +890,21 @@ def update_current_candle_with_indicators(symbol, timeframe, current_candle):
         
         # 인디케이터 계산
         candles_with_ind = compute_all_indicators(candles, rsi_period=14, atr_period=14)
-        
+
+        # auto_trend_state 추가 (Pine Script '자동' 모드용)
+        auto_trend_tf_str = get_auto_trend_timeframe(tf_str)
+        auto_trend_candles = _get_candles_from_redis_for_auto_trend(symbol, auto_trend_tf_str)
+        if auto_trend_candles and len(auto_trend_candles) >= 30:
+            candles_with_ind = add_auto_trend_state_to_candles(
+                candles_with_ind,
+                auto_trend_candles,
+                current_timeframe_minutes=timeframe
+            )
+        else:
+            # auto_trend 캔들이 부족하면 0으로 설정
+            for cndl in candles_with_ind:
+                cndl["auto_trend_state"] = 0
+
         # 기존 인디케이터 데이터 로드
         existing_ind_list = redis_client.lrange(key, 0, -1)
         candle_ind_map = {}
@@ -790,6 +977,15 @@ def update_current_candle_with_indicators(symbol, timeframe, current_candle):
     
     except Exception as e:
         logger.error(f"현재 캔들 인디케이터 업데이트 중 오류: {symbol} {tf_str} - {e}", exc_info=True)
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="CurrentCandleIndicatorUpdateError",
+            severity="WARNING",
+            symbol=symbol,
+            metadata={"timeframe": tf_str, "component": "integrated_data_collector.update_current_candle_with_indicators"}
+        )
 
 
 def polling_worker():
@@ -912,6 +1108,14 @@ def polling_worker():
     
     except Exception as e:
         logger.error(f"폴링 워커 오류: {e}", exc_info=True)
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="PollingWorkerError",
+            severity="CRITICAL",
+            metadata={"component": "integrated_data_collector.polling_worker"}
+        )
     finally:
         logger.info("폴링 워커 종료")
 

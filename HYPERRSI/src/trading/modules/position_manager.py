@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 from shared.cache import TradingCache
 from HYPERRSI.src.trading.error_message import map_exchange_error
 from HYPERRSI.src.trading.models import OrderStatus, Position
-from HYPERRSI.src.trading.stats import record_trade_history_entry, update_trade_history_exit
+from HYPERRSI.src.trading.stats import record_trade_history_entry, update_trade_history_exit, update_trading_stats
 from HYPERRSI.telegram_message import send_telegram_message
 from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger
@@ -397,7 +397,7 @@ class PositionManager:
                 leverage=leverage,
                 order_id=order_state.order_id,
                 sl_order_id=None,
-                sl_price=None,
+                sl_price=stop_loss,  # 전달받은 stop_loss 값 사용
                 tp_order_ids=[],
                 tp_prices=[],
                 last_filled_price=safe_float(order_state.avg_fill_price),  # 체결 가격 설정
@@ -464,13 +464,15 @@ class PositionManager:
                     logger.debug(f"🛡️ [{user_id}] SL formatted: {sl_text}")
 
                     direction_emoji = "🟢" if direction == "long" else "🔴"
+                    # 수량 포맷팅 (trailing zeros 제거, 천단위 콤마)
+                    qty_formatted = f"{entry_qty:,}" if entry_qty >= 1000 else f"{entry_qty:g}"
                     telegram_content = (
                         f"{direction_emoji} 포지션 오픈 완료\n"
                         f"━━━━━━━━━━━━━━━\n"
                         f"심볼: {symbol}\n"
                         f"방향: {direction.upper()}\n"
-                        f"수량: {entry_qty:.6f} ({entry_size:.2f} 계약)\n"
-                        f"진입가: {safe_float(order_state.avg_fill_price):.2f}\n"
+                        f"수량: {qty_formatted}\n"
+                        f"진입가: {safe_float(order_state.avg_fill_price):,.2f}\n"
                         f"레버리지: {leverage}x\n"
                         f"━━━━━━━━━━━━━━━\n"
                         f"익절(TP):\n{tp_text}\n"
@@ -589,16 +591,74 @@ class PositionManager:
                 error_detail = f"status={order_state.status}, order_id={order_state.order_id}"
                 raise ValueError(f"청산 주문 실패: {error_detail}")
 
-            # 6) Exit 히스토리 업데이트
+            # 6) PnL 계산 및 통계 업데이트
+            exit_price = safe_float(order_state.avg_fill_price)
+            entry_price = safe_float(position.entry_price)
+
+            # PnL 계산 (계약 기준)
+            if side == "long":
+                pnl = size * (exit_price - entry_price)
+            else:
+                pnl = size * (entry_price - exit_price)
+
+            pnl_percent = ((exit_price - entry_price) / entry_price * 100) if side == "long" else ((entry_price - exit_price) / entry_price * 100)
+
+            # close_type 매핑 (reason 기반)
+            close_type_map = {
+                "trend_reversal": "trend_reversal",
+                "트랜드 반전": "trend_reversal",
+                "트렌드 반전": "trend_reversal",
+                "take_profit": "take_profit",
+                "stop_loss": "stop_loss",
+                "trailing_stop": "trailing_stop",
+                "break_even": "break_even",
+                "manual": "manual",
+                "signal": "signal",
+            }
+            close_type = close_type_map.get(reason.lower().split()[0] if reason else "manual", "manual")
+
+            # Exit 히스토리 업데이트 (Redis)
             await update_trade_history_exit(
                 user_id=str(user_id),
                 symbol=symbol,
                 order_id=order_state.order_id or "",
-                exit_price=safe_float(order_state.avg_fill_price),
-                pnl=0.0,  # TODO: 실제 PnL 계산 로직 추가
-                close_type="manual",
+                exit_price=exit_price,
+                pnl=pnl,
+                close_type=close_type,
                 comment=reason
             )
+
+            # PostgreSQL 거래 기록 및 Redis 통계 업데이트
+            try:
+                # Redis에서 추가 정보 조회
+                redis_client = await get_redis_client()
+                position_key = f"user:{user_id}:position:{symbol}:{side}"
+                position_info = await redis_client.hgetall(position_key)
+
+                entry_time_str = position_info.get("entry_time", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                dca_count_key = f"user:{user_id}:position:{symbol}:{side}:dca_count"
+                dca_count_str = await redis_client.get(dca_count_key)
+                dca_count = int(dca_count_str) if dca_count_str else 0
+                leverage = int(position_info.get("leverage", 1)) if position_info.get("leverage") else 1
+
+                await update_trading_stats(
+                    user_id=str(user_id),
+                    symbol=symbol,
+                    entry_price=entry_price,
+                    exit_price=exit_price,
+                    position_size=close_qty_display,
+                    pnl=pnl,
+                    side=side,
+                    entry_time=entry_time_str,
+                    exit_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    close_type=close_type,
+                    leverage=leverage,
+                    dca_count=dca_count,
+                    avg_entry_price=float(position_info.get("avg_entry_price", entry_price)) if position_info.get("avg_entry_price") else None,
+                )
+                logger.info(f"[{user_id}] Trading stats updated: {symbol} {side} - PnL: {pnl:+.4f}")
+            except Exception as stats_err:
+                logger.warning(f"[{user_id}] Failed to update trading stats: {stats_err}")
 
             # 7) Redis에서 포지션 제거 (전체 청산 시)
             if size >= position.size:
@@ -613,12 +673,15 @@ class PositionManager:
 
             # 8) 텔레그램 알림
             try:
+                # 청산 수량 포맷팅 (trailing zeros 제거, 천단위 콤마)
+                close_qty_float = float(close_qty_display) if isinstance(close_qty_display, str) else close_qty_display
+                close_qty_formatted = f"{close_qty_float:,}" if close_qty_float >= 1000 else f"{close_qty_float:g}"
                 telegram_content = (
                     f"✅ 포지션 청산 완료\n\n"
                     f"사용자: {user_id}\n"
                     f"심볼: {symbol}\n"
                     f"방향: {side}\n"
-                    f"청산 수량: {close_qty_display} ({size:.2f} 계약)\n"
+                    f"청산 수량: {close_qty_formatted}\n"
                     f"청산 가격: {order_state.avg_fill_price}\n"
                     f"사유: {reason}"
                 )

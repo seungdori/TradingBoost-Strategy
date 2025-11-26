@@ -24,6 +24,10 @@ if TYPE_CHECKING:
 from .telegram_service import get_identifier, send_telegram_message
 from .utils import get_user_settings, is_true_value
 
+# PostgreSQL SSOT - State Change Logger
+from HYPERRSI.src.services.state_change_logger import get_state_change_logger
+from HYPERRSI.src.core.models.state_change import ChangeType, TriggeredBy
+
 logger = get_logger(__name__)
 MIN_TRAILING_OFFSET_PERCENT = 0.1
 
@@ -38,7 +42,7 @@ def __getattr__(name):
 async def activate_trailing_stop(user_id: str, symbol: str, direction: str, position_data: dict, tp_data: list = None):
     """
     TP3 도달 시 트레일링 스탑 활성화
-    
+
     Args:
         user_id: 사용자 ID (텔레그램 ID 또는 OKX UID)
     """
@@ -71,6 +75,28 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
         redis = await get_redis_client()
         # user_id를 OKX UID로 변환
         okx_uid = await get_identifier(str(user_id))
+
+        # 🔒 중복 활성화 방지: 이미 활성화된 트레일링 스탑이 있으면 스킵
+        # direction을 미리 정규화 (아래에서 다시 정규화하지만, 키 체크용으로 먼저 수행)
+        raw_direction = direction or position_data.get("posSide") or position_data.get("position_side") or position_data.get("side") or ""
+        pre_check_direction = str(raw_direction).lower()
+        if pre_check_direction == "buy":
+            pre_check_direction = "long"
+        elif pre_check_direction == "sell":
+            pre_check_direction = "short"
+
+        if pre_check_direction:
+            existing_trailing_key = f"trailing:user:{okx_uid}:{symbol}:{pre_check_direction}"
+            if await redis.exists(existing_trailing_key):
+                existing_data = await redis.hgetall(existing_trailing_key)
+                if existing_data:
+                    # bytes를 str로 변환하여 확인
+                    active_value = existing_data.get("active") or existing_data.get(b"active", b"")
+                    if isinstance(active_value, bytes):
+                        active_value = active_value.decode()
+                    if is_true_value(active_value):
+                        logger.info(f"🔒 트레일링 스탑 이미 활성화됨, 중복 활성화 스킵: {existing_trailing_key}")
+                        return existing_trailing_key
         
         # 포지션 방향 정규화
         raw_direction = direction or position_data.get("posSide") or position_data.get("position_side") or position_data.get("side") or ""
@@ -292,6 +318,34 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
                     )
                 except Exception as e:
                     logger.error(f"트레일링 스탑 로깅 실패: {str(e)}")
+
+                # PostgreSQL 상태 변경 로깅 - 트레일링스탑 활성화
+                try:
+                    state_change_logger = get_state_change_logger()
+                    await state_change_logger.log_change(
+                        okx_uid=okx_uid,
+                        symbol=symbol,
+                        change_type=ChangeType.TRAILING_ACTIVATED,
+                        new_state={
+                            'trailing_stop_price': trailing_stop_price,
+                            'trailing_offset': trailing_offset,
+                            'highest_price': highest_price if direction == "long" else None,
+                            'lowest_price': lowest_price if direction == "short" else None,
+                            'direction': direction,
+                        },
+                        price=current_price,
+                        triggered_by=TriggeredBy.TP_SL,
+                        trigger_source='trailing_stop_handler.py:activate_trailing_stop',
+                        extra_data={
+                            'entry_price': entry_price,
+                            'contracts_amount': contracts_amount,
+                            'use_tp2_tp3_diff': use_tp2_tp3_diff,
+                            'tp2_price': tp2_price,
+                            'tp3_price': tp3_price,
+                        }
+                    )
+                except Exception as log_err:
+                    logger.warning(f"[{okx_uid}] 트레일링스탑 활성화 로깅 실패 (무시됨): {log_err}")
                 
                 
                 # 알림 전송
@@ -448,6 +502,25 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                 
                 logger.info(f"트레일링 스탑 업데이트 (롱) - 사용자:{okx_uid}, 심볼:{symbol}, "
                            f"새 최고가:{highest_price:.2f}, 새 스탑:{trailing_stop_price:.2f}")
+
+                # PostgreSQL 상태 변경 로깅 - 트레일링스탑 업데이트 (롱)
+                try:
+                    state_change_logger = get_state_change_logger()
+                    await state_change_logger.log_change(
+                        okx_uid=okx_uid,
+                        symbol=symbol,
+                        change_type=ChangeType.TRAILING_UPDATED,
+                        new_state={
+                            'trailing_stop_price': trailing_stop_price,
+                            'highest_price': highest_price,
+                            'direction': 'long',
+                        },
+                        price=current_price,
+                        triggered_by=TriggeredBy.SYSTEM,
+                        trigger_source='trailing_stop_handler.py:check_trailing_stop',
+                    )
+                except Exception as log_err:
+                    logger.warning(f"[{okx_uid}] 트레일링스탑 업데이트 로깅 실패 (무시됨): {log_err}")
             
             # 현재가가 트레일링 스탑 가격 아래로 떨어졌는지 체크 (종료 조건)
             trailing_stop_price = float(ts_data.get("trailing_stop_price", 0))
@@ -476,6 +549,15 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                     # 포지션이 존재하는 경우에만 종료 시도
                     close_request = ClosePositionRequest(close_type='market', price=current_price, close_percent=100.0)
                     asyncio.create_task(close_position(symbol=symbol, close_request=close_request, user_id=okx_uid, side=direction))
+
+                    # tp_trigger_type이 existing_position인 경우 헷지도 종료
+                    from HYPERRSI.src.trading.dual_side_entry import close_hedge_on_main_exit
+                    asyncio.create_task(close_hedge_on_main_exit(
+                        user_id=okx_uid,
+                        symbol=symbol,
+                        main_position_side=direction,
+                        exit_reason="trailing_stop"
+                    ))
                 except Exception as e:
                     # 포지션을 찾을 수 없는 경우 (404 에러)
                     if "활성화된 포지션을 찾을 수 없습니다" in str(e) or "지정한 방향" in str(e) or "종료할 포지션이 없습니다" in str(e):
@@ -573,6 +655,25 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                 
                 logger.info(f"트레일링 스탑 업데이트 (숏) - 사용자:{user_id}, 심볼:{symbol}, "
                            f"새 최저가:{lowest_price:.2f}, 새 스탑:{trailing_stop_price:.2f}")
+
+                # PostgreSQL 상태 변경 로깅 - 트레일링스탑 업데이트 (숏)
+                try:
+                    state_change_logger = get_state_change_logger()
+                    await state_change_logger.log_change(
+                        okx_uid=okx_uid,
+                        symbol=symbol,
+                        change_type=ChangeType.TRAILING_UPDATED,
+                        new_state={
+                            'trailing_stop_price': trailing_stop_price,
+                            'lowest_price': lowest_price,
+                            'direction': 'short',
+                        },
+                        price=current_price,
+                        triggered_by=TriggeredBy.SYSTEM,
+                        trigger_source='trailing_stop_handler.py:check_trailing_stop',
+                    )
+                except Exception as log_err:
+                    logger.warning(f"[{okx_uid}] 트레일링스탑 업데이트 로깅 실패 (무시됨): {log_err}")
             
             # 현재가가 트레일링 스탑 가격 위로 올라갔는지 체크 (종료 조건)
             trailing_stop_price = float(ts_data.get("trailing_stop_price", float('inf')))
@@ -602,6 +703,15 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                     # 포지션이 존재하는 경우에만 종료 시도
                     close_request = ClosePositionRequest(close_type='market', price=current_price, close_percent=100.0)
                     await close_position(symbol=symbol, close_request=close_request, user_id=user_id, side=direction)
+
+                    # tp_trigger_type이 existing_position인 경우 헷지도 종료
+                    from HYPERRSI.src.trading.dual_side_entry import close_hedge_on_main_exit
+                    asyncio.create_task(close_hedge_on_main_exit(
+                        user_id=user_id,
+                        symbol=symbol,
+                        main_position_side=direction,
+                        exit_reason="trailing_stop"
+                    ))
                 except Exception as e:
                     # 포지션을 찾을 수 없는 경우 (404 에러)
                     if "활성화된 포지션을 찾을 수 없습니다" in str(e) or "지정한 방향" in str(e) or "종료할 포지션이 없습니다" in str(e):
@@ -610,10 +720,10 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                         # 다른 오류는 기존대로 처리
                         logger.error(f"포지션 종료 중 오류: {str(e)}")
                         traceback.print_exc()
-                    
+
                     asyncio.create_task(clear_trailing_stop(user_id, symbol, direction))
                     return False
-                
+
                 asyncio.create_task(clear_trailing_stop(user_id, symbol, direction))
                 
                 # 트레일링 스탑 키에 조건 충족 상태 기록

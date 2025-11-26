@@ -11,6 +11,7 @@ from fastapi import APIRouter, Body, HTTPException, Path
 from pydantic import BaseModel, Field, field_validator
 
 from HYPERRSI.src.core.error_handler import log_error
+from HYPERRSI.src.utils.error_logger import log_error_to_db
 from shared.database.redis_helper import get_redis_client
 from shared.database.redis_patterns import redis_context, RedisTimeout
 from shared.dtos.trading import ClosePositionRequest, OpenPositionRequest, PositionResponse
@@ -167,6 +168,14 @@ async def get_user_api_keys(user_id: str) -> Dict[str, str]:
                 "function": "get_user_api_keys",
                 "timestamp": datetime.now().isoformat()
             }
+        )
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="APIKeyFetchError",
+            user_id=user_id,
+            severity="ERROR",
+            metadata={"component": "position.get_user_api_keys"}
         )
         logger.error(f"1API 키 조회 실패: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching API keys: {str(e)}")
@@ -393,6 +402,15 @@ async def fetch_okx_position(
                     "timestamp": datetime.now().isoformat()
                 }
             )
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="CCXTClientCloseError",
+                user_id=okx_uid,
+                severity="WARNING",
+                symbol=symbol,
+                metadata={"component": "position.fetch_okx_position"}
+            )
             logger.warning(f"CCXT 클라이언트 종료 중 오류 발생: {str(e)}")
 
         # 포지션이 없거나 비어있는 경우 처리
@@ -467,7 +485,16 @@ async def fetch_okx_position(
                         "function": "validate_position",
                         "timestamp": datetime.now().isoformat()
                     }
-                )   
+                )
+                # errordb 로깅
+                log_error_to_db(
+                    error=e,
+                    error_type="PositionValidationError",
+                    user_id=okx_uid,
+                    severity="WARNING",
+                    symbol=symbol,
+                    metadata={"component": "position.fetch_okx_position", "position_data": str(pos)[:500]}
+                )
                 logger.warning(f"포지션 데이터 변환 중 오류 발생: {str(e)}")
                 continue
 
@@ -567,6 +594,15 @@ async def fetch_okx_position(
                 "function": "fetch_okx_position",
                 "timestamp": datetime.now().isoformat()
             }
+        )
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="FetchPositionError",
+            user_id=okx_uid,
+            severity="ERROR",
+            symbol=symbol,
+            metadata={"component": "position.fetch_okx_position"}
         )
         if client is not None:
             await client.close()
@@ -960,6 +996,15 @@ async def set_position_leverage(
 
     except Exception as e:
         logger.error(f"레버리지 설정 실패 ({symbol}): {str(e)}")
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="LeverageSetError",
+            user_id=user_id,
+            severity="ERROR",
+            symbol=symbol,
+            metadata={"component": "position.set_leverage", "leverage": request.leverage, "marginMode": request.marginMode}
+        )
         raise HTTPException(
             status_code=500,
             detail={
@@ -1425,11 +1470,22 @@ async def open_position_endpoint(
             )
         except Exception as e:
             error_msg = str(e)
+            # errordb 로깅
+            severity = "WARNING" if "자금 부족" in error_msg or "Insufficient" in error_msg else "ERROR"
+            log_error_to_db(
+                error=e,
+                error_type="OpenPositionError",
+                user_id=okx_uid,
+                severity=severity,
+                symbol=req.symbol,
+                side=req.direction,
+                metadata={"component": "position.open_position_endpoint", "is_dca": is_dca, "is_hedge": is_hedge}
+            )
             # 자금 부족 에러 감지
             if "자금 부족" in error_msg or "Insufficient" in error_msg:
                 # 503 Service Unavailable 상태 코드를 사용하여 일시적인 불가용성을 나타냄
                 raise HTTPException(
-                    status_code=503, 
+                    status_code=503,
                     detail=error_msg,
                     headers={"Retry-After": "300"}  # 5분 후 재시도 가능함을 나타냄
                 )
@@ -1482,6 +1538,16 @@ async def open_position_endpoint(
                 "function": "open_position_endpoint",
                 "timestamp": datetime.now().isoformat()
             }
+        )
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="OpenPositionEndpointError",
+            user_id=req.user_id,
+            severity="ERROR",
+            symbol=req.symbol,
+            side=req.direction,
+            metadata={"component": "position.open_position_endpoint"}
         )
         logger.error(f"[open_position] Error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
@@ -1537,6 +1603,15 @@ async def trigger_manual_entry(request: EntryTriggerRequest) -> Dict[str, Any]:
                 "function": "trigger_manual_entry",
                 "timestamp": datetime.now().isoformat()
             }
+        )
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="TriggerManualEntryError",
+            user_id=request.user_id,
+            severity="ERROR",
+            symbol=request.symbol,
+            metadata={"component": "position.trigger_manual_entry", "timeframe": request.timeframe}
         )
         logger.error(f"[entry-trigger] Error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -1896,6 +1971,426 @@ async def close_position_endpoint(req: ClosePositionRequest) -> Dict[str, Any]:
                 "function": "close_position_endpoint",
                 "timestamp": datetime.now().isoformat()
             }
-        )   
+        )
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="ClosePositionEndpointError",
+            user_id=req.user_id,
+            severity="ERROR",
+            symbol=req.symbol,
+            side=req.side,
+            metadata={"component": "position.close_position_endpoint", "percent": req.percent}
+        )
         logger.error(f"[close_position] Error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ------------------------------------------------------
+#  TP/SL/Trailing Stop 정보 조회 API
+# ------------------------------------------------------
+class StopLossInfo(BaseModel):
+    price: Optional[float] = Field(None, description="손절 가격")
+    algo_id: Optional[str] = Field(None, description="알고리즘 주문 ID")
+    trigger_price: Optional[float] = Field(None, description="트리거 가격")
+
+
+class TakeProfitInfo(BaseModel):
+    price: Optional[float] = Field(None, description="익절 가격")
+    size: Optional[float] = Field(None, description="익절 수량")
+    algo_id: Optional[str] = Field(None, description="알고리즘 주문 ID")
+    trigger_price: Optional[float] = Field(None, description="트리거 가격")
+
+
+class TrailingStopInfo(BaseModel):
+    active: bool = Field(False, description="트레일링 스톱 활성화 여부")
+    price: Optional[float] = Field(None, description="현재 트레일링 스톱 가격")
+    offset: Optional[float] = Field(None, description="트레일링 오프셋 값")
+    highest_price: Optional[float] = Field(None, description="최고가 (롱 포지션)")
+    lowest_price: Optional[float] = Field(None, description="최저가 (숏 포지션)")
+    activation_price: Optional[float] = Field(None, description="트레일링 활성화 가격")
+
+
+class PositionTPSLInfo(BaseModel):
+    side: Optional[str] = Field(None, description="포지션 방향 (long/short)")
+    entry_price: Optional[float] = Field(None, description="진입 가격")
+    size: Optional[float] = Field(None, description="포지션 수량")
+    leverage: Optional[float] = Field(None, description="레버리지")
+    entry_count: Optional[int] = Field(None, description="현재 진입 횟수 (DCA 포함)")
+
+
+class DCAInfo(BaseModel):
+    next_entry_price: Optional[float] = Field(None, description="다음 DCA 진입 가격")
+    remaining_levels: int = Field(0, description="남은 DCA 레벨 수")
+    all_levels: List[float] = Field(default_factory=list, description="모든 DCA 레벨 가격 목록")
+
+
+class PositionDetailResponse(BaseModel):
+    user_id: str = Field(..., description="사용자 ID")
+    symbol: str = Field(..., description="거래 심볼")
+    position: Optional[PositionTPSLInfo] = Field(None, description="포지션 정보")
+    stop_loss: Optional[StopLossInfo] = Field(None, description="손절 정보")
+    take_profit: List[TakeProfitInfo] = Field(default_factory=list, description="익절 정보 목록")
+    trailing_stop: Optional[TrailingStopInfo] = Field(None, description="트레일링 스톱 정보")
+    dca: Optional[DCAInfo] = Field(None, description="DCA(물타기) 정보")
+    timestamp: str = Field(..., description="조회 시간")
+
+
+@router.get(
+    "/{user_id}/{symbol}/detail",
+    response_model=PositionDetailResponse,
+    summary="포지션 상세 정보 조회 (TP/SL/Trailing/DCA)",
+    description="""
+# 포지션 상세 정보 조회
+
+특정 사용자의 특정 심볼에 대한 포지션 상세 정보를 조회합니다.
+TP(Take Profit), SL(Stop Loss), Trailing Stop, DCA 정보를 한 번에 확인할 수 있습니다.
+
+## URL 파라미터
+
+- **user_id** (string, required): 사용자 식별자 (OKX UID 또는 텔레그램 ID)
+- **symbol** (string, required): 거래 심볼 (예: BTC-USDT-SWAP)
+
+## 반환 정보
+
+### position (포지션 정보)
+- **side**: 포지션 방향 (long/short)
+- **entry_price**: 평균 진입가
+- **size**: 포지션 수량
+- **leverage**: 레버리지
+- **entry_count**: 현재 진입 횟수 (1=최초진입, 2=1차 DCA, 3=2차 DCA, ...)
+
+### stop_loss (손절 정보)
+- **price**: 손절 가격
+- **algo_id**: OKX 알고리즘 주문 ID
+- **trigger_price**: 트리거 가격
+
+### take_profit (익절 정보 배열)
+- **price**: 익절 가격
+- **size**: 익절 수량
+- **algo_id**: OKX 알고리즘 주문 ID
+- **trigger_price**: 트리거 가격
+
+### trailing_stop (트레일링 스톱 정보)
+- **active**: 활성화 여부
+- **price**: 현재 트레일링 스톱 가격
+- **offset**: 트레일링 오프셋 값
+- **highest_price**: 최고가 (롱 포지션)
+- **lowest_price**: 최저가 (숏 포지션)
+- **activation_price**: 트레일링 활성화 가격
+
+### dca (DCA/물타기 정보)
+- **next_entry_price**: 다음 DCA 진입 가격
+- **remaining_levels**: 남은 DCA 레벨 수
+- **all_levels**: 모든 DCA 레벨 가격 목록
+
+## 예시 URL
+
+```
+GET /api/position/1709556958/BTC-USDT-SWAP/detail
+GET /api/position/518796558012178692/ETH-USDT-SWAP/detail
+```
+""",
+    responses={
+        200: {
+            "description": "✅ TP/SL 정보 조회 성공",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "with_all_info": {
+                            "summary": "모든 정보 포함",
+                            "value": {
+                                "user_id": "518796558012178692",
+                                "symbol": "BTC-USDT-SWAP",
+                                "position": {
+                                    "side": "long",
+                                    "entry_price": 95000.0,
+                                    "size": 0.1,
+                                    "leverage": 10.0,
+                                    "entry_count": 2
+                                },
+                                "stop_loss": {
+                                    "price": 93000.0,
+                                    "algo_id": "123456789",
+                                    "trigger_price": 93000.0
+                                },
+                                "take_profit": [
+                                    {"price": 97000.0, "size": 0.03, "algo_id": "987654321", "trigger_price": 97000.0},
+                                    {"price": 98000.0, "size": 0.03, "algo_id": "987654322", "trigger_price": 98000.0},
+                                    {"price": 99000.0, "size": 0.04, "algo_id": "987654323", "trigger_price": 99000.0}
+                                ],
+                                "trailing_stop": {
+                                    "active": True,
+                                    "price": 96500.0,
+                                    "offset": 500.0,
+                                    "highest_price": 97000.0,
+                                    "lowest_price": None,
+                                    "activation_price": 96000.0
+                                },
+                                "dca": {
+                                    "next_entry_price": 94000.0,
+                                    "remaining_levels": 2,
+                                    "all_levels": [94000.0, 93000.0]
+                                },
+                                "timestamp": "2025-01-12T16:30:00"
+                            }
+                        },
+                        "no_position": {
+                            "summary": "포지션 없음",
+                            "value": {
+                                "user_id": "518796558012178692",
+                                "symbol": "BTC-USDT-SWAP",
+                                "position": None,
+                                "stop_loss": None,
+                                "take_profit": [],
+                                "trailing_stop": None,
+                                "dca": None,
+                                "timestamp": "2025-01-12T16:30:00"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "❌ API 키를 찾을 수 없음"
+        },
+        500: {
+            "description": "❌ 서버 오류"
+        }
+    }
+)
+async def get_position_detail(
+    user_id: str = Path(..., example="1709556958", description="사용자 ID (텔레그램 ID 또는 OKX UID)"),
+    symbol: str = Path(..., example="BTC-USDT-SWAP", description="거래 심볼")
+) -> PositionDetailResponse:
+    """
+    특정 심볼의 포지션 상세 정보(TP/SL/Trailing Stop/DCA)를 조회합니다.
+    """
+    client = None
+    try:
+        # user_id를 OKX UID로 변환
+        okx_uid = await resolve_user_identifier(user_id)
+
+        # Redis에서 API 키 가져오기
+        api_keys = await get_user_api_keys(okx_uid)
+
+        # OrderWrapper 사용
+        from HYPERRSI.src.trading.services.order_wrapper import OrderWrapper
+        client = OrderWrapper(str(okx_uid), api_keys)
+
+        # 결과 초기화
+        position_info = None
+        stop_loss_info = None
+        take_profit_list = []
+        trailing_stop_info = None
+        dca_info = None
+
+        # Redis에서 포지션 정보 조회
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 양방향(long/short) 포지션 확인
+            position_side = None
+            position_data = None
+
+            for side in ['long', 'short']:
+                position_key = f"user:{okx_uid}:position:{symbol}:{side}"
+                pos_data = await asyncio.wait_for(
+                    redis.hgetall(position_key),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
+                if pos_data:
+                    position_side = side
+                    position_data = pos_data
+                    break
+
+            if position_data:
+                # 포지션 정보 파싱
+                entry_price = float(position_data.get('entry_price', 0) or 0)
+                size = float(position_data.get('size', 0) or 0)
+                leverage = float(position_data.get('leverage', 0) or 0)
+
+                # 현재 진입 횟수 조회
+                dca_count_key = f"user:{okx_uid}:position:{symbol}:{position_side}:dca_count"
+                dca_count_raw = await asyncio.wait_for(
+                    redis.get(dca_count_key),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
+                entry_count = None
+                if dca_count_raw:
+                    try:
+                        count_val = dca_count_raw.decode() if isinstance(dca_count_raw, bytes) else dca_count_raw
+                        entry_count = int(count_val)
+                    except (ValueError, TypeError):
+                        pass
+
+                position_info = PositionTPSLInfo(
+                    side=position_side,
+                    entry_price=entry_price if entry_price > 0 else None,
+                    size=size if size > 0 else None,
+                    leverage=leverage if leverage > 0 else None,
+                    entry_count=entry_count
+                )
+
+                # Redis에 저장된 SL 가격 확인
+                redis_sl_price = position_data.get('sl_price')
+                if redis_sl_price:
+                    try:
+                        sl_price_val = float(redis_sl_price)
+                        if sl_price_val > 0:
+                            stop_loss_info = StopLossInfo(price=sl_price_val)
+                    except (ValueError, TypeError):
+                        pass
+
+                # 트레일링 스톱 정보 조회
+                trailing_active = position_data.get('trailing_stop_active', 'false')
+                if isinstance(trailing_active, bytes):
+                    trailing_active = trailing_active.decode()
+
+                if str(trailing_active).lower() == 'true':
+                    trailing_key = f"user:{okx_uid}:trailing:{symbol}:{position_side}"
+                    ts_data = await asyncio.wait_for(
+                        redis.hgetall(trailing_key),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
+
+                    if ts_data:
+                        # bytes 디코딩
+                        ts_decoded = {}
+                        for k, v in ts_data.items():
+                            dk = k.decode() if isinstance(k, bytes) else k
+                            dv = v.decode() if isinstance(v, bytes) else v
+                            ts_decoded[dk] = dv
+
+                        trailing_stop_info = TrailingStopInfo(
+                            active=True,
+                            price=float(ts_decoded.get('trailing_stop_price', 0) or 0) or None,
+                            offset=float(ts_decoded.get('trailing_offset', 0) or 0) or None,
+                            highest_price=float(ts_decoded.get('highest_price', 0) or 0) or None,
+                            lowest_price=float(ts_decoded.get('lowest_price', 0) or 0) or None,
+                            activation_price=float(ts_decoded.get('activation_price', 0) or 0) or None
+                        )
+                    else:
+                        trailing_stop_info = TrailingStopInfo(active=True)
+                else:
+                    trailing_stop_info = TrailingStopInfo(active=False)
+
+                # DCA 레벨 정보 조회
+                dca_levels_key = f"user:{okx_uid}:position:{symbol}:{position_side}:dca_levels"
+                dca_levels_raw = await asyncio.wait_for(
+                    redis.lrange(dca_levels_key, 0, -1),  # 모든 레벨 가져오기
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
+
+                if dca_levels_raw and len(dca_levels_raw) > 0:
+                    dca_levels_parsed = []
+                    for level in dca_levels_raw:
+                        try:
+                            level_val = level.decode() if isinstance(level, bytes) else level
+                            dca_levels_parsed.append(float(level_val))
+                        except (ValueError, TypeError):
+                            continue
+
+                    if dca_levels_parsed:
+                        dca_info = DCAInfo(
+                            next_entry_price=dca_levels_parsed[0] if dca_levels_parsed else None,
+                            remaining_levels=len(dca_levels_parsed),
+                            all_levels=dca_levels_parsed
+                        )
+
+        # OKX API에서 알고리즘 주문 조회 (TP/SL)
+        try:
+            # 여러 타입의 알고리즘 주문 조회
+            ord_types = ["conditional", "trigger", "oco", "move_order_stop"]
+            all_algo_orders = []
+
+            for ord_type in ord_types:
+                try:
+                    resp = await client.privateGetTradeOrdersAlgoPending(
+                        params={"instId": symbol, "ordType": ord_type}
+                    )
+                    code = resp.get("code")
+                    if code == "0":
+                        data = resp.get("data", [])
+                        all_algo_orders.extend(data)
+                except Exception:
+                    continue
+
+            # 포지션 방향에 맞는 주문만 필터링
+            for algo in all_algo_orders:
+                algo_pos_side = algo.get('posSide', 'net').lower()
+
+                # 포지션 방향 필터 (position_side가 있으면 해당 방향만)
+                if position_side and algo_pos_side != 'net' and algo_pos_side != position_side:
+                    continue
+
+                sl_trigger_px = algo.get("slTriggerPx", "")
+                tp_trigger_px = algo.get("tpTriggerPx", "")
+                algo_id = algo.get("algoId", "")
+                sz = algo.get("sz", "")
+
+                # SL 주문
+                if sl_trigger_px and sl_trigger_px != "":
+                    stop_loss_info = StopLossInfo(
+                        price=float(sl_trigger_px),
+                        algo_id=algo_id,
+                        trigger_price=float(sl_trigger_px)
+                    )
+
+                # TP 주문
+                if tp_trigger_px and tp_trigger_px != "":
+                    tp_info = TakeProfitInfo(
+                        price=float(tp_trigger_px),
+                        size=float(sz) if sz else None,
+                        algo_id=algo_id,
+                        trigger_price=float(tp_trigger_px)
+                    )
+                    take_profit_list.append(tp_info)
+
+            # TP 주문을 가격 기준으로 정렬 (롱: 오름차순, 숏: 내림차순)
+            if position_side == 'long':
+                take_profit_list.sort(key=lambda x: x.price or 0)
+            else:
+                take_profit_list.sort(key=lambda x: x.price or 0, reverse=True)
+
+        except Exception as e:
+            logger.warning(f"알고리즘 주문 조회 실패: {str(e)}")
+
+        return PositionDetailResponse(
+            user_id=str(okx_uid),
+            symbol=symbol,
+            position=position_info,
+            stop_loss=stop_loss_info,
+            take_profit=take_profit_list,
+            trailing_stop=trailing_stop_info,
+            dca=dca_info,
+            timestamp=str(datetime.utcnow())
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_error(
+            error=e,
+            user_id=user_id,
+            additional_info={
+                "function": "get_position_detail",
+                "symbol": symbol,
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+        log_error_to_db(
+            error=e,
+            error_type="GetPositionDetailError",
+            user_id=user_id,
+            severity="ERROR",
+            symbol=symbol,
+            metadata={"component": "position.get_position_detail"}
+        )
+        logger.error(f"포지션 상세 정보 조회 실패 ({symbol}): {str(e)}")
+        raise HTTPException(status_code=500, detail=f"포지션 상세 정보 조회 실패: {str(e)}")
+    finally:
+        if client:
+            try:
+                await client.close()
+            except Exception:
+                pass

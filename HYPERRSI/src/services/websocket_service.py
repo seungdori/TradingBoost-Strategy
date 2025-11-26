@@ -615,8 +615,21 @@ class OKXWebsocketManager:
                 pos_direction = "short"
                 
             cooldown_key = f"user:{user_id}:cooldown:{symbol}:{pos_direction}"
-            cooldown_seconds = 300  # 5분
-            await redis.set(cooldown_key, "true", ex=cooldown_seconds)
+            # Get cooldown_time from user settings (default 300 seconds)
+            settings_str = await redis.get(f"user:{user_id}:settings")
+            cooldown_seconds = 300  # default
+            if settings_str:
+                try:
+                    user_settings = json.loads(settings_str)
+                    use_cooldown = user_settings.get('use_cooldown', True)
+                    if use_cooldown:
+                        cooldown_seconds = int(user_settings.get('cooldown_time', 300))
+                    else:
+                        cooldown_seconds = 0  # Skip cooldown if disabled
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            if cooldown_seconds > 0:
+                await redis.set(cooldown_key, "true", ex=cooldown_seconds)
             completed_key = f"user:{user_id}:completed_history"
             
             if order_info:

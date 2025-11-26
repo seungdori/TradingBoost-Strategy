@@ -134,6 +134,15 @@ class TradingService:
                 logger.warning(f"Removed failed instance from cache for user {user_id}")
 
             logger.error(f"Failed to create trading service for user {user_id}: {str(e)}")
+            # errordb 로깅
+            from HYPERRSI.src.utils.error_logger import log_error_to_db
+            log_error_to_db(
+                error=e,
+                error_type="TradingServiceInitError",
+                user_id=user_id,
+                severity="CRITICAL",
+                metadata={"component": "TradingService.create_for_user"}
+            )
             raise Exception(f"트레이딩 서비스 생성 실패: {str(e)}")
 
     @contextlib.asynccontextmanager

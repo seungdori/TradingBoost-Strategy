@@ -48,6 +48,15 @@ class OrderManager:
                 logger.info(f"Client cleanup completed for user {self.trading_service.user_id}")
             except Exception as e:
                 logger.error(f"Error during client cleanup: {e}")
+                # errordb 로깅
+                from HYPERRSI.src.utils.error_logger import log_error_to_db
+                log_error_to_db(
+                    error=e,
+                    error_type="ClientCleanupError",
+                    user_id=self.trading_service.user_id,
+                    severity="WARNING",
+                    metadata={"component": "OrderManager.cleanup"}
+                )
 
     async def _cancel_order(
         self,
@@ -99,6 +108,16 @@ class OrderManager:
                         logger.info(f"Canceled algo order via private_post_trade_cancel_algos: {order_id}")
                     except Exception as e2:
                         logger.error(f"Failed to cancel algo order {order_id} via both ways. {str(e2)}")
+                        # errordb 로깅
+                        from HYPERRSI.src.utils.error_logger import log_error_to_db
+                        log_error_to_db(
+                            error=e2,
+                            error_type="AlgoOrderCancellationError",
+                            user_id=user_id,
+                            severity="ERROR",
+                            symbol=symbol,
+                            metadata={"order_id": order_id, "order_type": order_type, "side": side, "component": "OrderManager._cancel_order"}
+                        )
                         raise
 
             else:
@@ -108,6 +127,16 @@ class OrderManager:
 
         except Exception as e:
             logger.error(f"Failed to cancel order {order_id}: {str(e)}")
+            # errordb 로깅
+            from HYPERRSI.src.utils.error_logger import log_error_to_db
+            log_error_to_db(
+                error=e,
+                error_type="OrderCancellationError",
+                user_id=user_id,
+                severity="ERROR",
+                symbol=symbol,
+                metadata={"order_id": order_id, "order_type": order_type, "side": side, "component": "OrderManager._cancel_order"}
+            )
             raise
         finally:
             if exchange is not None:
@@ -136,6 +165,17 @@ class OrderManager:
                 await trigger_cancel_client.cancel_all_trigger_orders(inst_id=symbol, side=side, algo_type="trigger", user_id=user_id)
             except Exception as e:
                 logger.error(f"Failed to cancel trigger orders: {str(e)}")
+                # errordb 로깅
+                from HYPERRSI.src.utils.error_logger import log_error_to_db
+                log_error_to_db(
+                    error=e,
+                    error_type="TriggerOrderCancellationError",
+                    user_id=user_id,
+                    severity="ERROR",
+                    symbol=symbol,
+                    side=side,
+                    metadata={"component": "OrderManager.cancel_all_open_orders"}
+                )
 
             # 취소 요청 리스트를 만듭니다
             if len(open_orders) > 0:
@@ -169,6 +209,17 @@ class OrderManager:
                 return True
         except Exception as e:
             logger.error(f"Failed to cancel all open orders: {str(e)}")
+            # errordb 로깅
+            from HYPERRSI.src.utils.error_logger import log_error_to_db
+            log_error_to_db(
+                error=e,
+                error_type="BulkOrderCancellationError",
+                user_id=user_id,
+                severity="ERROR",
+                symbol=symbol,
+                side=side,
+                metadata={"component": "OrderManager.cancel_all_open_orders"}
+            )
             return False
 
     async def _try_send_order(

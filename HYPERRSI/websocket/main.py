@@ -255,6 +255,15 @@ async def websocket_endpoint(websocket: WebSocket, telegram_id: str):
         logger.info(f"[WS] Client disconnected (telegram_id={telegram_id})")
     except Exception as e:
         logger.error(f"[WS] Exception: {str(e)}")
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="WebSocketError",
+            user_id=telegram_id,
+            severity="ERROR",
+            metadata={"component": "websocket_endpoint", "symbol": "BTC-USDT-SWAP"}
+        )
         try:
             await websocket.send_text(json.dumps({"error": str(e)}))
         except RuntimeError:

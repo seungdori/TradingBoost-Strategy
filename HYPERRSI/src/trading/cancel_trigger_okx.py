@@ -172,6 +172,15 @@ class TriggerCancelClient:
                 else:
                     print(f"Error in fetch_algo_orders: {str(e)}")
                     traceback.print_exc()
+                    # errordb 로깅
+                    from HYPERRSI.src.utils.error_logger import log_error_to_db
+                    log_error_to_db(
+                        error=e,
+                        error_type="AlgoOrderFetchError",
+                        severity="ERROR",
+                        symbol=inst_id,
+                        metadata={"ord_type": ord_type, "retry": retry, "component": "TriggerCancelClient.fetch_algo_orders"}
+                    )
                     return None
         
         print(f"최대 재시도 횟수({max_retries})를 초과했습니다.")
@@ -222,12 +231,20 @@ class TriggerCancelClient:
                     'msg': 'No active orders to cancel',
                     'data': []
                 }
-            #print(f"algo_orders: {algo_orders}")
+            print(f"[DEBUG] Total algo_orders fetched: {len(algo_orders)}")
+            print(f"[DEBUG] order_side filter: {order_side}")
+
+            # 모든 주문 디버그 출력
+            for idx, order in enumerate(algo_orders):
+                print(f"[DEBUG] Order {idx+1}: algoId={order.get('algoId')}, side={order.get('side')}, posSide={order.get('posSide')}")
+
             if order_side is not None:
+                print(f"[DEBUG] Filtering orders with side={order_side}")
                 algo_orders = [
                     order for order in algo_orders
                     if order.get('side', '').lower() == order_side.lower()
                 ]
+                print(f"[DEBUG] After filtering: {len(algo_orders)} orders remaining")
                 if not algo_orders:
                     print(f"No active trigger orders found for side: {order_side}")
                     # 특정 방향의 주문이 없는 경우에도 성공 응답 반환
@@ -269,18 +286,49 @@ class TriggerCancelClient:
             #print(f"Request Body: {body}")
 
             response = requests.post(url, headers=headers, data=body)
-
-            #print(f"Response Status Code: {response.status_code}")
-            #print(f"Response Headers: {dict(response.headers)}")
-
             response_data = response.json()
-            #print(f"Response Body: {json.dumps(response_data, indent=2)}")
-        
+
+            # 취소 결과 로깅
+            print(f"[SL 취소 응답] {inst_id} user:{user_id} - code: {response_data.get('code')}, msg: {response_data.get('msg')}, 취소 대상: {len(cancel_requests)}건")
+
+            # 취소 실패 시 stoploss_error_logs에 기록
+            if response_data.get('code') != '0':
+                from HYPERRSI.src.database.stoploss_error_db import log_stoploss_error
+                await log_stoploss_error(
+                    error=Exception(f"알고 주문 취소 실패: {response_data.get('msg')}"),
+                    error_type="AlgoOrderCancelError",
+                    user_id=user_id,
+                    severity="ERROR",
+                    module="cancel_trigger_okx",
+                    function_name="cancel_all_trigger_orders",
+                    symbol=inst_id,
+                    side=side,
+                    order_side=order_side,
+                    algo_type=algo_type,
+                    failure_reason=f"OKX API 응답 코드: {response_data.get('code')}, 메시지: {response_data.get('msg')}",
+                    metadata={
+                        "cancel_requests": cancel_requests,
+                        "response_data": response_data,
+                        "algo_orders_count": len(algo_orders)
+                    }
+                )
+
             return response_data
 
         except Exception as e:
             print(f"Error in cancel_all_trigger_orders: {str(e)}")
             traceback.print_exc()
+            # errordb 로깅
+            from HYPERRSI.src.utils.error_logger import log_error_to_db
+            log_error_to_db(
+                error=e,
+                error_type="TriggerOrderCancellationError",
+                user_id=user_id,
+                severity="CRITICAL",
+                symbol=inst_id,
+                side=side,
+                metadata={"algo_type": algo_type, "component": "TriggerCancelClient.cancel_all_trigger_orders"}
+            )
             return None
 
 async def main():

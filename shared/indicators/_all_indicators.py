@@ -569,8 +569,8 @@ def add_auto_trend_state_to_candles(
         is_confirmed_only=False,
     )
 
-    # trend_result에서 trend_state 추출
-    auto_trend_state_list = trend_result["trend_state"]
+    # trend_result에서 trend_state 추출 (trend_result는 candles 리스트)
+    auto_trend_state_list = [c["trend_state"] for c in trend_result]
 
     # 현재 타임프레임 캔들에 auto_trend_state 매핑
     # Forward-fill 로직: 상위 타임프레임의 값을 하위 타임프레임에 매핑

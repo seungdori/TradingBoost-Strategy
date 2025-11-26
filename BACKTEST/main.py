@@ -140,11 +140,12 @@ async def root():
 
 
 # Import and include routers
-from BACKTEST.api.routes import backtest, results
+from BACKTEST.api.routes import backtest, results, candles
 
 app.include_router(health_router, prefix="/health", tags=["health"])
 app.include_router(backtest.router, prefix="/backtest", tags=["backtest"])
 app.include_router(results.router, prefix="/api", tags=["results"])
+app.include_router(candles.router, prefix="/candles", tags=["candles"])
 
 
 def main():

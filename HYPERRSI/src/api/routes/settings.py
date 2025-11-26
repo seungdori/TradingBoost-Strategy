@@ -761,27 +761,56 @@ class DualSideSettingsResponse(BaseModel):
     }
 
 
-async def get_dual_side_settings(user_id: str) -> Dict[str, Any]:
-    """양방향 매매 설정을 조회합니다."""
+async def get_dual_side_settings(user_id: str, symbol: str | None = None) -> Dict[str, Any]:
+    """
+    양방향 매매 설정을 조회합니다.
+
+    멀티심볼 지원:
+    - symbol이 제공되면 심볼별 설정 조회: user:{user_id}:symbol:{symbol}:dual_side
+    - symbol이 None이면 글로벌 설정 조회 (하위 호환): user:{user_id}:dual_side
+    - 심볼별 설정이 없으면 글로벌 설정을 fallback으로 사용
+
+    Args:
+        user_id: 사용자 ID (OKX UID)
+        symbol: 심볼 (옵션, 멀티심볼 모드에서 사용)
+
+    Returns:
+        Dict[str, Any]: 양방향 설정
+    """
     # Use context manager for proper connection management and timeout protection
     async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
-        # Redis에서 dual_side 해시 조회
-        settings_key = f"user:{user_id}:dual_side"
-        settings = await asyncio.wait_for(
-            redis.hgetall(settings_key),
-            timeout=RedisTimeout.FAST_OPERATION
-        )
+        # 심볼별 설정 키와 글로벌 설정 키
+        symbol_settings_key = f"user:{user_id}:symbol:{symbol}:dual_side" if symbol else None
+        global_settings_key = f"user:{user_id}:dual_side"
+
+        settings = None
+
+        # 1. 심볼이 제공된 경우 심볼별 설정 먼저 조회
+        if symbol_settings_key:
+            settings = await asyncio.wait_for(
+                redis.hgetall(symbol_settings_key),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
+
+        # 2. 심볼별 설정이 없으면 글로벌 설정 fallback
+        if not settings:
+            settings = await asyncio.wait_for(
+                redis.hgetall(global_settings_key),
+                timeout=RedisTimeout.FAST_OPERATION
+            )
 
     if not settings:
         # 기본 설정
         settings = {k: str(v) if isinstance(v, bool) else str(v) for k, v in DEFAULT_DUAL_SIDE_ENTRY_SETTINGS.items()}
 
+        # 심볼별 또는 글로벌 키에 기본 설정 저장
+        save_key = symbol_settings_key if symbol_settings_key else global_settings_key
         async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
             await asyncio.wait_for(
-                redis.hset(settings_key, mapping=settings),
+                redis.hset(save_key, mapping=settings),
                 timeout=RedisTimeout.FAST_OPERATION
             )
-    
+
     # 문자열 값을 적절한 타입으로 변환
     parsed_settings = {}
     for key, value in settings.items():
@@ -798,13 +827,29 @@ async def get_dual_side_settings(user_id: str) -> Dict[str, Any]:
             except ValueError:
                 # 숫자가 아닌 경우 원래 문자열 사용
                 parsed_settings[key] = value
-    
+
     return parsed_settings
 
 
-async def save_dual_side_settings(user_id: str, settings: Dict[str, Any]) -> None:
-    """양방향 매매 설정을 저장합니다."""
-    settings_key = f"user:{user_id}:dual_side"
+async def save_dual_side_settings(user_id: str, settings: Dict[str, Any], symbol: str | None = None) -> None:
+    """
+    양방향 매매 설정을 저장합니다.
+
+    멀티심볼 지원:
+    - symbol이 제공되면 심볼별 설정 저장: user:{user_id}:symbol:{symbol}:dual_side
+    - symbol이 None이면 글로벌 설정 저장: user:{user_id}:dual_side
+
+    Args:
+        user_id: 사용자 ID (OKX UID)
+        settings: 저장할 설정 딕셔너리
+        symbol: 심볼 (옵션, 멀티심볼 모드에서 사용)
+    """
+    # 심볼별 또는 글로벌 키 결정
+    if symbol:
+        settings_key = f"user:{user_id}:symbol:{symbol}:dual_side"
+    else:
+        settings_key = f"user:{user_id}:dual_side"
+
     # bool 값을 문자열로 변환
     settings_to_save = {k: str(v).lower() if isinstance(v, bool) else str(v) for k, v in settings.items()}
 
@@ -819,7 +864,7 @@ async def save_dual_side_settings(user_id: str, settings: Dict[str, Any]) -> Non
 @router.get("/{user_id}/dual_side",
     response_model=DualSideSettingsResponse,
     summary="양방향 매매 설정 조회",
-    description="사용자의 양방향 매매 설정을 조회합니다.",
+    description="사용자의 양방향 매매 설정을 조회합니다. symbol 파라미터로 심볼별 설정 조회 가능.",
     responses={
         200: {
             "description": "양방향 매매 설정 조회 성공",
@@ -827,7 +872,7 @@ async def save_dual_side_settings(user_id: str, settings: Dict[str, Any]) -> Non
         },
         404: {"description": "사용자를 찾을 수 없음"}
     })
-async def get_dual_settings(user_id: str):
+async def get_dual_settings(user_id: str, symbol: str | None = None):
     try:
         # Use context manager for proper connection management and timeout protection
         async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
@@ -877,9 +922,9 @@ async def get_dual_settings(user_id: str):
                         timeout=RedisTimeout.FAST_OPERATION
                     )
             
-        # 양방향 매매 설정 조회
-        settings = await get_dual_side_settings(str(user_id))
-        
+        # 양방향 매매 설정 조회 (심볼별 또는 글로벌)
+        settings = await get_dual_side_settings(str(user_id), symbol)
+
         return DualSideSettingsResponse(
             user_id=user_id,
             settings=settings
@@ -897,7 +942,7 @@ async def get_dual_settings(user_id: str):
 @router.put("/{user_id}/dual_side",
     response_model=DualSideSettingsResponse,
     summary="양방향 매매 설정 업데이트",
-    description="사용자의 양방향 매매 설정을 업데이트합니다.",
+    description="사용자의 양방향 매매 설정을 업데이트합니다. symbol 파라미터로 심볼별 설정 저장 가능.",
     responses={
         200: {
             "description": "양방향 매매 설정 업데이트 성공",
@@ -907,6 +952,7 @@ async def get_dual_settings(user_id: str):
     })
 async def update_dual_settings(
     user_id: str,
+    symbol: str | None = None,
     request: DualSideSettingsUpdateRequest = Body(
         ...,
         description="업데이트할 양방향 매매 설정 데이터"
@@ -961,14 +1007,14 @@ async def update_dual_settings(
                         timeout=RedisTimeout.FAST_OPERATION
                     )
         
-        # 기존 설정 가져오기
-        current_settings = await get_dual_side_settings(str(user_id))
-        
+        # 기존 설정 가져오기 (심볼별 또는 글로벌)
+        current_settings = await get_dual_side_settings(str(user_id), symbol)
+
         # 새 설정과 기존 설정 병합
         updated_settings = {**current_settings, **request.settings}
-        
-        # 업데이트된 설정 저장
-        await save_dual_side_settings(str(user_id), updated_settings)
+
+        # 업데이트된 설정 저장 (심볼별 또는 글로벌)
+        await save_dual_side_settings(str(user_id), updated_settings, symbol)
         
         # JSON 설정에도 use_dual_side_entry 값 동기화
         if 'use_dual_side_entry' in request.settings:
@@ -994,7 +1040,7 @@ async def update_dual_settings(
 @router.post("/{user_id}/dual_side/reset",
     response_model=DualSideSettingsResponse,
     summary="양방향 매매 설정 초기화",
-    description="사용자의 양방향 매매 설정을 기본값으로 초기화합니다.",
+    description="사용자의 양방향 매매 설정을 기본값으로 초기화합니다. symbol 파라미터로 심볼별 설정 초기화 가능.",
     responses={
         200: {
             "description": "양방향 매매 설정 초기화 성공",
@@ -1002,7 +1048,7 @@ async def update_dual_settings(
         },
         404: {"description": "사용자를 찾을 수 없음"}
     })
-async def reset_dual_settings(user_id: str):
+async def reset_dual_settings(user_id: str, symbol: str | None = None):
     try:
         # Use context manager for proper connection management and timeout protection
         async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
@@ -1052,9 +1098,9 @@ async def reset_dual_settings(user_id: str):
                         timeout=RedisTimeout.FAST_OPERATION
                     )
         
-        # 기본 설정으로 초기화
+        # 기본 설정으로 초기화 (심볼별 또는 글로벌)
         default_settings = {k: v for k, v in DEFAULT_DUAL_SIDE_ENTRY_SETTINGS.items()}
-        await save_dual_side_settings(str(user_id), default_settings)
+        await save_dual_side_settings(str(user_id), default_settings, symbol)
         
         return DualSideSettingsResponse(
             user_id=user_id,

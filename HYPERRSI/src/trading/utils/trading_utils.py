@@ -32,7 +32,7 @@ async def init_user_position_data(user_id: str, symbol: str, side: str):
     #main_position_direction_key = f"user:{user_id}:position:{symbol}:main_position_direction"
     tp_state = f"user:{user_id}:position:{symbol}:{side}:tp_state"
     hedging_direction_key = f"user:{user_id}:position:{symbol}:hedging_direction"
-    entry_fail_count_key = f"user:{user_id}:entry_fail_count"
+    entry_fail_count_key = f"user:{user_id}:{symbol}:entry_fail_count"
     dual_side_count_key = f"user:{user_id}:{symbol}:dual_side_count"
     current_trade_key = f"user:{user_id}:current_trade:{symbol}:{side}"
 

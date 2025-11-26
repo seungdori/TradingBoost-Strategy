@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import traceback
 from typing import Any, Dict, Optional
 
 import aiohttp
@@ -38,6 +39,8 @@ def is_allowed_user(user_id: Optional[str]) -> bool:
 # FSM States (추가)
 # -----------------
 class DualSideSettingsState(StatesGroup):
+    # 심볼 선택 상태 (멀티심볼 지원)
+    waiting_for_symbol_selection = State()
     waiting_for_trigger = State()
     waiting_for_ratio_type = State()
     waiting_for_ratio_value = State()
@@ -94,13 +97,22 @@ async def get_identifier(user_id: str) -> str:
     return str(user_id)
 
 # API 요청 헬퍼 함수
-async def get_dual_side_settings_api(user_id: str) -> Dict[str, Any]:
-    """API를 통해 양방향 매매 설정을 조회합니다."""
+async def get_dual_side_settings_api(user_id: str, symbol: str | None = None) -> Dict[str, Any]:
+    """
+    API를 통해 양방향 매매 설정을 조회합니다.
+
+    멀티심볼 지원:
+    - symbol이 제공되면 심볼별 설정 조회
+    - symbol이 None이면 글로벌 설정 조회
+    """
     # user_id를 OKX UID로 변환
     okx_uid = await get_identifier(str(user_id))
 
     async with aiohttp.ClientSession() as session:
         url = f"{API_BASE_URL}/settings/{okx_uid}/dual_side"
+        # 심볼 파라미터 추가
+        if symbol:
+            url += f"?symbol={symbol}"
         try:
             async with session.get(url) as response:
                 if response.status == 200:
@@ -112,17 +124,27 @@ async def get_dual_side_settings_api(user_id: str) -> Dict[str, Any]:
                     logger.error(f"API 요청 실패 ({response.status}): {error_text}")
                     return {}
         except Exception as e:
+            traceback.print_exc()
             logger.error(f"API 요청 중 오류 발생: {str(e)}")
             # 백업 - 직접 Redis 접근
-            return await get_dual_side_settings_fallback(okx_uid)
+            return await get_dual_side_settings_fallback(okx_uid, symbol)
 
-async def update_dual_side_settings_api(user_id: str, settings: dict) -> bool:
-    """API를 통해 양방향 매매 설정을 업데이트합니다."""
+async def update_dual_side_settings_api(user_id: str, settings: dict, symbol: str | None = None) -> bool:
+    """
+    API를 통해 양방향 매매 설정을 업데이트합니다.
+
+    멀티심볼 지원:
+    - symbol이 제공되면 심볼별 설정 저장
+    - symbol이 None이면 글로벌 설정 저장
+    """
     # user_id를 OKX UID로 변환
     okx_uid = await get_identifier(str(user_id))
-    
+
     async with aiohttp.ClientSession() as session:
         url = f"{API_BASE_URL}/settings/{okx_uid}/dual_side"
+        # 심볼 파라미터 추가
+        if symbol:
+            url += f"?symbol={symbol}"
         try:
             payload = {"settings": settings}
             async with session.put(url, json=payload) as response:
@@ -132,23 +154,42 @@ async def update_dual_side_settings_api(user_id: str, settings: dict) -> bool:
                     error_text = await response.text()
                     logger.error(f"API 요청 실패 ({response.status}): {error_text}")
                     # 백업 - 직접 Redis 접근
-                    await update_dual_side_settings_fallback(okx_uid, settings)
+                    await update_dual_side_settings_fallback(okx_uid, settings, symbol)
                     return False
         except Exception as e:
+            traceback.print_exc()
             logger.error(f"API 요청 중 오류 발생: {str(e)}")
             # 백업 - 직접 Redis 접근
-            await update_dual_side_settings_fallback(okx_uid, settings)
+            await update_dual_side_settings_fallback(okx_uid, settings, symbol)
             return False
 
 # 백업 함수 - API 실패 시 직접 Redis 접근
-async def get_dual_side_settings_fallback(user_id: str) -> Dict[str, Any]:
-    """Redis에서 직접 양방향 매매 설정을 조회합니다."""
+async def get_dual_side_settings_fallback(user_id: str, symbol: str | None = None) -> Dict[str, Any]:
+    """
+    Redis에서 직접 양방향 매매 설정을 조회합니다.
+
+    멀티심볼 지원:
+    - symbol이 제공되면 심볼별 설정 조회, 없으면 글로벌 fallback
+    - symbol이 None이면 글로벌 설정 조회
+    """
     # user_id를 OKX UID로 변환
     okx_uid = await get_identifier(str(user_id))
 
     redis = await get_redis_client()
-    settings_key = f"user:{okx_uid}:dual_side"
-    settings = await redis.hgetall(settings_key)
+
+    # 심볼별 또는 글로벌 키 결정
+    symbol_settings_key = f"user:{okx_uid}:symbol:{symbol}:dual_side" if symbol else None
+    global_settings_key = f"user:{okx_uid}:dual_side"
+
+    settings = None
+
+    # 심볼이 제공된 경우 심볼별 설정 먼저 조회
+    if symbol_settings_key:
+        settings = await redis.hgetall(symbol_settings_key)
+
+    # 심볼별 설정이 없으면 글로벌 설정 fallback
+    if not settings:
+        settings = await redis.hgetall(global_settings_key)
 
     # 문자열 값을 적절한 타입으로 변환
     parsed_settings: Dict[str, Any] = {}
@@ -166,18 +207,30 @@ async def get_dual_side_settings_fallback(user_id: str) -> Dict[str, Any]:
 
     return parsed_settings
 
-async def update_dual_side_settings_fallback(user_id: str, settings: dict) -> None:
-    """Redis에 직접 양방향 매매 설정을 저장합니다."""
+async def update_dual_side_settings_fallback(user_id: str, settings: dict, symbol: str | None = None) -> None:
+    """
+    Redis에 직접 양방향 매매 설정을 저장합니다.
+
+    멀티심볼 지원:
+    - symbol이 제공되면 심볼별 설정 저장
+    - symbol이 None이면 글로벌 설정 저장
+    """
     # user_id를 OKX UID로 변환
     okx_uid = await get_identifier(str(user_id))
 
     redis = await get_redis_client()
-    settings_key = f"user:{okx_uid}:dual_side"
+
+    # 심볼별 또는 글로벌 키 결정
+    if symbol:
+        settings_key = f"user:{okx_uid}:symbol:{symbol}:dual_side"
+    else:
+        settings_key = f"user:{okx_uid}:dual_side"
+
     settings_to_save = {k: str(v).lower() if isinstance(v, bool) else str(v) for k, v in settings.items()}
     await redis.hset(settings_key, mapping=settings_to_save)
 
-    # JSON 설정에도 use_dual_side_entry 값 동기화
-    if 'use_dual_side_entry' in settings:
+    # JSON 설정에도 use_dual_side_entry 값 동기화 (글로벌 설정의 경우만)
+    if 'use_dual_side_entry' in settings and not symbol:
         settings_key_og = f"user:{okx_uid}:settings"
         current_settings = await redis.get(settings_key_og)
         if current_settings:
@@ -186,13 +239,46 @@ async def update_dual_side_settings_fallback(user_id: str, settings: dict) -> No
             await redis.set(settings_key_og, json.dumps(settings_dict))
 
 # =========================
+# 심볼 관련 헬퍼 함수
+# =========================
+
+async def get_user_active_symbols(user_id: str) -> list[str]:
+    """
+    사용자의 활성 심볼 목록을 가져옵니다.
+    Redis에서 user:{user_id}:active_symbols 또는 프리셋에서 조회
+    """
+    redis = await get_redis_client()
+
+    # 1. active_symbols에서 조회
+    active_symbols_key = f"user:{user_id}:active_symbols"
+    active_symbols = await redis.smembers(active_symbols_key)
+
+    if active_symbols:
+        return sorted([s.decode() if isinstance(s, bytes) else s for s in active_symbols])
+
+    # 2. 프리셋에서 심볼 목록 조회
+    preset_key = f"user:{user_id}:presets"
+    preset_data = await redis.get(preset_key)
+    if preset_data:
+        try:
+            presets = json.loads(preset_data.decode() if isinstance(preset_data, bytes) else preset_data)
+            symbols = list(presets.keys())
+            if symbols:
+                return sorted(symbols)
+        except json.JSONDecodeError:
+            pass
+
+    # 3. 기본 심볼 반환
+    return ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
+
+
+# =========================
 # /dual_settings 명령어
 # =========================
 
 @router.message(Command("dual_settings"))
-
-async def dual_side_settings_command(message: types.Message) -> None:
-    """듀얼 사이드 매매(헷지) 설정 메뉴"""
+async def dual_side_settings_command(message: types.Message, state: FSMContext) -> None:
+    """듀얼 사이드 매매(헷지) 설정 메뉴 - 심볼 선택 UI 포함"""
     if message.from_user is None:
         return
     telegram_id = str(message.from_user.id)
@@ -211,26 +297,148 @@ async def dual_side_settings_command(message: types.Message) -> None:
         await message.reply("⛔ 접근 권한이 없습니다.")
         return
 
-    # 이후 모든 작업에서 okx_uid 사용
+    # 사용자의 활성 심볼 목록 가져오기
     user_id = okx_uid
+    symbols = await get_user_active_symbols(user_id)
+
+    # 심볼 선택 키보드 생성
+    keyboard_buttons = []
+
+    # 글로벌 설정 버튼 (맨 위에)
+    keyboard_buttons.append([
+        types.InlineKeyboardButton(text="🌐 글로벌 설정 (모든 심볼 기본값)", callback_data="dual_symbol_global")
+    ])
+
+    # 심볼별 버튼 (2열로 배치)
+    symbol_row = []
+    for symbol in symbols:
+        short_name = symbol.replace("-USDT-SWAP", "").replace("-SWAP", "")
+        symbol_row.append(
+            types.InlineKeyboardButton(text=f"📊 {short_name}", callback_data=f"dual_symbol_{symbol}")
+        )
+        if len(symbol_row) == 2:
+            keyboard_buttons.append(symbol_row)
+            symbol_row = []
+    if symbol_row:
+        keyboard_buttons.append(symbol_row)
+
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+
+    await message.reply(
+        "📊 양방향 매매(헷지) 설정\n"
+        "──────────────\n"
+        "설정할 심볼을 선택하세요:\n\n"
+        "🌐 **글로벌 설정**: 모든 심볼에 적용되는 기본값\n"
+        "📊 **심볼별 설정**: 해당 심볼에만 적용 (글로벌 설정 무시)",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+
+
+# =========================
+# 심볼 선택 콜백 핸들러
+# =========================
+
+@router.callback_query(F.data.startswith("dual_symbol_"))
+async def handle_symbol_selection(callback: types.CallbackQuery, state: FSMContext) -> None:
+    """심볼 선택 후 해당 심볼의 양방향 설정 표시"""
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
+    await callback.answer()
+
+    telegram_id = callback.from_user.id
+    user_id = await get_identifier(str(telegram_id))
+
+    # 선택된 심볼 파싱
+    data = callback.data
+    if data == "dual_symbol_global":
+        symbol = None  # 글로벌 설정
+        symbol_display = "🌐 글로벌"
+    else:
+        symbol = data.replace("dual_symbol_", "")  # e.g., "BTC-USDT-SWAP"
+        symbol_display = f"📊 {symbol.replace('-USDT-SWAP', '').replace('-SWAP', '')}"
+
+    # FSM에 현재 심볼 저장
+    await state.update_data(current_symbol=symbol)
+
     # API를 통해 설정 로드
-    settings = await get_dual_side_settings_api(user_id)
+    settings = await get_dual_side_settings_api(user_id, symbol)
     if not settings:
-        # 설정이 없으면 초기화 - API로 처리될 것임
-        await initialize_dual_side_settings(user_id)
-        settings = await get_dual_side_settings_api(user_id)
+        # 설정이 없으면 초기화
+        await initialize_dual_side_settings(user_id, symbol)
+        settings = await get_dual_side_settings_api(user_id, symbol)
 
     # 현재 설정 표시
-    text, kb = await get_current_dual_settings_info(user_id, settings)
-    await message.reply(text, reply_markup=kb)
+    text, kb = await get_current_dual_settings_info(user_id, settings, symbol)
+    await callback.message.edit_text(
+        f"**{symbol_display} 양방향 매매 설정**\n\n{text}",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
+
+
+# -------------------------------
+# "심볼 선택으로 돌아가기" 버튼 핸들러
+# -------------------------------
+@router.callback_query(F.data == "dual_back_to_symbol_select")
+async def handle_back_to_symbol_select(callback: types.CallbackQuery, state: FSMContext) -> None:
+    """심볼 선택 화면으로 돌아가는 콜백."""
+    if callback.from_user is None or callback.message is None:
+        return
+    if not isinstance(callback.message, Message):
+        return
+    await callback.answer()
+
+    telegram_id = callback.from_user.id
+    user_id = await get_identifier(str(telegram_id))
+
+    # FSM 상태 클리어
+    await state.clear()
+
+    # 사용자의 활성 심볼 목록 가져오기
+    symbols = await get_user_active_symbols(user_id)
+
+    # 심볼 선택 키보드 생성
+    keyboard_buttons = []
+
+    # 글로벌 설정 버튼 (맨 위에)
+    keyboard_buttons.append([
+        types.InlineKeyboardButton(text="🌐 글로벌 설정 (모든 심볼 기본값)", callback_data="dual_symbol_global")
+    ])
+
+    # 심볼별 버튼 (2열로 배치)
+    symbol_row = []
+    for symbol in symbols:
+        short_name = symbol.replace("-USDT-SWAP", "").replace("-SWAP", "")
+        symbol_row.append(
+            types.InlineKeyboardButton(text=f"📊 {short_name}", callback_data=f"dual_symbol_{symbol}")
+        )
+        if len(symbol_row) == 2:
+            keyboard_buttons.append(symbol_row)
+            symbol_row = []
+    if symbol_row:
+        keyboard_buttons.append(symbol_row)
+
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+
+    await callback.message.edit_text(
+        "📊 양방향 매매(헷지) 설정\n"
+        "──────────────\n"
+        "설정할 심볼을 선택하세요:\n\n"
+        "🌐 **글로벌 설정**: 모든 심볼에 적용되는 기본값\n"
+        "📊 **심볼별 설정**: 해당 심볼에만 적용 (글로벌 설정 무시)",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
 
 
 # -------------------------------
 # "현재 설정 확인" 버튼 핸들러
 # -------------------------------
 @router.callback_query(F.data == "dual_show_current")
-
-async def handle_show_current(callback: types.CallbackQuery) -> None:
+async def handle_show_current(callback: types.CallbackQuery, state: FSMContext) -> None:
     """현재 설정 정보를 다시 보여주는 콜백."""
     if callback.from_user is None or callback.message is None:
         return
@@ -240,8 +448,12 @@ async def handle_show_current(callback: types.CallbackQuery) -> None:
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
 
-    settings = await get_dual_side_settings_api(user_id)
-    text, kb = await get_current_dual_settings_info(user_id, settings)
+    # FSMContext에서 현재 심볼 가져오기
+    data = await state.get_data()
+    symbol = data.get('current_symbol')
+
+    settings = await get_dual_side_settings_api(user_id, symbol)
+    text, kb = await get_current_dual_settings_info(user_id, settings, symbol)
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
@@ -250,7 +462,7 @@ async def handle_show_current(callback: types.CallbackQuery) -> None:
 # [토글] 양방향 전체 ON/OFF
 # =========================
 @router.callback_query(F.data == "dual_toggle")
-async def handle_dual_toggle(callback: types.CallbackQuery) -> None:
+async def handle_dual_toggle(callback: types.CallbackQuery, state: FSMContext) -> None:
     try:
         if callback.from_user is None or callback.message is None:
             return
@@ -260,22 +472,27 @@ async def handle_dual_toggle(callback: types.CallbackQuery) -> None:
         # 텔레그램 ID를 OKX UID로 변환
         user_id = await get_identifier(str(telegram_id))
 
+        # FSMContext에서 현재 심볼 가져오기
+        data = await state.get_data()
+        symbol = data.get('current_symbol')
+
         # API로 현재 설정 가져오기
-        settings = await get_dual_side_settings_api(user_id)
+        settings = await get_dual_side_settings_api(user_id, symbol)
         is_enabled = settings.get('use_dual_side_entry', False)
 
         # 상태 변경
         settings['use_dual_side_entry'] = not is_enabled
 
         # API로 업데이트
-        await update_dual_side_settings_api(user_id, settings)
+        await update_dual_side_settings_api(user_id, settings, symbol)
 
         status_msg = "비활성화" if is_enabled else "활성화"
+        symbol_display = f" ({symbol.replace('-USDT-SWAP', '').replace('-SWAP', '')})" if symbol else " (글로벌)"
         await callback.answer()
         await callback.message.edit_text(
-            f"✅ 양방향 매매가 {status_msg} 되었습니다.\n"
+            f"✅ 양방향 매매가 {status_msg} 되었습니다{symbol_display}.\n"
             "원하시는 설정을 계속 진행해주세요.",
-            reply_markup=await get_main_menu_keyboard(user_id)
+            reply_markup=await get_main_menu_keyboard(user_id, symbol)
         )
     except Exception as e:
         logger.error(f"Error: {str(e)}")
@@ -316,20 +533,26 @@ async def process_trigger_value(message: types.Message, state: FSMContext) -> No
         # 텔레그램 ID를 OKX UID로 변환
         user_id = await get_identifier(str(telegram_id))
 
+        # FSMContext에서 현재 심볼 가져오기
+        data = await state.get_data()
+        symbol = data.get('current_symbol')
+
         # API로 현재 설정 가져오기
-        settings = await get_dual_side_settings_api(user_id)
+        settings = await get_dual_side_settings_api(user_id, symbol)
 
         # 설정 업데이트
         settings['dual_side_entry_trigger'] = value
 
         # API로 설정 저장
-        await update_dual_side_settings_api(user_id, settings)
+        await update_dual_side_settings_api(user_id, settings, symbol)
 
+        symbol_display = f" ({symbol.replace('-USDT-SWAP', '').replace('-SWAP', '')})" if symbol else ""
         await message.reply(
-            f"✅ 양방향 트리거가 {value}번째 진입으로 설정되었습니다.",
-            reply_markup=await get_main_menu_keyboard(user_id)
+            f"✅ 양방향 트리거가 {value}번째 진입으로 설정되었습니다{symbol_display}.",
+            reply_markup=await get_main_menu_keyboard(user_id, symbol)
         )
-        await state.clear()
+        # 심볼 정보는 유지하고 상태만 클리어
+        await state.set_state(None)
 
     except ValueError:
         await message.reply("❌ 올바른 숫자를 입력해주세요.")
@@ -396,6 +619,7 @@ async def process_ratio_value(message: types.Message, state: FSMContext) -> None
         value = float(message.text)
         data = await state.get_data()
         ratio_type = data.get('selected_ratio_type', 'percent_of_position')
+        symbol = data.get('current_symbol')
 
         # 간단 검증
         if value <= 0:
@@ -405,23 +629,25 @@ async def process_ratio_value(message: types.Message, state: FSMContext) -> None
         telegram_id = message.from_user.id
         # 텔레그램 ID를 OKX UID로 변환
         user_id = await get_identifier(str(telegram_id))
-        
+
         # API로 현재 설정 가져오기
-        settings = await get_dual_side_settings_api(user_id)
-        
+        settings = await get_dual_side_settings_api(user_id, symbol)
+
         # 설정 업데이트
         settings['dual_side_entry_ratio_type'] = ratio_type
         settings['dual_side_entry_ratio_value'] = value
-        
-        # API로 설정 저장
-        await update_dual_side_settings_api(user_id, settings)
 
+        # API로 설정 저장
+        await update_dual_side_settings_api(user_id, settings, symbol)
+
+        symbol_display = f" ({symbol.replace('-USDT-SWAP', '').replace('-SWAP', '')})" if symbol else ""
         await message.reply(
-            f"✅ 진입 비율이 설정되었습니다.\n"
+            f"✅ 진입 비율이 설정되었습니다{symbol_display}.\n"
             f"값: {value}",
-            reply_markup=await get_main_menu_keyboard(user_id)
+            reply_markup=await get_main_menu_keyboard(user_id, symbol)
         )
-        await state.clear()
+        # 심볼 정보는 유지하고 상태만 클리어
+        await state.set_state(None)
 
     except ValueError:
         await message.reply("❌ 숫자를 입력해주세요.")
@@ -527,35 +753,39 @@ async def handle_close_main_position(callback: types.CallbackQuery, state: FSMCo
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
-    
+
+    # FSMContext에서 현재 심볼 가져오기
     data = await state.get_data()
+    symbol = data.get('current_symbol')
     tp_type = data.get('selected_tp_type')
-    
+
     # 응답 결과 확인 (yes 또는 no)
     close_main = callback.data == "close_main_yes"
-    
+
     # API로 현재 설정 가져오기
-    settings = await get_dual_side_settings_api(user_id)
-    
+    settings = await get_dual_side_settings_api(user_id, symbol)
+
     # 설정 업데이트
     settings['dual_side_entry_tp_trigger_type'] = tp_type
     settings['dual_side_entry_tp_value'] = 0
     settings['close_main_on_hedge_tp'] = close_main  # 새로운 설정 추가
-    
+
     # API로 설정 저장
-    await update_dual_side_settings_api(user_id, settings)
-    
+    await update_dual_side_settings_api(user_id, settings, symbol)
+
     # 성공 메시지 및 설정 완료
     tp_type_text = "기존 포지션 SL" if tp_type == "existing_position" else "마지막 진입에 익절"
     close_main_text = "함께 종료됨" if close_main else "유지됨"
-    
+    symbol_display = f" ({symbol.replace('-USDT-SWAP', '').replace('-SWAP', '')})" if symbol else ""
+
     await callback.message.edit_text(
-        f"✅ TP가 [{tp_type_text}] 기준으로 설정되었습니다.\n"
+        f"✅ TP가 [{tp_type_text}] 기준으로 설정되었습니다{symbol_display}.\n"
         f"양방향 포지션 익절 시 메인 포지션은 {close_main_text}으로 설정되었습니다.",
-        reply_markup=await get_main_menu_keyboard(user_id)
+        reply_markup=await get_main_menu_keyboard(user_id, symbol)
     )
     await callback.answer()
-    await state.clear()
+    # 심볼 정보는 유지하고 상태만 클리어
+    await state.set_state(None)
 
 @router.message(DualSideSettingsState.waiting_for_tp_value)
 async def process_tp_value(message: types.Message, state: FSMContext) -> None:
@@ -570,14 +800,18 @@ async def process_tp_value(message: types.Message, state: FSMContext) -> None:
         telegram_id = message.from_user.id
         # 텔레그램 ID를 OKX UID로 변환
         user_id = await get_identifier(str(telegram_id))
-        
+
+        # FSMContext에서 현재 심볼 가져오기
+        data = await state.get_data()
+        symbol = data.get('current_symbol')
+
         # API로 현재 설정 가져오기
-        settings = await get_dual_side_settings_api(user_id)
-        
+        settings = await get_dual_side_settings_api(user_id, symbol)
+
         # 설정 업데이트
         settings['dual_side_entry_tp_trigger_type'] = 'percent'
         settings['dual_side_entry_tp_value'] = value
-        
+
         # 양방향 포지션 익절 시 메인 포지션 종료 여부를 묻는 키보드
         keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
             [
@@ -585,15 +819,15 @@ async def process_tp_value(message: types.Message, state: FSMContext) -> None:
                 types.InlineKeyboardButton(text="아니오", callback_data="close_main_percent_no")
             ]
         ])
-        
+
         await message.reply(
             "❓ 양방향 포지션을 익절 시, 메인 포지션도 같이 종료하시겠습니까?",
             reply_markup=keyboard
         )
-        
-        # 퍼센트 값 저장
+
+        # 퍼센트 값 저장 (심볼 정보는 이미 state에 있음)
         await state.update_data(tp_percent_value=value)
-        
+
     except ValueError:
         await message.reply("❌ 숫자를 입력해주세요.")
 
@@ -607,42 +841,46 @@ async def handle_close_main_percent(callback: types.CallbackQuery, state: FSMCon
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
-    
+
+    # FSMContext에서 현재 심볼 가져오기
     data = await state.get_data()
+    symbol = data.get('current_symbol')
     tp_value = data.get('tp_percent_value')
-    
+
     # 응답 결과 확인 (yes 또는 no)
     close_main = callback.data == "close_main_percent_yes"
-    
+
     # API로 현재 설정 가져오기
-    settings = await get_dual_side_settings_api(user_id)
-    
+    settings = await get_dual_side_settings_api(user_id, symbol)
+
     # 설정 업데이트
     settings['dual_side_entry_tp_trigger_type'] = 'percent'
     settings['dual_side_entry_tp_value'] = tp_value
     settings['close_main_on_hedge_tp'] = close_main  # 새로운 설정 추가
-    
+
     # API로 설정 저장
-    await update_dual_side_settings_api(user_id, settings)
-    
+    await update_dual_side_settings_api(user_id, settings, symbol)
+
     # 성공 메시지 및 설정 완료
     close_main_text = "함께 종료됨" if close_main else "유지됨"
-    
+    symbol_display = f" ({symbol.replace('-USDT-SWAP', '').replace('-SWAP', '')})" if symbol else ""
+
     await callback.message.edit_text(
-        f"✅ TP가 퍼센트 기준으로 설정되었습니다.\n"
+        f"✅ TP가 퍼센트 기준으로 설정되었습니다{symbol_display}.\n"
         f"익절 시점: 평단 대비 +{tp_value}%\n"
         f"양방향 포지션 익절 시 메인 포지션은 {close_main_text}으로 설정되었습니다.",
-        reply_markup=await get_main_menu_keyboard(user_id)
+        reply_markup=await get_main_menu_keyboard(user_id, symbol)
     )
     await callback.answer()
-    await state.clear()
+    # 심볼 정보는 유지하고 상태만 클리어
+    await state.set_state(None)
 
 
 #==============================================
 # STOP LOSS SETTING
 #==============================================
 @router.callback_query(F.data == "dual_set_sl")
-async def handle_sl_setting(callback: types.CallbackQuery) -> None:
+async def handle_sl_setting(callback: types.CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None or callback.message is None:
         return
     if not isinstance(callback.message, Message):
@@ -651,16 +889,20 @@ async def handle_sl_setting(callback: types.CallbackQuery) -> None:
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
-    
+
+    # FSMContext에서 현재 심볼 가져오기
+    data = await state.get_data()
+    symbol = data.get('current_symbol')
+
     # API로 현재 설정 가져오기
-    settings = await get_dual_side_settings_api(user_id)
-    
+    settings = await get_dual_side_settings_api(user_id, symbol)
+
     # 현재 손절 상태 확인
     is_enabled = settings.get('use_dual_sl', False)
-    
+
     # 손절 상태에 따른 텍스트 설정
     sl_status_text = "🟢 손절(현재: 켜짐)" if is_enabled else "🔴 손절(현재: 꺼짐)"
-    
+
     await callback.answer()
     keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -687,7 +929,7 @@ async def handle_sl_setting(callback: types.CallbackQuery) -> None:
     )
 
 @router.callback_query(F.data == "sl_toggle")
-async def handle_sl_toggle(callback: types.CallbackQuery) -> None:
+async def handle_sl_toggle(callback: types.CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None or callback.message is None:
         return
     if not isinstance(callback.message, Message):
@@ -696,24 +938,29 @@ async def handle_sl_toggle(callback: types.CallbackQuery) -> None:
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
-    
+
+    # FSMContext에서 현재 심볼 가져오기
+    data = await state.get_data()
+    symbol = data.get('current_symbol')
+
     # API로 현재 설정 가져오기
-    settings = await get_dual_side_settings_api(user_id)
-    
+    settings = await get_dual_side_settings_api(user_id, symbol)
+
     # 현재 상태 확인
     is_enabled = settings.get('use_dual_sl', False)
-    
+
     # 상태 토글
     settings['use_dual_sl'] = not is_enabled
-    
+
     # API로 설정 저장
-    await update_dual_side_settings_api(user_id, settings)
-    
+    await update_dual_side_settings_api(user_id, settings, symbol)
+
     status_text = "활성화" if not is_enabled else "비활성화"
-    await callback.answer(f"손절(SL)이 {status_text} 되었습니다.")
-    
+    symbol_display = f" ({symbol.replace('-USDT-SWAP', '').replace('-SWAP', '')})" if symbol else ""
+    await callback.answer(f"손절(SL)이 {status_text} 되었습니다{symbol_display}.")
+
     # 메인 메뉴 다시 표시
-    text, kb = await get_current_dual_settings_info(user_id, settings)
+    text, kb = await get_current_dual_settings_info(user_id, settings, symbol)
     await callback.message.edit_text(text, reply_markup=kb)
 
 
@@ -748,7 +995,7 @@ async def handle_sl_existing_position(callback: types.CallbackQuery, state: FSMC
 
 
 @router.callback_query(F.data.startswith("sl_type_existing_pos_select_"))
-async def handle_sl_existing_select_n(callback: types.CallbackQuery) -> None:
+async def handle_sl_existing_select_n(callback: types.CallbackQuery, state: FSMContext) -> None:
     """1차/2차/3차 등 버튼 눌렀을 때"""
     if callback.from_user is None or callback.message is None or callback.data is None:
         return
@@ -757,25 +1004,30 @@ async def handle_sl_existing_select_n(callback: types.CallbackQuery) -> None:
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
-    
+
+    # FSMContext에서 현재 심볼 가져오기
+    data = await state.get_data()
+    symbol = data.get('current_symbol')
+
     n_str = callback.data.split("_")[-1]  # '1', '2', '3'
     n = int(n_str)  # 1,2,3
 
     # API로 현재 설정 가져오기
-    settings = await get_dual_side_settings_api(user_id)
-    
+    settings = await get_dual_side_settings_api(user_id, symbol)
+
     # 설정 업데이트
     settings['dual_side_entry_sl_trigger_type'] = 'existing_position'
     settings['dual_side_entry_sl_value'] = n
     settings['use_dual_sl'] = True
-    
-    # API로 설정 저장
-    await update_dual_side_settings_api(user_id, settings)
 
+    # API로 설정 저장
+    await update_dual_side_settings_api(user_id, settings, symbol)
+
+    symbol_display = f" ({symbol.replace('-USDT-SWAP', '').replace('-SWAP', '')})" if symbol else ""
     await callback.answer()
     await callback.message.edit_text(
-        f"✅ SL이 [기존 포지션 {n}차 TP]로 설정되었습니다.\n",
-        reply_markup=await get_main_menu_keyboard(user_id)
+        f"✅ SL이 [기존 포지션 {n}차 TP]로 설정되었습니다{symbol_display}.\n",
+        reply_markup=await get_main_menu_keyboard(user_id, symbol)
     )
 
 # 퍼센트 기준 SL 설정
@@ -812,24 +1064,30 @@ async def process_sl_value(message: types.Message, state: FSMContext) -> None:
         telegram_id = message.from_user.id
         # 텔레그램 ID를 OKX UID로 변환
         user_id = await get_identifier(str(telegram_id))
-        
+
+        # FSMContext에서 현재 심볼 가져오기
+        data = await state.get_data()
+        symbol = data.get('current_symbol')
+
         # API로 현재 설정 가져오기
-        settings = await get_dual_side_settings_api(user_id)
-        
+        settings = await get_dual_side_settings_api(user_id, symbol)
+
         # 설정 업데이트
         settings['dual_side_entry_sl_trigger_type'] = 'percent'
         settings['dual_side_entry_sl_value'] = value
         settings['use_dual_sl'] = True
-        
-        # API로 설정 저장
-        await update_dual_side_settings_api(user_id, settings)
 
+        # API로 설정 저장
+        await update_dual_side_settings_api(user_id, settings, symbol)
+
+        symbol_display = f" ({symbol.replace('-USDT-SWAP', '').replace('-SWAP', '')})" if symbol else ""
         await message.reply(
-            f"✅ SL이 퍼센트 기준으로 설정되었습니다.\n"
+            f"✅ SL이 퍼센트 기준으로 설정되었습니다{symbol_display}.\n"
             f"손절 시점: 반대포지션 평단 대비 -{value}%",
-            reply_markup=await get_main_menu_keyboard(user_id)
+            reply_markup=await get_main_menu_keyboard(user_id, symbol)
         )
-        await state.clear()
+        # 심볼 정보는 유지하고 상태만 클리어
+        await state.set_state(None)
 
     except ValueError:
         await message.reply("❌ 숫자를 입력해주세요.")
@@ -837,7 +1095,7 @@ async def process_sl_value(message: types.Message, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data == "dual_set_tp_sl_after_all_dca")
-async def handle_tp_sl_after_all_dca(callback: types.CallbackQuery) -> None:
+async def handle_tp_sl_after_all_dca(callback: types.CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None or callback.message is None:
         return
     if not isinstance(callback.message, Message):
@@ -846,24 +1104,29 @@ async def handle_tp_sl_after_all_dca(callback: types.CallbackQuery) -> None:
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
-    
+
+    # FSMContext에서 현재 심볼 가져오기
+    data = await state.get_data()
+    symbol = data.get('current_symbol')
+
     # API로 현재 설정 가져오기
-    settings = await get_dual_side_settings_api(user_id)
-    
+    settings = await get_dual_side_settings_api(user_id, symbol)
+
     # 현재 상태 확인
     is_enabled = settings.get('activate_tp_sl_after_all_dca', False)
-    
+
     # 상태 토글
     settings['activate_tp_sl_after_all_dca'] = not is_enabled
-    
+
     # API로 설정 저장
-    await update_dual_side_settings_api(user_id, settings)
-    
+    await update_dual_side_settings_api(user_id, settings, symbol)
+
     status_text = "활성화" if not is_enabled else "비활성화"
-    await callback.answer(f"최종 진입 후 TP/SL 설정이 {status_text} 되었습니다.")
-    
+    symbol_display = f" ({symbol.replace('-USDT-SWAP', '').replace('-SWAP', '')})" if symbol else ""
+    await callback.answer(f"최종 진입 후 TP/SL 설정이 {status_text} 되었습니다{symbol_display}.")
+
     # 메인 메뉴 다시 표시
-    text, kb = await get_current_dual_settings_info(user_id, settings)
+    text, kb = await get_current_dual_settings_info(user_id, settings, symbol)
     await callback.message.edit_text(text, reply_markup=kb)
 
 # =========================
@@ -882,7 +1145,7 @@ async def handle_settings_done(callback: types.CallbackQuery) -> None:
     )
 
 @router.callback_query(F.data == "back_to_dual_menu")
-async def back_to_main_menu(callback: types.CallbackQuery) -> None:
+async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None or callback.message is None:
         return
     if not isinstance(callback.message, Message):
@@ -890,10 +1153,21 @@ async def back_to_main_menu(callback: types.CallbackQuery) -> None:
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
-    
+
+    # FSMContext에서 현재 심볼 가져오기
+    data = await state.get_data()
+    symbol = data.get('current_symbol')
+
+    # 심볼 표시
+    if symbol:
+        symbol_display = symbol.replace("-USDT-SWAP", "").replace("-SWAP", "")
+        header = f"📊 [{symbol_display}] 메인 메뉴로 돌아갑니다."
+    else:
+        header = "🌐 [글로벌] 메인 메뉴로 돌아갑니다."
+
     await callback.message.edit_text(
-        "메인 메뉴로 돌아갑니다.",
-        reply_markup=await get_main_menu_keyboard(user_id)
+        header,
+        reply_markup=await get_main_menu_keyboard(user_id, symbol)
     )
     await callback.answer()
 
@@ -902,10 +1176,17 @@ async def back_to_main_menu(callback: types.CallbackQuery) -> None:
 # =========================
 # 메인 메뉴 키보드
 # =========================
-async def get_main_menu_keyboard(user_id: str) -> types.InlineKeyboardMarkup:
+async def get_main_menu_keyboard(user_id: str, symbol: str | None = None) -> types.InlineKeyboardMarkup:
+    """
+    메인 메뉴 키보드를 생성합니다.
+
+    멀티심볼 지원:
+    - symbol이 제공되면 심볼별 설정 표시
+    - symbol이 None이면 글로벌 설정 표시
+    """
     # API로 설정 가져오기
-    settings = await get_dual_side_settings_api(user_id)
-    
+    settings = await get_dual_side_settings_api(user_id, symbol)
+
     is_enabled = settings.get('use_dual_side_entry', False)
     after_all_dca_on_off = settings.get('activate_tp_sl_after_all_dca', False)
     after_all_dca_on_off_str = "활성화" if after_all_dca_on_off else "비활성화"
@@ -919,11 +1200,19 @@ async def get_main_menu_keyboard(user_id: str) -> types.InlineKeyboardMarkup:
         tp_str = "마지막 진입에 익절" + (" (메인포지션 종료)" if close_main_on_hedge_tp else "")
     sl_str = f"퍼센트: ±{settings.get('dual_side_entry_sl_value', 2)}%"
     if settings.get('dual_side_entry_sl_trigger_type', 'percent') == 'existing_position':
-        sl_str = f"기존포지션 {settings.get('dual_side_entry_sl_value', 2)}차 TP" 
+        sl_str = f"기존포지션 {settings.get('dual_side_entry_sl_value', 2)}차 TP"
     pyramiding_limit = settings.get('dual_side_pyramiding_limit', 1)
     pyramiding_limit_str = "미설정" if pyramiding_limit == 0 else f"{pyramiding_limit}회"
     trend_close_enabled = settings.get('dual_side_trend_close', False)
     trend_close_str = "활성화" if trend_close_enabled else "비활성화"
+
+    # 심볼 표시 텍스트
+    if symbol:
+        symbol_display = symbol.replace("-USDT-SWAP", "").replace("-SWAP", "")
+        header_text = f"📊 {symbol_display}"
+    else:
+        header_text = "🌐 글로벌"
+
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [
             types.InlineKeyboardButton(
@@ -938,6 +1227,7 @@ async def get_main_menu_keyboard(user_id: str) -> types.InlineKeyboardMarkup:
         [types.InlineKeyboardButton(text=f"피라미딩 제한: {pyramiding_limit_str}", callback_data="dual_set_pyramiding_limit")],
         [types.InlineKeyboardButton(text=f"양방향 트랜드 종료 설정: {trend_close_str}", callback_data="dual_set_trend_close")],
         [types.InlineKeyboardButton(text="현재 설정 확인", callback_data="dual_show_current")],
+        [types.InlineKeyboardButton(text="🔄 심볼 선택으로 돌아가기", callback_data="dual_back_to_symbol_select")],
         [types.InlineKeyboardButton(text="설정 완료", callback_data="dual_settings_done")]
     ])
 
@@ -947,11 +1237,17 @@ async def get_main_menu_keyboard(user_id: str) -> types.InlineKeyboardMarkup:
 # =========================
 # 현재 설정 정보를 문자열로 만드는 함수
 # =========================
-async def get_current_dual_settings_info(user_id: str, settings: Dict[str, Any] | None = None) -> tuple[str, types.InlineKeyboardMarkup]:
-    """현재 양방향 매매 설정 정보를 표시합니다."""
+async def get_current_dual_settings_info(user_id: str, settings: Dict[str, Any] | None = None, symbol: str | None = None) -> tuple[str, types.InlineKeyboardMarkup]:
+    """
+    현재 양방향 매매 설정 정보를 표시합니다.
+
+    멀티심볼 지원:
+    - symbol이 제공되면 심볼별 설정 표시
+    - symbol이 None이면 글로벌 설정 표시
+    """
     if settings is None:
-        settings = await get_dual_side_settings_api(user_id)
-    
+        settings = await get_dual_side_settings_api(user_id, symbol)
+
     # 기본 설정값
     use_dual_side = settings.get('use_dual_side_entry', False)
     trigger = settings.get('dual_side_entry_trigger', '2')
@@ -966,7 +1262,7 @@ async def get_current_dual_settings_info(user_id: str, settings: Dict[str, Any] 
     pyramiding_limit = settings.get('dual_side_pyramiding_limit', '1')
     trend_close = settings.get('dual_side_trend_close', False)
     close_main_on_hedge_tp = settings.get('close_main_on_hedge_tp', False)
-    
+
     # TP 관련 텍스트
     close_main_text = "메인포지션 종료" if close_main_on_hedge_tp else "메인포지션 유지"
     if tp_trigger_type == 'do_not_close':
@@ -977,7 +1273,7 @@ async def get_current_dual_settings_info(user_id: str, settings: Dict[str, Any] 
         tp_str = f"마지막 진입에 익절 ({close_main_text})"
     else:
         tp_str = f"퍼센트: ±{tp_value}% ({close_main_text})"
-    
+
     # SL 관련 텍스트
     if not use_dual_sl:
         sl_str = "사용 안함"
@@ -985,13 +1281,20 @@ async def get_current_dual_settings_info(user_id: str, settings: Dict[str, Any] 
         sl_str = "기존포지션의 TP"
     else:
         sl_str = f"퍼센트: ±{sl_value}%"
-    
+
     # 트렌드 종료 설정
     trend_close_str = "활성화" if trend_close else "비활성화"
-    
+
+    # 심볼 표시 텍스트
+    if symbol:
+        symbol_display = symbol.replace("-USDT-SWAP", "").replace("-SWAP", "")
+        header = f"📊 [{symbol_display}] 양방향 매매 설정"
+    else:
+        header = "🌐 [글로벌] 양방향 매매 설정"
+
     # 설정 정보 텍스트
     text = (
-        f"📊 양방향 매매 설정\n"
+        f"{header}\n"
         f"──────────────\n"
         f"▶ 양방향 매매: {'활성화' if use_dual_side else '비활성화'}\n"
         f"▶ 진입 시점: {trigger}번째 진입\n"
@@ -1004,41 +1307,62 @@ async def get_current_dual_settings_info(user_id: str, settings: Dict[str, Any] 
         f"\n원하시는 항목을 선택하세요."
     )
 
-    kb = await get_main_menu_keyboard(user_id)
+    kb = await get_main_menu_keyboard(user_id, symbol)
     return text, kb
 
 
 # =========================
 # 기본값 초기화
 # =========================
-async def initialize_dual_side_settings(user_id: str) -> None:
-    """API를 통해 듀얼 사이드 설정을 기본값으로 초기화합니다."""
+async def initialize_dual_side_settings(user_id: str, symbol: str | None = None) -> None:
+    """
+    API를 통해 듀얼 사이드 설정을 기본값으로 초기화합니다.
+
+    멀티심볼 지원:
+    - symbol이 제공되면 심볼별 설정 초기화
+    - symbol이 None이면 글로벌 설정 초기화
+    """
     # user_id를 OKX UID로 변환
     okx_uid = await get_identifier(str(user_id))
-    
+
     try:
         # API를 통해 초기화
         async with aiohttp.ClientSession() as session:
             url = f"{API_BASE_URL}/settings/{okx_uid}/dual_side/reset"
+            # 심볼 파라미터 추가
+            if symbol:
+                url += f"?symbol={symbol}"
             async with session.post(url) as response:
                 if response.status == 200:
-                    logger.info(f"사용자 {okx_uid}의 양방향 매매 설정이 초기화되었습니다.")
+                    symbol_info = f" ({symbol})" if symbol else " (글로벌)"
+                    logger.info(f"사용자 {okx_uid}의 양방향 매매 설정이 초기화되었습니다{symbol_info}.")
                 else:
                     logger.error(f"API 초기화 실패 ({response.status}): {await response.text()}")
                     # 백업 - 직접 초기화
-                    await initialize_dual_side_settings_fallback(okx_uid)
+                    await initialize_dual_side_settings_fallback(okx_uid, symbol)
     except Exception as e:
         logger.error(f"API 초기화 중 오류 발생: {str(e)}")
         # 백업 - 직접 초기화
-        await initialize_dual_side_settings_fallback(okx_uid)
+        await initialize_dual_side_settings_fallback(okx_uid, symbol)
 
-async def initialize_dual_side_settings_fallback(user_id: str) -> None:
-    """Redis에 직접 듀얼 사이드 설정을 기본값으로 초기화합니다."""
+async def initialize_dual_side_settings_fallback(user_id: str, symbol: str | None = None) -> None:
+    """
+    Redis에 직접 듀얼 사이드 설정을 기본값으로 초기화합니다.
+
+    멀티심볼 지원:
+    - symbol이 제공되면 심볼별 설정 초기화
+    - symbol이 None이면 글로벌 설정 초기화
+    """
     # user_id를 OKX UID로 변환
     okx_uid = await get_identifier(str(user_id))
 
     redis = await get_redis_client()
-    settings_key = f"user:{okx_uid}:dual_side"
+
+    # 심볼별 또는 글로벌 키 결정
+    if symbol:
+        settings_key = f"user:{okx_uid}:symbol:{symbol}:dual_side"
+    else:
+        settings_key = f"user:{okx_uid}:dual_side"
     default_settings = {
         'use_dual_side_entry': 'false',  # 기본값 추가
         'dual_side_entry_trigger': '2',
@@ -1089,25 +1413,31 @@ async def process_pyramiding_limit_value(message: types.Message, state: FSMConte
         if not (1 <= value <= 10):
             await message.reply("❌ 1~10 사이 숫자를 입력해주세요.")
             return
-        
+
         telegram_id = message.from_user.id
         # 텔레그램 ID를 OKX UID로 변환
         user_id = await get_identifier(str(telegram_id))
-        
+
+        # FSMContext에서 현재 심볼 가져오기
+        data = await state.get_data()
+        symbol = data.get('current_symbol')
+
         # API로 현재 설정 가져오기
-        settings = await get_dual_side_settings_api(user_id)
-        
+        settings = await get_dual_side_settings_api(user_id, symbol)
+
         # 설정 업데이트
         settings['dual_side_pyramiding_limit'] = value
-        
-        # API로 설정 저장
-        await update_dual_side_settings_api(user_id, settings)
 
+        # API로 설정 저장
+        await update_dual_side_settings_api(user_id, settings, symbol)
+
+        symbol_display = f" ({symbol.replace('-USDT-SWAP', '').replace('-SWAP', '')})" if symbol else ""
         await message.reply(
-            f"✅ 양방향 피라미딩 제한이 {value}회로 설정되었습니다.",
-            reply_markup=await get_main_menu_keyboard(user_id)
+            f"✅ 양방향 피라미딩 제한이 {value}회로 설정되었습니다{symbol_display}.",
+            reply_markup=await get_main_menu_keyboard(user_id, symbol)
         )
-        await state.clear()
+        # 심볼 정보는 유지하고 상태만 클리어
+        await state.set_state(None)
 
     except ValueError:
         await message.reply("❌ 올바른 숫자를 입력해주세요.")
@@ -1117,7 +1447,7 @@ async def process_pyramiding_limit_value(message: types.Message, state: FSMConte
 #===============================================================
 
 @router.callback_query(F.data == "dual_set_trend_close")
-async def handle_trend_close_setting(callback: types.CallbackQuery) -> None:
+async def handle_trend_close_setting(callback: types.CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None or callback.message is None:
         return
     if not isinstance(callback.message, Message):
@@ -1126,19 +1456,23 @@ async def handle_trend_close_setting(callback: types.CallbackQuery) -> None:
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
-    
+
+    # FSMContext에서 현재 심볼 가져오기
+    data = await state.get_data()
+    symbol = data.get('current_symbol')
+
     try:
-        logger.info(f"트렌드 클로즈 설정 메뉴 열기 - 사용자: {user_id}")
-        
+        logger.info(f"트렌드 클로즈 설정 메뉴 열기 - 사용자: {user_id}, 심볼: {symbol}")
+
         # API로 현재 설정 가져오기
-        settings = await get_dual_side_settings_api(user_id)
-        
+        settings = await get_dual_side_settings_api(user_id, symbol)
+
         # 현재 설정 값 가져오기
         trend_close_enabled = settings.get('dual_side_trend_close', False)
         logger.info(f"현재 트렌드 클로즈 설정값: {trend_close_enabled}")
-        
+
         status = "활성화" if trend_close_enabled else "비활성화"
-        
+
         # 현재 상태에 따라 다른 버튼 보여주기
         button_row = []
         if trend_close_enabled:
@@ -1157,16 +1491,16 @@ async def handle_trend_close_setting(callback: types.CallbackQuery) -> None:
                     callback_data="trend_close_enable"
                 )
             )
-        
+
         keyboard = types.InlineKeyboardMarkup(
             inline_keyboard=[
                 [button_row[0]],  # 한 버튼만 표시
                 [types.InlineKeyboardButton(text="« 뒤로가기", callback_data="back_to_dual_menu")]
             ]
         )
-        
+
         logger.info(f"트렌드 클로즈 키보드 생성됨, 현재 상태: {status}")
-        
+
         await callback.message.edit_text(
             f"📊 양방향 트랜드 종료 설정 (현재: {status})\n"
             "──────────────\n"
@@ -1175,13 +1509,13 @@ async def handle_trend_close_setting(callback: types.CallbackQuery) -> None:
             reply_markup=keyboard
         )
         logger.info("트렌드 클로즈 설정 메시지 편집 완료")
-        
+
     except Exception as e:
         logger.error(f"트렌드 클로즈 설정 표시 중 오류: {e}")
         await callback.message.reply(f"트렌드 클로즈 설정 불러오기 중 오류 발생: {e}")
 
 @router.callback_query(F.data == "trend_close_enable")
-async def handle_trend_close_enable(callback: types.CallbackQuery) -> None:
+async def handle_trend_close_enable(callback: types.CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None or callback.message is None:
         return
     if not isinstance(callback.message, Message):
@@ -1190,30 +1524,35 @@ async def handle_trend_close_enable(callback: types.CallbackQuery) -> None:
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
-    
+
+    # FSMContext에서 현재 심볼 가져오기
+    data = await state.get_data()
+    symbol = data.get('current_symbol')
+
     try:
         # API로 현재 설정 가져오기
-        settings = await get_dual_side_settings_api(user_id)
-        
+        settings = await get_dual_side_settings_api(user_id, symbol)
+
         # 설정 업데이트
         settings['dual_side_trend_close'] = True
-        
+
         # API로 설정 저장
-        await update_dual_side_settings_api(user_id, settings)
-        
+        await update_dual_side_settings_api(user_id, settings, symbol)
+
         # 설정이 변경되었음을 알림
+        symbol_display = f" ({symbol.replace('-USDT-SWAP', '').replace('-SWAP', '')})" if symbol else ""
         await callback.message.edit_text(
-            "✅ 트렌드 종료 설정이 활성화로 변경되었습니다.\n메인 메뉴로 돌아갑니다.",
-            reply_markup=await get_main_menu_keyboard(user_id)
+            f"✅ 트렌드 종료 설정이 활성화로 변경되었습니다{symbol_display}.\n메인 메뉴로 돌아갑니다.",
+            reply_markup=await get_main_menu_keyboard(user_id, symbol)
         )
-        logger.info(f"사용자 {user_id}의 트렌드 클로즈 설정이 활성화로 변경되었습니다.")
-        
+        logger.info(f"사용자 {user_id}의 트렌드 클로즈 설정이 활성화로 변경되었습니다. 심볼: {symbol}")
+
     except Exception as e:
         logger.error(f"트렌드 클로즈 활성화 오류: {e}")
         await callback.message.reply(f"트렌드 클로즈 활성화 중 오류 발생: {e}")
 
 @router.callback_query(F.data == "trend_close_disable")
-async def handle_trend_close_disable(callback: types.CallbackQuery) -> None:
+async def handle_trend_close_disable(callback: types.CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None or callback.message is None:
         return
     if not isinstance(callback.message, Message):
@@ -1222,30 +1561,35 @@ async def handle_trend_close_disable(callback: types.CallbackQuery) -> None:
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
-    
+
+    # FSMContext에서 현재 심볼 가져오기
+    data = await state.get_data()
+    symbol = data.get('current_symbol')
+
     try:
         # API로 현재 설정 가져오기
-        settings = await get_dual_side_settings_api(user_id)
-        
+        settings = await get_dual_side_settings_api(user_id, symbol)
+
         # 설정 업데이트
         settings['dual_side_trend_close'] = False
-        
+
         # API로 설정 저장
-        await update_dual_side_settings_api(user_id, settings)
-        
+        await update_dual_side_settings_api(user_id, settings, symbol)
+
         # 설정이 변경되었음을 알림
+        symbol_display = f" ({symbol.replace('-USDT-SWAP', '').replace('-SWAP', '')})" if symbol else ""
         await callback.message.edit_text(
-            "✅ 트렌드 종료 설정이 비활성화로 변경되었습니다.\n메인 메뉴로 돌아갑니다.",
-            reply_markup=await get_main_menu_keyboard(user_id)
+            f"✅ 트렌드 종료 설정이 비활성화로 변경되었습니다{symbol_display}.\n메인 메뉴로 돌아갑니다.",
+            reply_markup=await get_main_menu_keyboard(user_id, symbol)
         )
-        logger.info(f"사용자 {user_id}의 트렌드 클로즈 설정이 비활성화로 변경되었습니다.")
-        
+        logger.info(f"사용자 {user_id}의 트렌드 클로즈 설정이 비활성화로 변경되었습니다. 심볼: {symbol}")
+
     except Exception as e:
         logger.error(f"트렌드 클로즈 비활성화 오류: {e}")
         await callback.message.reply(f"트렌드 클로즈 비활성화 중 오류 발생: {e}")
 
 @router.callback_query(F.data == "do_not_close_dual_position")
-async def handle_do_not_close_dual_position(callback: types.CallbackQuery) -> None:
+async def handle_do_not_close_dual_position(callback: types.CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None or callback.message is None:
         return
     if not isinstance(callback.message, Message):
@@ -1254,26 +1598,31 @@ async def handle_do_not_close_dual_position(callback: types.CallbackQuery) -> No
     telegram_id = callback.from_user.id
     # 텔레그램 ID를 OKX UID로 변환
     user_id = await get_identifier(str(telegram_id))
-    
+
+    # FSMContext에서 현재 심볼 가져오기
+    data = await state.get_data()
+    symbol = data.get('current_symbol')
+
     try:
         # API로 현재 설정 가져오기
-        settings = await get_dual_side_settings_api(user_id)
-        
+        settings = await get_dual_side_settings_api(user_id, symbol)
+
         # 설정 업데이트
         settings['dual_side_entry_tp_trigger_type'] = 'do_not_close'
         settings['dual_side_entry_tp_value'] = 0
         settings['close_main_on_hedge_tp'] = False
-        
+
         # API로 설정 저장
-        await update_dual_side_settings_api(user_id, settings)
-        
+        await update_dual_side_settings_api(user_id, settings, symbol)
+
         # 설정이 변경되었음을 알림
+        symbol_display = f" ({symbol.replace('-USDT-SWAP', '').replace('-SWAP', '')})" if symbol else ""
         await callback.message.edit_text(
-            "✅ 양방향 익절이 비활성화되었습니다.\n메인 메뉴로 돌아갑니다.",
-            reply_markup=await get_main_menu_keyboard(user_id)
+            f"✅ 양방향 익절이 비활성화되었습니다{symbol_display}.\n메인 메뉴로 돌아갑니다.",
+            reply_markup=await get_main_menu_keyboard(user_id, symbol)
         )
-        logger.info(f"사용자 {user_id}의 양방향 익절이 비활성화되었습니다.")
-        
+        logger.info(f"사용자 {user_id}의 양방향 익절이 비활성화되었습니다. 심볼: {symbol}")
+
     except Exception as e:
         logger.error(f"양방향 익절 비활성화 오류: {e}")
         await callback.message.reply(f"양방향 익절 비활성화 중 오류 발생: {e}")

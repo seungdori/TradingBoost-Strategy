@@ -191,6 +191,7 @@ class TimescaleProvider(DataProvider):
                     ema7 as ema,
                     ma20 as sma,
                     trend_state,
+                    auto_trend_state,
                     timeframe
                 FROM {table_name}
                 WHERE timeframe = :timeframe
@@ -228,6 +229,7 @@ class TimescaleProvider(DataProvider):
                     ema=float(row.ema) if row.ema is not None else None,
                     sma=float(row.sma) if row.sma is not None else None,
                     trend_state=int(row.trend_state) if row.trend_state is not None else None,
+                    auto_trend_state=int(row.auto_trend_state) if row.auto_trend_state is not None else None,
                     # PineScript components - not available in candlesdb schema
                     CYCLE_Bull=None,
                     CYCLE_Bear=None,
@@ -324,8 +326,8 @@ class TimescaleProvider(DataProvider):
                 await self._save_candles_to_db(symbol, timeframe, all_candles)
             return all_candles
 
-        # Detect gaps
-        gaps = self._detect_gaps(candles, timeframe)
+        # Detect gaps (including start/end gaps)
+        gaps = self._detect_gaps(candles, timeframe, start_date, end_date)
 
         if not gaps:
             logger.debug(f"No gaps detected in {symbol} {timeframe} data")
@@ -372,7 +374,9 @@ class TimescaleProvider(DataProvider):
     def _detect_gaps(
         self,
         candles: List[Candle],
-        timeframe: str
+        timeframe: str,
+        start_date: datetime = None,
+        end_date: datetime = None
     ) -> List[tuple[datetime, datetime]]:
         """
         Detect gaps in candle data.
@@ -380,17 +384,36 @@ class TimescaleProvider(DataProvider):
         Args:
             candles: List of candles sorted by timestamp
             timeframe: Timeframe
+            start_date: Expected start date (optional)
+            end_date: Expected end date (optional)
 
         Returns:
             List of (gap_start, gap_end) tuples
         """
-        if len(candles) < 2:
+        if len(candles) == 0:
+            # No candles at all - entire range is a gap
+            if start_date and end_date:
+                return [(start_date, end_date)]
             return []
 
         gaps = []
         timeframe_minutes = self._parse_timeframe_minutes(timeframe)
         expected_delta = pd.Timedelta(minutes=timeframe_minutes)
 
+        # Check gap before first candle
+        if start_date and candles:
+            first_candle_time = candles[0].timestamp
+            gap_before_first = first_candle_time - start_date
+
+            # If there's a significant gap before first candle
+            if gap_before_first > expected_delta * 1.1:
+                gaps.append((start_date, first_candle_time))
+                logger.info(
+                    f"Detected gap before first candle: {start_date} to {first_candle_time} "
+                    f"({gap_before_first})"
+                )
+
+        # Check gaps between candles
         for i in range(1, len(candles)):
             prev_candle = candles[i - 1]
             curr_candle = candles[i]
@@ -400,8 +423,21 @@ class TimescaleProvider(DataProvider):
             # Allow 10% tolerance for small timing variations
             if actual_delta > expected_delta * 1.1:
                 gap_start = prev_candle.timestamp + expected_delta
-                gap_end = curr_candle.timestamp  # Include the current candle timestamp
+                gap_end = curr_candle.timestamp
                 gaps.append((gap_start, gap_end))
+
+        # Check gap after last candle
+        if end_date and candles:
+            last_candle_time = candles[-1].timestamp
+            gap_after_last = end_date - last_candle_time
+
+            # If there's a significant gap after last candle
+            if gap_after_last > expected_delta * 1.1:
+                gaps.append((last_candle_time + expected_delta, end_date))
+                logger.info(
+                    f"Detected gap after last candle: {last_candle_time} to {end_date} "
+                    f"({gap_after_last})"
+                )
 
         return gaps
 

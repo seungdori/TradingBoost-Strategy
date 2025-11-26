@@ -19,6 +19,7 @@ from HYPERRSI.src.api.routes import (
     okx,
     order,
     position,
+    preset,
     settings,
     stats,
     status,
@@ -39,6 +40,12 @@ from shared.docs.openapi import attach_standard_error_examples
 from shared.errors import register_exception_handlers
 from shared.errors.middleware import RequestIDMiddleware
 from shared.logging import get_logger, setup_json_logger
+
+# State change logger for PostgreSQL SSOT
+from HYPERRSI.src.services.state_change_logger import (
+    start_state_change_logger,
+    stop_state_change_logger,
+)
 
 # Task tracking utility
 from shared.utils.task_tracker import TaskTracker
@@ -236,6 +243,14 @@ async def lifespan(app: FastAPI):
             logger.warning(f"Error database initialization failed (continuing without it): {e}")
             # Continue even if error DB fails - it's not critical for main operations
 
+        # Start StateChangeLogger for PostgreSQL SSOT (batch writes)
+        try:
+            await start_state_change_logger()
+            logger_new.info("StateChangeLogger started (batch writes to PostgreSQL)")
+        except Exception as e:
+            logger.warning(f"StateChangeLogger initialization failed (continuing without it): {e}")
+            # Continue even if StateChangeLogger fails - Redis cache still works
+
         logger_new.info("HYPERRSI application startup complete")
         logger.info("Starting application...")
 
@@ -248,6 +263,13 @@ async def lifespan(app: FastAPI):
         logger.info("Shutting down application...")
 
         try:
+            # Stop StateChangeLogger first (flushes remaining changes to PostgreSQL)
+            try:
+                await stop_state_change_logger()
+                logger_new.info("StateChangeLogger stopped (remaining changes flushed)")
+            except Exception as e:
+                logger.warning(f"StateChangeLogger shutdown failed: {e}")
+
             # Cleanup infrastructure connections with timeout and shield from cancellation
             cleanup_tasks = [
                 asyncio.create_task(close_db(), name="close_db"),
@@ -361,6 +383,10 @@ app = FastAPI(
         {
             "name": "errors",
             "description": "에러 로그 조회 및 통계"
+        },
+        {
+            "name": "presets",
+            "description": "트레이딩 프리셋 관리 (생성, 조회, 수정, 삭제)"
         }
     ]
 )
@@ -410,6 +436,7 @@ app.include_router(status.router, prefix="/api")
 app.include_router(user.router, prefix="/api")
 app.include_router(okx.router, prefix="/api")
 app.include_router(errors.router, prefix="/api")
+app.include_router(preset.router, prefix="/api")
 
 # Add Redis pool monitoring endpoint
 from shared.api.health import router as health_router

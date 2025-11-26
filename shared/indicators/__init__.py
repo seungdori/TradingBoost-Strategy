@@ -11,7 +11,7 @@ Shared Indicators Package
 from ._adx import calculate_adx, calculate_dm_tr, calculate_tr, rma
 
 # All indicators computation
-from ._all_indicators import compute_all_indicators
+from ._all_indicators import compute_all_indicators, add_auto_trend_state_to_candles
 
 # ATR
 from ._atr import calc_atr
@@ -78,4 +78,5 @@ __all__ = [
     'compute_alpha',
     # All
     'compute_all_indicators',
+    'add_auto_trend_state_to_candles',
 ]

@@ -53,6 +53,10 @@ from HYPERRSI.src.trading.utils.trading_utils import (
 )
 from shared.logging import get_logger
 
+# PostgreSQL SSOT - State Change Logger
+from HYPERRSI.src.services.state_change_logger import get_state_change_logger
+from HYPERRSI.src.core.models.state_change import ChangeType, TriggeredBy
+
 logger = get_logger(__name__)
 error_logger = setup_error_logger()
 
@@ -558,6 +562,30 @@ async def _execute_long_pyramiding(
                 new_entry_contracts_amount
             )
 
+            # PostgreSQL 상태 변경 로깅 - DCA 진입
+            try:
+                state_change_logger = get_state_change_logger()
+                await state_change_logger.log_change(
+                    okx_uid=user_id,
+                    symbol=symbol,
+                    change_type=ChangeType.DCA_EXECUTED,
+                    new_state={
+                        'dca_count': dca_order_count,
+                        'entry_price': current_price,
+                        'entry_size': new_entry_contracts_amount,
+                        'side': 'long',
+                    },
+                    price=current_price,
+                    triggered_by=TriggeredBy.SIGNAL,
+                    trigger_source='pyramiding.py:_execute_long_pyramiding',
+                    extra_data={
+                        'entry_multiplier': settings.get('entry_multiplier', 0.5),
+                        'pyramiding_limit': settings.get('pyramiding_limit', 1),
+                    }
+                )
+            except Exception as log_err:
+                logger.warning(f"[{user_id}] DCA 로깅 실패 (무시됨): {log_err}")
+
         except Exception as e:
             error_logger.error(f"[{user_id}]:DCA 롱 주문 실패", exc_info=True)
             await send_telegram_message(
@@ -788,6 +816,30 @@ async def _execute_short_pyramiding(
                 "last_entry_size",
                 new_entry_contracts_amount
             )
+
+            # PostgreSQL 상태 변경 로깅 - DCA 진입 (숏)
+            try:
+                state_change_logger = get_state_change_logger()
+                await state_change_logger.log_change(
+                    okx_uid=user_id,
+                    symbol=symbol,
+                    change_type=ChangeType.DCA_EXECUTED,
+                    new_state={
+                        'dca_count': dca_order_count,
+                        'entry_price': current_price,
+                        'entry_size': new_entry_contracts_amount,
+                        'side': 'short',
+                    },
+                    price=current_price,
+                    triggered_by=TriggeredBy.SIGNAL,
+                    trigger_source='pyramiding.py:_execute_short_pyramiding',
+                    extra_data={
+                        'entry_multiplier': settings.get('entry_multiplier', 0.5),
+                        'pyramiding_limit': settings.get('pyramiding_limit', 1),
+                    }
+                )
+            except Exception as log_err:
+                logger.warning(f"[{user_id}] DCA 숏 로깅 실패 (무시됨): {log_err}")
 
         except Exception as e:
             error_logger.error(f"[{user_id}]:DCA 숏 주문 실패", exc_info=True)
@@ -1102,7 +1154,7 @@ async def _send_pyramiding_trend_alert(
         side: Position side
         redis_client: Redis client instance
     """
-    alert_key = TREND_SIGNAL_ALERT_KEY.format(user_id=user_id)
+    alert_key = TREND_SIGNAL_ALERT_KEY.format(user_id=user_id, symbol=symbol)
     is_alerted = await redis_client.get(alert_key)
 
     if not is_alerted:

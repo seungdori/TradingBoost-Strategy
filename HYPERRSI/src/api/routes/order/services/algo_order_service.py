@@ -3,7 +3,6 @@ Algo Order Service
 
 알고리즘 주문(트리거, 조건부 주문) 관련 비즈니스 로직
 """
-import json
 from typing import Any, Dict, List, Optional
 
 import ccxt.async_support as ccxt
@@ -143,6 +142,15 @@ class AlgoOrderService(BaseService):
 
         except Exception as e:
             logger.error(f"알고리즘 주문 조회 중 오류: {str(e)}")
+            # errordb 로깅
+            from HYPERRSI.src.utils.error_logger import log_error_to_db
+            log_error_to_db(
+                error=e,
+                error_type="AlgoOrderFetchError",
+                severity="WARNING",
+                symbol=symbol,
+                metadata={"order_id": order_id, "algo_type": algo_type, "component": "AlgoOrderService.fetch_algo_order_by_id"}
+            )
             return None
 
     @staticmethod
@@ -181,10 +189,8 @@ class AlgoOrderService(BaseService):
 
         for ord_type in ord_types:
             try:
-                resp = await exchange.fetch2(
-                    path=API_ENDPOINTS['ALGO_ORDERS_PENDING'],
-                    api="private",
-                    method="GET",
+                # CCXT 표준 메서드 사용 (서명 생성을 위해)
+                resp = await exchange.privateGetTradeOrdersAlgoPending(
                     params={"instId": symbol, "ordType": ord_type}
                 )
 
@@ -219,14 +225,8 @@ class AlgoOrderService(BaseService):
                     cancel_list.append({"algoId": algo_id, "instId": inst_id})
 
             if cancel_list:
-                cancel_resp = await exchange.fetch2(
-                    path=API_ENDPOINTS['CANCEL_ALGO_ORDERS'],
-                    api="private",
-                    method="POST",
-                    params={},
-                    headers=None,
-                    body=json.dumps({"data": cancel_list})
-                )
+                # CCXT 표준 메서드 사용 (서명 생성을 위해)
+                cancel_resp = await exchange.privatePostTradeCancelAlgos(params=cancel_list)
 
                 c_code = cancel_resp.get("code")
                 if c_code == "0":
@@ -308,6 +308,15 @@ class AlgoOrderService(BaseService):
                             logger.warning(f"⚠️ reduceOnly 주문 배치 취소 실패 (code: {code}): {msg}")
                     except Exception as batch_error:
                         logger.error(f"❌ 배치 취소 중 오류: {str(batch_error)}")
+                        # errordb 로깅
+                        from HYPERRSI.src.utils.error_logger import log_error_to_db
+                        log_error_to_db(
+                            error=batch_error,
+                            error_type="ReduceOnlyOrderBatchCancelError",
+                            severity="ERROR",
+                            symbol=symbol,
+                            metadata={"pos_side": pos_side, "batch_size": len(cancel_list), "component": "AlgoOrderService.cancel_reduce_only_orders_for_symbol"}
+                        )
                         # 배치 취소 실패 시 개별 취소 시도는 하지 않음 (너무 많은 API 호출)
 
             logger.info(f"reduceOnly 주문 취소 완료: {canceled_count}개 - {symbol}")
@@ -390,14 +399,8 @@ class AlgoOrderService(BaseService):
 
                 if cancel_list:
                     try:
-                        cancel_resp = await exchange.fetch2(
-                            path=API_ENDPOINTS['CANCEL_ALGO_ORDERS'],
-                            api="private",
-                            method="POST",
-                            params={},
-                            headers=None,
-                            body=json.dumps({"data": cancel_list})
-                        )
+                        # CCXT 표준 메서드 사용 (서명 생성을 위해)
+                        cancel_resp = await exchange.privatePostTradeCancelAlgos(params=cancel_list)
 
                         c_code = cancel_resp.get("code")
                         if c_code == "0":

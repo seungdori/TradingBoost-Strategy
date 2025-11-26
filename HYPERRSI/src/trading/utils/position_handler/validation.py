@@ -47,58 +47,61 @@ async def check_margin_block(user_id: str, symbol: str) -> bool:
     return block_status is not None
 
 
-async def check_entry_failure_limit(user_id: str) -> Tuple[bool, int]:
+async def check_entry_failure_limit(user_id: str, symbol: str) -> Tuple[bool, int]:
     """
-    Check if entry failure count has exceeded the maximum limit.
+    Check if entry failure count has exceeded the maximum limit for a specific symbol.
 
     Args:
         user_id: User identifier
+        symbol: Trading symbol (e.g., "BTC-USDT-SWAP")
 
     Returns:
         Tuple of (exceeded: bool, current_count: int)
 
     Examples:
-        >>> exceeded, count = await check_entry_failure_limit("user123")
+        >>> exceeded, count = await check_entry_failure_limit("user123", "BTC-USDT-SWAP")
         >>> if exceeded:
         ...     print(f"Too many failures: {count}")
     """
     redis = await get_redis_client()
-    key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id)
+    key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id, symbol=symbol)
     fail_count = int(await redis.get(key) or 0)
     exceeded = fail_count >= MAX_ENTRY_FAILURES
     return exceeded, fail_count
 
 
-async def increment_entry_failure(user_id: str) -> int:
+async def increment_entry_failure(user_id: str, symbol: str) -> int:
     """
-    Increment the entry failure counter for a user.
+    Increment the entry failure counter for a user and symbol.
 
     Args:
         user_id: User identifier
+        symbol: Trading symbol (e.g., "BTC-USDT-SWAP")
 
     Returns:
         New failure count
     """
     redis = await get_redis_client()
-    key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id)
+    key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id, symbol=symbol)
     new_count = await redis.incr(key)
-    logger.warning(f"[{user_id}] Entry failure count increased to {new_count}")
+    logger.warning(f"[{user_id}][{symbol}] Entry failure count increased to {new_count}")
     return int(new_count) if new_count else 0
 
 
-async def reset_entry_failure(user_id: str) -> None:
+async def reset_entry_failure(user_id: str, symbol: str) -> None:
     """
-    Reset the entry failure counter for a user.
+    Reset the entry failure counter for a user and symbol.
 
     This should be called after a successful entry.
 
     Args:
         user_id: User identifier
+        symbol: Trading symbol (e.g., "BTC-USDT-SWAP")
     """
     redis = await get_redis_client()
-    key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id)
+    key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id, symbol=symbol)
     await redis.delete(key)
-    logger.info(f"[{user_id}] Entry failure count reset")
+    logger.info(f"[{user_id}][{symbol}] Entry failure count reset")
 
 
 async def check_cooldown(user_id: str, symbol: str, side: str) -> Tuple[bool, int]:

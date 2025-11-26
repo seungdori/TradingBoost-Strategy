@@ -45,6 +45,7 @@ from .position_validator import (
 )
 from .redis_manager import (
     check_redis_connection_task,
+    check_websocket_health,
     get_all_running_users,
     get_user_monitor_orders,
     perform_memory_cleanup,
@@ -184,89 +185,100 @@ async def monitor_orders_loop():
                     # 각 사용자에 대해 포지션이 없는 방향의 알고리즘 주문 취소 함수 호출
                     asyncio.create_task(cancel_algo_orders_for_no_position_sides(str(user_id)))
             
-            # 먼저 모든 활성 트레일링 스탑 체크 (독립적인 트레일링 스탑)
-            active_trailings = await get_active_trailing_stops()
-            if len(active_trailings) > 0:
-                logger.info(f"활성 트레일링 스탑 수: {len(active_trailings)}")
-                for ts_data in active_trailings:
-                    try:
-                        user_id = str(ts_data.get("user_id", "0"))
-                        symbol = ts_data.get("symbol", "")
-                        direction = ts_data.get("direction", "")
+            # 🔄 트레일링 스탑 체크 (WebSocket 비활성 시에만 폴백으로 동작)
+            # position_monitor.py(WebSocket)가 정상이면 트레일링 스탑 체크는 WebSocket에서 처리됨
+            ws_healthy = await check_websocket_health()
+            if not ws_healthy:
+                # WebSocket이 비활성 상태이므로 core.py에서 폴백으로 트레일링 스탑 체크
+                active_trailings = await get_active_trailing_stops()
+                if len(active_trailings) > 0:
+                    logger.info(f"[폴백] WebSocket 비활성 - core.py에서 트레일링 스탑 체크 (활성 수: {len(active_trailings)})")
+                    for ts_data in active_trailings:
+                        try:
+                            user_id = str(ts_data.get("user_id", "0"))
+                            symbol = ts_data.get("symbol", "")
+                            direction = ts_data.get("direction", "")
 
-                        # running_users는 int 리스트라 문자열 비교용 집합을 따로 사용
-                        if not (user_id and symbol and direction) or user_id not in running_users_set:
-                            continue
-                        
-                        # 현재가 조회
-                        async with get_exchange_context(str(user_id)) as exchange:
-                            try:
-                                current_price = await get_current_price(symbol, "1m", exchange)
-                                
-                                if current_price <= 0:
-                                    logger.warning(f"[트레일링] 유효하지 않은 현재가: {current_price}, 심볼: {symbol}")
-                                    continue
-                                
-                                # 트레일링 스탑 조건 체크
-                                ts_hit = await check_trailing_stop(str(user_id), symbol, direction, current_price)
-                                
-                                # 트레일링 스탑 조건 충족 시
-                                if ts_hit:
-                                    # SL 주문 ID 확인
+                            # running_users는 int 리스트라 문자열 비교용 집합을 따로 사용
+                            if not (user_id and symbol and direction) or user_id not in running_users_set:
+                                continue
 
-                                    # Lazy import to avoid circular dependency
-                                    from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
-                                    from HYPERRSI.src.api.routes.order.order import close_position
+                            # 현재가 조회
+                            async with get_exchange_context(str(user_id)) as exchange:
+                                try:
+                                    current_price = await get_current_price(symbol, "1m", exchange)
 
-                                    close_request = ClosePositionRequest(
-                                        close_type="market",
-                                        price=current_price,
-                                        close_percent=100
-                                    )
+                                    if current_price <= 0:
+                                        logger.warning(f"[폴백-트레일링] 유효하지 않은 현재가: {current_price}, 심볼: {symbol}")
+                                        continue
 
-                                    await close_position(
-                                        symbol=symbol,
-                                        close_request=close_request,
-                                        user_id=str(user_id),
-                                        side=direction
-                                    )
-                                    
-                                    sl_order_id = ts_data.get("sl_order_id", "")
-                                    
-                                    
-                                    
-                                    if sl_order_id:
-                                        # SL 주문 상태 확인
-                                        logger.info(f"[트레일링] SL 주문 상태 확인: {sl_order_id}")
-                                        sl_status = await check_order_status(
-                                            user_id=str(user_id),
-                                            symbol=symbol,
-                                            order_id=sl_order_id,
-                                            order_type="sl"
+                                    # 트레일링 스탑 조건 체크
+                                    ts_hit = await check_trailing_stop(str(user_id), symbol, direction, current_price)
+
+                                    # 트레일링 스탑 조건 충족 시
+                                    if ts_hit:
+                                        # SL 주문 ID 확인
+
+                                        # Lazy import to avoid circular dependency
+                                        from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
+                                        from HYPERRSI.src.api.routes.order.order import close_position
+
+                                        close_request = ClosePositionRequest(
+                                            close_type="market",
+                                            price=current_price,
+                                            close_percent=100
                                         )
 
-                                        # SL 주문이 체결되었는지 확인
-                                        if isinstance(sl_status, dict) and sl_status.get('status') in ['FILLED', 'CLOSED', 'filled', 'closed']:
-                                            logger.info(f"[트레일링] SL 주문 체결됨: {sl_order_id}")
-                                            # 트레일링 스탑 데이터 삭제
-                                            await clear_trailing_stop(str(user_id), symbol, direction)
-                                        elif isinstance(sl_status, dict) and sl_status.get('status') in ['CANCELED', 'canceled']:
-                                            # SL 주문이 취소된 경우 트레일링 스탑 데이터 삭제
-                                            logger.info(f"[트레일링] SL 주문 취소됨: {sl_order_id}")
-                                            await clear_trailing_stop(str(user_id), symbol, direction)
-                                    else:
-                                        # SL 주문 ID가 없는 경우 (포지션 자체 확인)
-                                        position_exists, _ = await check_position_exists(str(user_id), symbol, direction)
+                                        await close_position(
+                                            symbol=symbol,
+                                            close_request=close_request,
+                                            user_id=str(user_id),
+                                            side=direction
+                                        )
 
-                                        if not position_exists:
-                                            # 포지션이 없으면 트레일링 스탑 데이터 삭제
-                                            logger.info(f"[트레일링] 포지션 없음, 트레일링 스탑 삭제: {user_id}:{symbol}:{direction}")
-                                            asyncio.create_task(clear_trailing_stop(str(user_id), symbol, direction))
-                            except Exception as e:
-                                logger.error(f"트레일링 스탑 현재가 조회 오류: {str(e)}")
-                    except Exception as ts_error:
-                        logger.error(f"트레일링 스탑 처리 중 오류: {str(ts_error)}")
-                        traceback.print_exc()
+                                        # tp_trigger_type이 existing_position인 경우 헷지도 종료
+                                        from HYPERRSI.src.trading.dual_side_entry import close_hedge_on_main_exit
+                                        asyncio.create_task(close_hedge_on_main_exit(
+                                            user_id=str(user_id),
+                                            symbol=symbol,
+                                            main_position_side=direction,
+                                            exit_reason="trailing_stop"
+                                        ))
+
+                                        sl_order_id = ts_data.get("sl_order_id", "")
+
+                                        if sl_order_id:
+                                            # SL 주문 상태 확인
+                                            logger.info(f"[폴백-트레일링] SL 주문 상태 확인: {sl_order_id}")
+                                            sl_status = await check_order_status(
+                                                user_id=str(user_id),
+                                                symbol=symbol,
+                                                order_id=sl_order_id,
+                                                order_type="sl"
+                                            )
+
+                                            # SL 주문이 체결되었는지 확인
+                                            if isinstance(sl_status, dict) and sl_status.get('status') in ['FILLED', 'CLOSED', 'filled', 'closed']:
+                                                logger.info(f"[폴백-트레일링] SL 주문 체결됨: {sl_order_id}")
+                                                # 트레일링 스탑 데이터 삭제
+                                                await clear_trailing_stop(str(user_id), symbol, direction)
+                                            elif isinstance(sl_status, dict) and sl_status.get('status') in ['CANCELED', 'canceled']:
+                                                # SL 주문이 취소된 경우 트레일링 스탑 데이터 삭제
+                                                logger.info(f"[폴백-트레일링] SL 주문 취소됨: {sl_order_id}")
+                                                await clear_trailing_stop(str(user_id), symbol, direction)
+                                        else:
+                                            # SL 주문 ID가 없는 경우 (포지션 자체 확인)
+                                            position_exists, _ = await check_position_exists(str(user_id), symbol, direction)
+
+                                            if not position_exists:
+                                                # 포지션이 없으면 트레일링 스탑 데이터 삭제
+                                                logger.info(f"[폴백-트레일링] 포지션 없음, 트레일링 스탑 삭제: {user_id}:{symbol}:{direction}")
+                                                asyncio.create_task(clear_trailing_stop(str(user_id), symbol, direction))
+                                except Exception as e:
+                                    logger.error(f"[폴백-트레일링] 현재가 조회 오류: {str(e)}")
+                        except Exception as ts_error:
+                            logger.error(f"[폴백-트레일링] 처리 중 오류: {str(ts_error)}")
+                            traceback.print_exc()
             
             
             
@@ -343,7 +355,116 @@ async def monitor_orders_loop():
                                     continue
                                     
                                 logger.info(f"심볼 {symbol}의 현재가: {current_price}")
-                                
+
+                                # 알고리즘 주문 검증 및 자동 정리 (5분마다)
+                                algo_check_key = f"algo_check:{user_id}:{symbol}"
+                                last_algo_check = await redis.get(algo_check_key)
+                                should_check_algo = last_algo_check is None or (current_time - float(last_algo_check) >= 300)
+
+                                if should_check_algo:
+                                    try:
+                                        params = {"instId": symbol, "ordType": "trigger"}
+                                        pending_resp = await exchange.privateGetTradeOrdersAlgoPending(params=params)
+
+                                        if pending_resp.get("code") == "0":
+                                            algo_orders = pending_resp.get("data", [])
+
+                                            if len(algo_orders) > 0:
+                                                sl_orders_by_pos_side = {}  # 포지션 방향별 SL 주문
+                                                tp_orders_by_pos_side = {}  # 포지션 방향별 TP 주문
+
+                                                # SL/TP 주문 분류
+                                                for algo_order in algo_orders:
+                                                    pos_side = algo_order.get("posSide", "unknown")
+                                                    sl_trigger_px = algo_order.get("slTriggerPx", "")
+                                                    tp_trigger_px = algo_order.get("tpTriggerPx", "")
+                                                    reduce_only = algo_order.get("reduceOnly", "false")
+                                                    algo_id = algo_order.get("algoId", "")
+                                                    u_time = int(algo_order.get("uTime", "0"))
+
+                                                    # SL 주문
+                                                    if sl_trigger_px:
+                                                        if pos_side not in sl_orders_by_pos_side:
+                                                            sl_orders_by_pos_side[pos_side] = []
+                                                        sl_orders_by_pos_side[pos_side].append({
+                                                            "algoId": algo_id,
+                                                            "slTriggerPx": sl_trigger_px,
+                                                            "reduceOnly": reduce_only,
+                                                            "uTime": u_time
+                                                        })
+
+                                                        # reduceOnly 검증
+                                                        if reduce_only.lower() != "true":
+                                                            logger.warning(f"[알고검증] SL 주문 reduceOnly 아님: {algo_id}, posSide: {pos_side}, symbol: {symbol}")
+
+                                                    # TP 주문
+                                                    elif tp_trigger_px:
+                                                        if pos_side not in tp_orders_by_pos_side:
+                                                            tp_orders_by_pos_side[pos_side] = []
+                                                        tp_orders_by_pos_side[pos_side].append({
+                                                            "algoId": algo_id,
+                                                            "tpTriggerPx": tp_trigger_px,
+                                                            "reduceOnly": reduce_only,
+                                                            "uTime": u_time
+                                                        })
+
+                                                # SL 중복 검증 및 정리
+                                                for pos_side, sl_orders in sl_orders_by_pos_side.items():
+                                                    if len(sl_orders) >= 2:
+                                                        logger.warning(f"[알고검증] 🚨 {pos_side} SL 중복: {len(sl_orders)}개 (symbol: {symbol})")
+
+                                                        # 최신순 정렬
+                                                        sl_orders_sorted = sorted(sl_orders, key=lambda x: x["uTime"], reverse=True)
+
+                                                        # 오래된 것 취소
+                                                        for sl_order in sl_orders_sorted[1:]:
+                                                            logger.warning(f"[알고검증] ❌ 오래된 SL 취소: {sl_order['algoId']}, px: {sl_order['slTriggerPx']}")
+                                                            try:
+                                                                cancel_resp = await exchange.privatePostTradeCancelAlgos(params=[{
+                                                                    "algoId": sl_order["algoId"],
+                                                                    "instId": symbol
+                                                                }])
+                                                                if cancel_resp.get("code") == "0":
+                                                                    logger.info(f"[알고검증] ✅ SL 취소 성공: {sl_order['algoId']}")
+                                                                else:
+                                                                    logger.error(f"[알고검증] ⚠️ SL 취소 실패: {cancel_resp.get('msg')}")
+                                                            except Exception as e:
+                                                                logger.error(f"[알고검증] ⚠️ SL 취소 오류: {str(e)}")
+
+                                                        logger.info(f"[알고검증] ✅ 최신 SL 유지: {sl_orders_sorted[0]['algoId']}")
+
+                                                # TP 개수 검증 및 정리 (최대 3개)
+                                                for pos_side, tp_orders in tp_orders_by_pos_side.items():
+                                                    if len(tp_orders) > 3:
+                                                        logger.warning(f"[알고검증] 🚨 {pos_side} TP 초과: {len(tp_orders)}개 (최대 3개, symbol: {symbol})")
+
+                                                        # 최신순 정렬
+                                                        tp_orders_sorted = sorted(tp_orders, key=lambda x: x["uTime"], reverse=True)
+
+                                                        # 4개 이상은 취소
+                                                        for tp_order in tp_orders_sorted[3:]:
+                                                            logger.warning(f"[알고검증] ❌ 오래된 TP 취소: {tp_order['algoId']}, px: {tp_order['tpTriggerPx']}")
+                                                            try:
+                                                                cancel_resp = await exchange.privatePostTradeCancelAlgos(params=[{
+                                                                    "algoId": tp_order["algoId"],
+                                                                    "instId": symbol
+                                                                }])
+                                                                if cancel_resp.get("code") == "0":
+                                                                    logger.info(f"[알고검증] ✅ TP 취소 성공: {tp_order['algoId']}")
+                                                                else:
+                                                                    logger.error(f"[알고검증] ⚠️ TP 취소 실패: {cancel_resp.get('msg')}")
+                                                            except Exception as e:
+                                                                logger.error(f"[알고검증] ⚠️ TP 취소 오류: {str(e)}")
+
+                                                        logger.info(f"[알고검증] ✅ 최신 TP 3개 유지: {[tp['algoId'] for tp in tp_orders_sorted[:3]]}")
+
+                                                logger.info(f"[알고검증] 심볼 {symbol} 알고 주문: SL {sum(len(v) for v in sl_orders_by_pos_side.values())}개, TP {sum(len(v) for v in tp_orders_by_pos_side.values())}개")
+
+                                        # 마지막 체크 시간 저장
+                                        await redis.set(algo_check_key, current_time, ex=600)
+                                    except Exception as algo_err:
+                                        logger.error(f"[알고검증] 오류: {str(algo_err)}")
+
                                 # 필요 시에만 포지션 정리 작업 수행 (5분마다로 대폭 축소)
                                 extended_check_interval = 300  # 5분
                                 if force_check_positions and (current_time % extended_check_interval < 60):

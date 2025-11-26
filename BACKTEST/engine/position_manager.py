@@ -119,6 +119,13 @@ class PositionManager:
             parent_trade_id=parent_trade_id
         )
 
+        # DEBUG: Log dual-side position creation
+        if is_dual_side:
+            logger.info(
+                f"🔄 Dual-side position created: is_dual_side={position.is_dual_side}, "
+                f"parent_trade_id={position.parent_trade_id}, side={side.value}"
+            )
+
         self.current_position = position
         self.trade_counter += 1
 
@@ -211,6 +218,14 @@ class PositionManager:
             dual_side_entry_index=pos.dual_side_entry_index,
             parent_trade_id=pos.parent_trade_id
         )
+
+        # DEBUG: Log trade creation with dual-side metadata
+        if pos.is_dual_side:
+            logger.info(
+                f"🔄 Trade created from dual-side position: "
+                f"pos.is_dual_side={pos.is_dual_side}, trade.is_dual_side={trade.is_dual_side}, "
+                f"parent_trade_id={trade.parent_trade_id}"
+            )
 
         logger.info(
             f"Position closed: {pos.side.value} @ {exit_price:.2f}, "

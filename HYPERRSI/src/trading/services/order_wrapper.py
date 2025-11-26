@@ -28,10 +28,13 @@ class OrderWrapper:
                 'secret': api_keys.get('api_secret'),
                 'password': api_keys.get('passphrase'),
                 'enableRateLimit': True,
+                'timeout': 30000,  # 30초 타임아웃 (네트워크 지연 대응)
                 'options': {
                     'defaultType': 'swap',
                     # SPOT 마켓 로딩 오류 무시 설정
                     'warnOnFetchMarketsTimeout': False,
+                    'adjustForTimeDifference': True,  # 서버 시간 차이 자동 조정
+                    'recvWindow': 10000,  # 요청 수신 윈도우 10초
                 }
             })
             OrderWrapper._exchange_cache[user_id] = self.exchange
@@ -109,6 +112,16 @@ class OrderWrapper:
                 results.append(result)
             except Exception as e:
                 logger.error(f"Failed to cancel order {order['id']}: {e}")
+                # errordb 로깅
+                from HYPERRSI.src.utils.error_logger import log_error_to_db
+                log_error_to_db(
+                    error=e,
+                    error_type="OrderCancellationError",
+                    user_id=self.user_id,
+                    severity="WARNING",
+                    symbol=symbol,
+                    metadata={"order_id": order['id'], "side": side, "component": "OrderWrapper.cancel_all_orders_for_symbol"}
+                )
         
         return {
             "success": True,

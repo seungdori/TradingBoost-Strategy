@@ -233,7 +233,7 @@ class PositionService(BaseService):
             min_size_key = f"user:{user_id}:position:{symbol}:min_sustain_contract_size"
             tp_state = f"user:{user_id}:position:{symbol}:{side}:tp_state"
             hedging_direction_key = f"user:{user_id}:position:{symbol}:hedging_direction"
-            entry_fail_count_key = f"user:{user_id}:entry_fail_count"
+            entry_fail_count_key = f"user:{user_id}:{symbol}:entry_fail_count"
             dual_side_count_key = f"user:{user_id}:{symbol}:dual_side_count"
             initial_size_key = f"user:{user_id}:position:{symbol}:{side}:initial_size"
             current_trade_key = f"user:{user_id}:current_trade:{symbol}:{side}"

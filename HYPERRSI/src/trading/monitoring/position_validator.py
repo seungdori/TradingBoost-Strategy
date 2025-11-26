@@ -431,7 +431,16 @@ async def check_and_cleanup_orders(user_id: str, symbol: str, direction: str):
                     logger.info(f"[{user_id}] SL 주문 체결됨: {order_id}({order_type})")
                     from .trailing_stop_handler import clear_trailing_stop
                     asyncio.create_task(clear_trailing_stop(user_id, symbol, direction))
-                    
+
+                    # tp_trigger_type이 existing_position인 경우 헷지도 종료
+                    from HYPERRSI.src.trading.dual_side_entry import close_hedge_on_main_exit
+                    asyncio.create_task(close_hedge_on_main_exit(
+                        user_id=user_id,
+                        symbol=symbol,
+                        main_position_side=direction,
+                        exit_reason="main_sl"
+                    ))
+
                     # SL 주문 체결 로깅
                     price = float(order_data.get("price", "0"))
                     filled_amount = float(filled_sz) if filled_sz else 0

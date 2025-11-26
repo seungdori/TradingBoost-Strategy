@@ -190,7 +190,8 @@ async def _update_stats_on_close(
     symbol: str,
     side: str,
     current_position: Position,
-    redis_client: Any
+    redis_client: Any,
+    close_type: str = 'trend_reversal'
 ) -> None:
     """
     Update trading statistics after position close.
@@ -201,6 +202,7 @@ async def _update_stats_on_close(
         side: Position side
         current_position: Position object with entry price and size
         redis_client: Redis client instance
+        close_type: Close type (trend_reversal, take_profit, stop_loss, etc.)
 
     Side Effects:
         - Records trade statistics in database
@@ -228,7 +230,15 @@ async def _update_stats_on_close(
         if position_qty is None:
             position_qty = 0.0
 
-        # Update trading stats
+        # Get DCA count from Redis
+        dca_count_key = DCA_COUNT_KEY.format(user_id=user_id, symbol=symbol, side=side)
+        dca_count_str = await redis_client.get(dca_count_key)
+        dca_count = int(dca_count_str) if dca_count_str else 0
+
+        # Get leverage from position info
+        leverage = int(position_info.get("leverage", 1)) if position_info.get("leverage") else 1
+
+        # Update trading stats with new parameters for PostgreSQL recording
         await update_trading_stats(
             user_id=user_id,
             symbol=symbol,
@@ -239,6 +249,10 @@ async def _update_stats_on_close(
             side=side,
             entry_time=position_info.get("entry_time", str(datetime.now())),
             exit_time=str(datetime.now()),
+            close_type=close_type,
+            leverage=leverage,
+            dca_count=dca_count,
+            avg_entry_price=float(position_info.get("avg_entry_price", entry_price)) if position_info.get("avg_entry_price") else None,
         )
 
         logger.info(

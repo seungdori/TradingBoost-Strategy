@@ -14,7 +14,13 @@ import websockets
 
 from shared.database.redis import get_redis
 from shared.logging import get_logger
+from shared.utils import get_contract_size
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
+
+# Session/State management services (PostgreSQL SSOT)
+from HYPERRSI.src.services.state_service import get_state_service
+from HYPERRSI.src.services.state_change_logger import get_state_change_logger
+from HYPERRSI.src.core.models.state_change import ChangeType, TriggeredBy
 
 logger = get_logger(__name__)
 
@@ -117,6 +123,16 @@ class OKXWebsocketClient:
 
         # 이전 포지션 정보 저장 (변경 감지용)
         self.previous_positions = {}
+
+        # 재연결 관련 설정
+        self.reconnect_delay = 1  # 초기 재연결 대기 시간 (초)
+        self.max_reconnect_delay = 60  # 최대 재연결 대기 시간 (초)
+        self.reconnect_attempts = 0
+        self.max_reconnect_attempts = 20  # 최대 재연결 시도 횟수
+
+        # 재연결 진행 중 플래그
+        self._reconnecting_public = False
+        self._reconnecting_private = False
 
     async def connect(self):
         """Public/Private WebSocket 모두 연결"""
@@ -249,32 +265,197 @@ class OKXWebsocketClient:
         await self.private_ws.send(json.dumps(subscribe_account))
         logger.info("[OKX] Subscribed to account channel")
 
+    async def reconnect_public(self):
+        """Public WebSocket 재연결 (Exponential Backoff)"""
+        if self._reconnecting_public:
+            logger.debug("[OKX] Public 재연결 이미 진행 중...")
+            return False
+
+        self._reconnecting_public = True
+        delay = self.reconnect_delay
+
+        try:
+            for attempt in range(1, self.max_reconnect_attempts + 1):
+                if not self.running:
+                    logger.info("[OKX] 클라이언트 종료 중 - Public 재연결 취소")
+                    return False
+
+                try:
+                    logger.info(f"🔄 [OKX] Public WebSocket 재연결 시도 {attempt}/{self.max_reconnect_attempts}...")
+
+                    # 기존 연결 정리
+                    if self.public_ws:
+                        try:
+                            await self.public_ws.close()
+                        except Exception:
+                            pass
+                        self.public_ws = None
+
+                    # 새 연결 생성
+                    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                    ssl_context.check_hostname = False
+                    ssl_context.verify_mode = ssl.CERT_NONE
+
+                    self.public_ws = await websockets.connect(
+                        OKX_PUBLIC_WS_URL,
+                        ssl=ssl_context,
+                        ping_interval=20,
+                        ping_timeout=10
+                    )
+
+                    # Ticker 구독
+                    subscribe_public = {
+                        "op": "subscribe",
+                        "args": [{"channel": "tickers", "instId": "BTC-USDT-SWAP"}]
+                    }
+                    await self.public_ws.send(json.dumps(subscribe_public))
+
+                    logger.info(f"✅ [OKX] Public WebSocket 재연결 성공 (시도 {attempt}회)")
+                    self.reconnect_attempts = 0  # 성공 시 카운터 리셋
+                    return True
+
+                except Exception as e:
+                    logger.warning(f"⚠️ [OKX] Public 재연결 실패 (시도 {attempt}): {e}")
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, self.max_reconnect_delay)  # Exponential Backoff
+
+            logger.error(f"❌ [OKX] Public 재연결 최대 시도 횟수 초과 ({self.max_reconnect_attempts}회)")
+            return False
+
+        finally:
+            self._reconnecting_public = False
+
+    async def reconnect_private(self):
+        """Private WebSocket 재연결 (Exponential Backoff)"""
+        if not self.private_enabled:
+            return False
+
+        if self._reconnecting_private:
+            logger.debug("[OKX] Private 재연결 이미 진행 중...")
+            return False
+
+        self._reconnecting_private = True
+        delay = self.reconnect_delay
+
+        try:
+            for attempt in range(1, self.max_reconnect_attempts + 1):
+                if not self.running:
+                    logger.info("[OKX] 클라이언트 종료 중 - Private 재연결 취소")
+                    return False
+
+                try:
+                    logger.info(f"🔄 [OKX] Private WebSocket 재연결 시도 {attempt}/{self.max_reconnect_attempts}...")
+
+                    # 기존 연결 정리
+                    if self.private_ws:
+                        try:
+                            await self.private_ws.close()
+                        except Exception:
+                            pass
+                        self.private_ws = None
+
+                    # 새 연결 생성
+                    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                    ssl_context.check_hostname = False
+                    ssl_context.verify_mode = ssl.CERT_NONE
+
+                    self.private_ws = await websockets.connect(
+                        OKX_PRIVATE_WS_URL,
+                        ssl=ssl_context,
+                        ping_interval=20,
+                        ping_timeout=10
+                    )
+
+                    # 로그인
+                    login_success = await self.login()
+                    if not login_success:
+                        raise Exception("로그인 실패")
+
+                    # 채널 구독
+                    await self.subscribe_private_channels()
+
+                    logger.info(f"✅ [OKX] Private WebSocket 재연결 성공 (시도 {attempt}회)")
+                    self.reconnect_attempts = 0
+                    return True
+
+                except Exception as e:
+                    logger.warning(f"⚠️ [OKX] Private 재연결 실패 (시도 {attempt}): {e}")
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, self.max_reconnect_delay)
+
+            logger.error(f"❌ [OKX] Private 재연결 최대 시도 횟수 초과 ({self.max_reconnect_attempts}회)")
+            return False
+
+        finally:
+            self._reconnecting_private = False
+
+    async def handle_service_upgrade_notice(self, ws_type: str, data: dict):
+        """64008 서비스 업그레이드 알림 처리 - 선제적 재연결"""
+        code = data.get('code', '')
+        if code == '64008':
+            logger.warning(f"⚠️ [OKX] {ws_type} 서비스 업그레이드 예고 감지! 선제적 재연결 시작...")
+
+            # 약간의 딜레이 후 재연결 (즉시 하면 기존 연결이 아직 유효해서 충돌 가능)
+            await asyncio.sleep(2)
+
+            if ws_type == "Public":
+                success = await self.reconnect_public()
+            else:  # Private
+                success = await self.reconnect_private()
+
+            if success:
+                logger.info(f"✅ [OKX] {ws_type} 선제적 재연결 완료")
+            else:
+                logger.error(f"❌ [OKX] {ws_type} 선제적 재연결 실패")
+
+            return True  # 64008 처리됨
+        return False  # 64008이 아님
+
     async def handle_public_messages(self):
-        """공개 채널(tickers)에서 들어오는 메시지를 Redis에 저장"""
+        """공개 채널(tickers)에서 들어오는 메시지를 Redis에 저장 (자동 재연결 포함)"""
         redis = await get_redis()
         while self.running:
             try:
+                # WebSocket 연결 확인
+                if not self.public_ws:
+                    logger.warning("[OKX] Public WebSocket 연결 없음 - 재연결 시도...")
+                    if not await self.reconnect_public():
+                        await asyncio.sleep(5)
+                        continue
+
                 message = await self.public_ws.recv()
                 data = json.loads(message)
-                #logger.debug(f"[OKX] Public Message: {data}")
 
                 if "event" in data:
-                    # 구독 성공/실패 등의 이벤트
                     logger.info(f"[OKX] Public event: {data}")
+
+                    # 64008 서비스 업그레이드 알림 처리 (선제적 재연결)
+                    if data.get('code') == '64008':
+                        asyncio.create_task(self.handle_service_upgrade_notice("Public", data))
+                        continue
+
                 elif "data" in data:
                     channel = data.get("arg", {}).get("channel")
                     inst_id = data.get("arg", {}).get("instId", "unknown")
                     if channel == "tickers":
                         redis_key = f"ws:okx:tickers:{inst_id}"
-                        # data["data"]는 리스트 형태
                         await redis.set(redis_key, json.dumps(data["data"]))
-                        #logger.debug(f"[OKX] Updated ticker data in Redis: {redis_key}")
-            except websockets.exceptions.ConnectionClosed:
-                logger.warning("[OKX] Public WebSocket connection closed.")
-                break
+
+            except websockets.exceptions.ConnectionClosed as e:
+                logger.warning(f"[OKX] Public WebSocket 연결 종료: {e}")
+                if self.running:
+                    logger.info("[OKX] Public WebSocket 자동 재연결 시도...")
+                    if await self.reconnect_public():
+                        continue  # 재연결 성공 시 루프 계속
+                    else:
+                        logger.error("[OKX] Public WebSocket 재연결 실패 - 5초 후 재시도")
+                        await asyncio.sleep(5)
+                        continue
+                else:
+                    break
+
             except Exception as e:
                 logger.error(f"[OKX] Error in public message loop: {e}")
-                # errordb 로깅
                 from HYPERRSI.src.utils.error_logger import async_log_error_to_db
                 await async_log_error_to_db(
                     error=e,
@@ -285,22 +466,39 @@ class OKXWebsocketClient:
 
     async def handle_private_messages(self, user_id: str):
         """
-        개인 채널(positions, orders) 메시지를 Redis에 저장.
+        개인 채널(positions, orders) 메시지를 Redis에 저장 (자동 재연결 포함).
         posSide가 net/long/short인지에 따라 key를 달리 저장할 수 있음.
         """
-        if not self.private_enabled or not self.private_ws:
-            logger.warning("[OKX] Private websocket is disabled or not connected.")
+        if not self.private_enabled:
+            logger.warning("[OKX] Private websocket is disabled.")
             return
 
         redis = await get_redis()
         while self.running:
             try:
+                # WebSocket 연결 확인
+                if not self.private_ws:
+                    logger.warning("[OKX] Private WebSocket 연결 없음 - 재연결 시도...")
+                    if not await self.reconnect_private():
+                        await asyncio.sleep(5)
+                        continue
+
                 message = await self.private_ws.recv()
                 data = json.loads(message)
                 logger.debug(f"[OKX] Private Message: {data}")
 
+                # 🔄 WebSocket heartbeat 업데이트 (core.py 폴백 판단용)
+                # 메시지를 받을 때마다 heartbeat 갱신 (2분 TTL)
+                heartbeat_key = "ws:position_monitor:heartbeat"
+                await redis.set(heartbeat_key, str(time.time()), ex=120)
+
                 if "event" in data:
                     logger.info(f"[OKX] Private event: {data}")
+
+                    # 64008 서비스 업그레이드 알림 처리 (선제적 재연결)
+                    if data.get('code') == '64008':
+                        asyncio.create_task(self.handle_service_upgrade_notice("Private", data))
+                        continue
                 elif "data" in data:
                     channel = data.get("arg", {}).get("channel")
                     inst_id = data.get("arg", {}).get("instId", "unknown")
@@ -339,7 +537,30 @@ class OKXWebsocketClient:
                                         manual_close_check_key = f"ws:position_closed:{user_id}:{symbol}:{side}"
                                         is_manual_close = await redis.get(manual_close_check_key)
 
+                                        # Redis에서 활성화된 TP/SL/브레이크이븐 주문 확인 (타이밍 이슈 대비)
+                                        has_active_exit_orders = False
                                         if not is_manual_close:
+                                            # monitor 주문 패턴으로 검색 (break_even, sl, tp1, tp2, tp3)
+                                            monitor_pattern = f"monitor:user:{user_id}:{symbol}:order:*"
+                                            monitor_keys = await redis.keys(monitor_pattern)
+
+                                            for key in monitor_keys:
+                                                order_info = await redis.hgetall(key)
+                                                if order_info:
+                                                    order_type = order_info.get("order_type", "")
+                                                    order_name = order_info.get("order_name", "")
+                                                    pos_side_in_order = order_info.get("pos_side", "")
+
+                                                    # 같은 포지션 방향의 청산 주문 확인
+                                                    if pos_side_in_order == side:
+                                                        # order_type이나 order_name에 tp/sl/break_even이 포함되어 있으면
+                                                        if any(exit_type in order_type.lower() for exit_type in ["tp", "sl", "break_even"]) or \
+                                                           any(exit_type in order_name.lower() for exit_type in ["tp", "sl", "break_even"]):
+                                                            has_active_exit_orders = True
+                                                            logger.info(f"🔍 활성 청산 주문 감지: {order_type or order_name}, Key: {key}")
+                                                            break
+
+                                        if not is_manual_close and not has_active_exit_orders:
                                             # 수동 청산으로 판단 - 중복 알림 방지 플래그 설정 (5초 TTL)
                                             await redis.set(manual_close_check_key, "1", ex=5)
 
@@ -378,18 +599,48 @@ class OKXWebsocketClient:
                                                     pnl_text += f" (레버리지 x{leverage} 적용: {leveraged_pnl:.2f}%)"
 
                                             # 텔레그램 메시지 전송
-                                            price_text = f"{round(current_price, 3)}" if current_price > 0 else "정보 없음"
+                                            # contract 수량을 실제 수량으로 변환
+                                            contract_size = await get_contract_size(symbol, redis)
+                                            actual_size = float(previous_size) * contract_size
+                                            # 수량 포맷팅 (trailing zeros 제거, 천단위 콤마)
+                                            size_formatted = f"{actual_size:,}" if actual_size >= 1000 else f"{actual_size:g}"
+
+                                            price_text = f"{current_price:,.3f}" if current_price > 0 else "정보 없음"
                                             message = (
                                                 f"🔵 [WebSocket] 수동 청산 감지\n"
                                                 f"━━━━━━━━━━━━━━━\n"
                                                 f"심볼: {symbol}\n"
                                                 f"방향: {side.upper()}\n"
-                                                f"청산 수량: {previous_size}\n"
+                                                f"청산 수량: {size_formatted}\n"
                                                 f"청산가격: {price_text}{pnl_text}"
                                             )
 
                                             await send_telegram_message(message, user_id)
                                             logger.info(f"✉️ [WebSocket] 수동 청산 텔레그램 알림 전송: {user_id}, {symbol}, {side}")
+
+                                            # 상태 변경 로깅 (PostgreSQL SSOT) - 수동 청산
+                                            try:
+                                                state_change_logger = get_state_change_logger()
+                                                await state_change_logger.log_change(
+                                                    okx_uid=user_id,
+                                                    symbol=symbol,
+                                                    change_type=ChangeType.MANUAL_CLOSE,
+                                                    previous_state=dict(position_data) if position_data else None,
+                                                    new_state=None,
+                                                    price=current_price if current_price > 0 else None,
+                                                    pnl_percent=pnl_percent if entry_price > 0 and current_price > 0 else None,
+                                                    triggered_by=TriggeredBy.EXCHANGE,
+                                                    trigger_source='position_monitor.manual_close',
+                                                    extra_data={
+                                                        'side': side,
+                                                        'close_price': current_price,
+                                                        'entry_price': entry_price,
+                                                        'previous_size': previous_size
+                                                    }
+                                                )
+                                                logger.debug(f"📝 [StateChange] 수동 청산 기록: {user_id}, {symbol}, {side}")
+                                            except Exception as log_err:
+                                                logger.warning(f"상태 변경 로깅 실패 (무시됨): {log_err}")
 
                                     except Exception as e:
                                         logger.error(f"수동 청산 알림 전송 실패: {e}")
@@ -505,6 +756,51 @@ class OKXWebsocketClient:
 
                                     logger.info(f"✉️ [WebSocket] Telegram 알림 전송 완료: {user_id}, 메시지: {title}")
 
+                                    # 상태 변경 로깅 (PostgreSQL SSOT) - TP/SL 체결
+                                    try:
+                                        state_change_logger = get_state_change_logger()
+
+                                        # change_type 결정
+                                        if "손절(SL)" in title:
+                                            change_type = ChangeType.SL_HIT
+                                        elif "브레이크이븐" in title:
+                                            change_type = ChangeType.BREAK_EVEN_HIT
+                                        elif "익절(TP" in title:
+                                            change_type = ChangeType.TP_HIT
+                                        else:
+                                            change_type = ChangeType.ORDER_FILLED
+
+                                        # PnL 계산값 추출 (위에서 이미 계산됨)
+                                        pnl_percent_value = None
+                                        if entry_price > 0:
+                                            if pos_side == "long":
+                                                pnl_percent_value = ((price / entry_price) - 1) * 100
+                                            else:  # short
+                                                pnl_percent_value = ((entry_price / price) - 1) * 100
+
+                                        await state_change_logger.log_change(
+                                            okx_uid=user_id,
+                                            symbol=symbol,
+                                            change_type=change_type,
+                                            previous_state=dict(position_data) if position_data else None,
+                                            new_state={'order_id': order_id, 'filled_size': filled_size},
+                                            price=price,
+                                            pnl_percent=pnl_percent_value,
+                                            triggered_by=TriggeredBy.EXCHANGE,
+                                            trigger_source='position_monitor.order_filled',
+                                            extra_data={
+                                                'order_id': order_id,
+                                                'order_type': actual_order_type,
+                                                'pos_side': pos_side,
+                                                'entry_price': entry_price,
+                                                'fill_price': price,
+                                                'filled_size': filled_size
+                                            }
+                                        )
+                                        logger.debug(f"📝 [StateChange] 주문 체결 기록: {user_id}, {symbol}, {actual_order_type}")
+                                    except Exception as log_err:
+                                        logger.warning(f"상태 변경 로깅 실패 (무시됨): {log_err}")
+
                                     # TP 주문 체결 시 브레이크이븐/트레일링스탑 처리
                                     if "익절(TP" in title:
                                         try:
@@ -599,12 +895,21 @@ class OKXWebsocketClient:
                         for acc_detail in payload:
                             logger.debug(f"  Account detail: {acc_detail}")
 
-            except websockets.exceptions.ConnectionClosed:
-                logger.warning("[OKX] Private WebSocket connection closed.")
-                break
+            except websockets.exceptions.ConnectionClosed as e:
+                logger.warning(f"[OKX] Private WebSocket 연결 종료: {e}")
+                if self.running:
+                    logger.info("[OKX] Private WebSocket 자동 재연결 시도...")
+                    if await self.reconnect_private():
+                        continue  # 재연결 성공 시 루프 계속
+                    else:
+                        logger.error("[OKX] Private WebSocket 재연결 실패 - 5초 후 재시도")
+                        await asyncio.sleep(5)
+                        continue
+                else:
+                    break
+
             except Exception as e:
                 logger.error(f"[OKX] Error in private message loop: {e}")
-                # errordb 로깅
                 from HYPERRSI.src.utils.error_logger import async_log_error_to_db
                 await async_log_error_to_db(
                     error=e,
@@ -823,6 +1128,14 @@ async def monitor_active_users():
             logger.error(f"모니터링 루프 에러: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
+            # errordb 로깅
+            from HYPERRSI.src.utils.error_logger import async_log_error_to_db
+            await async_log_error_to_db(
+                error=e,
+                error_type="PositionMonitorLoopError",
+                severity="CRITICAL",
+                metadata={"component": "position_monitor.monitor_active_users", "active_users": len(current_users)}
+            )
             # 에러 발생 시 10초 대기 후 재시도
             await asyncio.sleep(10)
 

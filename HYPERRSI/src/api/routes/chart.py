@@ -1,17 +1,23 @@
 import asyncio
 import json
 import time
-from datetime import datetime
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import pytz
 import redis
+import psycopg2
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from HYPERRSI.src.core.config import settings
-from HYPERRSI.src.trading.models import get_timeframe
+from HYPERRSI.src.trading.models import get_timeframe, get_auto_trend_timeframe
+from shared.indicators import compute_all_indicators, add_auto_trend_state_to_candles
+from shared.logging import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(tags=["chart"])
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
@@ -36,6 +42,174 @@ CACHE_TTL = 60  # 캐시 유효 시간 (초)
 DEFAULT_LIMIT = 100  # 기본 반환 캔들 개수
 
 active_connections: dict[str, list] = {}
+
+# 타임프레임 역매핑 (문자열 -> 분)
+REVERSE_TF_MAP = {'1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '4h': 240}
+
+
+def _get_candlesdb_connection():
+    """CandlesDB 연결 생성"""
+    try:
+        return psycopg2.connect(
+            host=settings.CANDLES_HOST,
+            port=5432,
+            database='candlesdb',
+            user=settings.CANDLES_USER,
+            password=settings.CANDLES_PASSWORD
+        )
+    except Exception as e:
+        logger.warning(f"CandlesDB 연결 실패: {e}")
+        return None
+
+
+def _normalize_symbol_for_db(okx_symbol: str) -> str:
+    """OKX 심볼을 DB 테이블명으로 변환 (BTC-USDT-SWAP -> btc_usdt)"""
+    if '-' in okx_symbol:
+        parts = okx_symbol.split('-')
+        return f"{parts[0].lower()}_{parts[1].lower()}"
+    return okx_symbol.lower().replace('usdt', '_usdt')
+
+
+def _fetch_candles_from_db(symbol: str, tf_str: str, limit: int = 500) -> List[Dict[str, Any]]:
+    """
+    CandlesDB에서 캔들 데이터 가져오기
+
+    Returns:
+        캔들 리스트 (지표 포함)
+    """
+    conn = _get_candlesdb_connection()
+    if not conn:
+        return []
+
+    try:
+        table_name = _normalize_symbol_for_db(symbol)
+        cur = conn.cursor()
+
+        # timeframe 형식 변환 (5m -> 5m, 1h -> 1h)
+        query = f"""
+            SELECT
+                time, open, high, low, close, volume,
+                rsi14, atr, ema7, ma20, trend_state, auto_trend_state
+            FROM {table_name}
+            WHERE timeframe = %s
+            ORDER BY time DESC
+            LIMIT %s;
+        """
+        cur.execute(query, (tf_str, limit))
+        rows = cur.fetchall()
+
+        if not rows:
+            logger.info(f"CandlesDB에서 데이터 없음: {table_name} {tf_str}")
+            return []
+
+        candles = []
+        seoul_tz = pytz.timezone("Asia/Seoul")
+
+        for row in rows:
+            ts = int(row[0].timestamp()) if hasattr(row[0], 'timestamp') else int(row[0])
+            utc_dt = datetime.fromtimestamp(ts, UTC)
+            dt_seoul = utc_dt.astimezone(seoul_tz)
+
+            candle = {
+                "timestamp": ts,
+                "open": float(row[1]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+                "volume": float(row[5]),
+                "rsi": float(row[6]) if row[6] is not None else None,
+                "atr": float(row[7]) if row[7] is not None else None,
+                "ema": float(row[8]) if row[8] is not None else None,
+                "sma": float(row[9]) if row[9] is not None else None,
+                "trend_state": int(row[10]) if row[10] is not None else None,
+                "auto_trend_state": int(row[11]) if row[11] is not None else None,
+                "human_time": utc_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "human_time_kr": dt_seoul.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            candles.append(candle)
+
+        # 시간순 정렬 (오래된 -> 최신)
+        candles.sort(key=lambda x: x["timestamp"])
+        logger.info(f"CandlesDB에서 {len(candles)}개 캔들 로드: {table_name} {tf_str}")
+        return candles
+
+    except Exception as e:
+        logger.error(f"CandlesDB 조회 실패: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def _fetch_candles_from_okx_and_save(symbol: str, tf_str: str, limit: int = 300) -> List[Dict[str, Any]]:
+    """
+    OKX API에서 캔들 가져와서 DB에 저장하고 지표 계산 후 반환
+
+    Returns:
+        지표가 계산된 캔들 리스트
+    """
+    try:
+        # OKX API에서 캔들 가져오기
+        from HYPERRSI.src.data_collector.integrated_data_collector import (
+            fetch_latest_candles,
+            save_candles_with_indicators,
+            _get_candles_from_redis_for_auto_trend,
+            candlesdb_writer
+        )
+
+        timeframe_minutes = REVERSE_TF_MAP.get(tf_str, 5)
+
+        # OKX에서 캔들 가져오기 (지표 계산을 위해 200개 추가)
+        candles = fetch_latest_candles(symbol, timeframe_minutes, limit=limit + 200)
+
+        if not candles:
+            logger.warning(f"OKX API에서 캔들 가져오기 실패: {symbol} {tf_str}")
+            return []
+
+        logger.info(f"OKX API에서 {len(candles)}개 캔들 로드: {symbol} {tf_str}")
+
+        # 지표 계산
+        candles_with_ind = compute_all_indicators(candles, rsi_period=14, atr_period=14)
+
+        # auto_trend_state 계산
+        auto_trend_tf_str = get_auto_trend_timeframe(tf_str)
+        auto_trend_candles = _get_candles_from_redis_for_auto_trend(symbol, auto_trend_tf_str)
+
+        if auto_trend_candles and len(auto_trend_candles) >= 30:
+            candles_with_ind = add_auto_trend_state_to_candles(
+                candles_with_ind,
+                auto_trend_candles,
+                current_timeframe_minutes=timeframe_minutes
+            )
+        else:
+            for cndl in candles_with_ind:
+                cndl["auto_trend_state"] = 0
+
+        # 한국 시간 추가
+        seoul_tz = pytz.timezone("Asia/Seoul")
+        for cndl in candles_with_ind:
+            utc_dt = datetime.fromtimestamp(cndl["timestamp"], UTC)
+            dt_seoul = utc_dt.astimezone(seoul_tz)
+            cndl["human_time"] = utc_dt.strftime("%Y-%m-%d %H:%M:%S")
+            cndl["human_time_kr"] = dt_seoul.strftime("%Y-%m-%d %H:%M:%S")
+
+        # Redis에 저장
+        save_candles_with_indicators(symbol, tf_str, candles_with_ind)
+
+        # CandlesDB에도 저장
+        if candlesdb_writer.enabled:
+            try:
+                candlesdb_writer.upsert_candles(symbol, timeframe_minutes, candles_with_ind)
+                logger.info(f"CandlesDB에 {len(candles_with_ind)}개 캔들 저장: {symbol} {tf_str}")
+            except Exception as db_e:
+                logger.warning(f"CandlesDB 저장 실패: {db_e}")
+
+        # 최신 limit개만 반환
+        return candles_with_ind[-limit:] if len(candles_with_ind) > limit else candles_with_ind
+
+    except Exception as e:
+        logger.error(f"OKX API 캔들 로드 및 저장 실패: {e}", exc_info=True)
+        return []
+
 
 async def watch_redis_updates(symbol: str, timeframe: str) -> None:
     
@@ -430,35 +604,52 @@ async def get_candle_data(
         
         if cache_valid:
             full_data = _candle_cache[cache_key]
+            data_source = "cache"
         else:
-            # Redis에서 데이터 가져오기
+            data_source = "redis"
+            # 1단계: Redis에서 데이터 가져오기
             key = f"candles_with_indicators:{symbol}:{tf_str}"
             raw_data = redis_client.lrange(key, 0, -1)
-            if not raw_data:
-                raise HTTPException(status_code=404, detail=f"No data found for {symbol} {timeframe}")
-            
-            latest_timestamp = 0
-            
-            for item in raw_data:
-                try:
-                    candle = json.loads(item)
-                    full_data.append(candle)
-                    
-                    # 가장 최신 타임스탬프 추적
-                    timestamp = candle.get('timestamp', 0)
-                    if timestamp > latest_timestamp:
-                        latest_timestamp = timestamp
-                        
-                except (json.JSONDecodeError, KeyError) as e:
-                    continue
-            
+
+            if raw_data:
+                # Redis에서 데이터 파싱
+                latest_timestamp = 0
+                for item in raw_data:
+                    try:
+                        candle = json.loads(item)
+                        full_data.append(candle)
+                        timestamp = candle.get('timestamp', 0)
+                        if timestamp > latest_timestamp:
+                            latest_timestamp = timestamp
+                    except (json.JSONDecodeError, KeyError):
+                        continue
+            else:
+                # 2단계: Redis에 없으면 CandlesDB에서 가져오기
+                logger.info(f"Redis에 데이터 없음, CandlesDB 조회 시도: {symbol} {tf_str}")
+                full_data = _fetch_candles_from_db(symbol, tf_str, limit=max(limit, 500))
+                data_source = "candlesdb"
+
+                if not full_data:
+                    # 3단계: CandlesDB에도 없으면 OKX API에서 가져오기
+                    logger.info(f"CandlesDB에도 데이터 없음, OKX API 조회 시도: {symbol} {tf_str}")
+                    full_data = _fetch_candles_from_okx_and_save(symbol, tf_str, limit=max(limit, 300))
+                    data_source = "okx_api"
+
+                    if not full_data:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"No data found for {symbol} {timeframe}. Tried: Redis, CandlesDB, OKX API"
+                        )
+
+                latest_timestamp = full_data[-1].get('timestamp', 0) if full_data else 0
+
             # 시간순 정렬 (오래된 -> 최신)
             full_data.sort(key=lambda x: x.get('timestamp', 0))
-            
+
             # 캐시 업데이트
             _candle_cache[cache_key] = full_data
             _cache_timestamps[cache_key] = time.time()
-            _last_candle_timestamps[cache_key] = latest_timestamp
+            _last_candle_timestamps[cache_key] = latest_timestamp if 'latest_timestamp' in dir() else (full_data[-1].get('timestamp', 0) if full_data else 0)
         
         # 필터링 및 슬라이싱
         filtered_data = full_data.copy()
@@ -486,10 +677,11 @@ async def get_candle_data(
                 "count": len(result_data),
                 "total_available": len(full_data),
                 "oldest_timestamp": full_data[0].get('timestamp') if full_data else None,
-                "newest_timestamp": full_data[-1].get('timestamp') if full_data else None
+                "newest_timestamp": full_data[-1].get('timestamp') if full_data else None,
+                "data_source": data_source  # 데이터 출처 (cache, redis, candlesdb, okx_api)
             }
         }
-        
+
         return response
 
     except redis.RedisError as e:

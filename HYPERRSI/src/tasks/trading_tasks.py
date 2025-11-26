@@ -26,13 +26,24 @@ from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.celery_task import celery_app
 from HYPERRSI.src.trading.execute_trading_logic import execute_trading_logic
 from HYPERRSI.src.trading.services.order_utils import InsufficientMarginError
+from HYPERRSI.src.utils.error_logger import log_error_to_db
 from shared.database.redis_helper import get_redis_client  # Legacy - deprecated
 from shared.database.redis_patterns import redis_context, RedisTimeout
 from shared.database.redis_migration import get_redis_context
 
+# Session management services (PostgreSQL SSOT)
+from HYPERRSI.src.services.session_service import get_session_service
+from HYPERRSI.src.services.state_change_logger import (
+    get_state_change_logger,
+    start_state_change_logger,
+    stop_state_change_logger
+)
+from HYPERRSI.src.core.models.state_change import ChangeType, TriggeredBy
+
 logger = logging.getLogger(__name__)
 
 # Redis 키 상수 정의 (user_id -> okx_uid)
+# === 레거시 키 (기존 단일 심볼 지원 - 후방 호환성 유지) ===
 REDIS_KEY_TRADING_STATUS = "user:{okx_uid}:trading:status"
 REDIS_KEY_TASK_RUNNING = "user:{okx_uid}:task_running"
 REDIS_KEY_TASK_ID = "user:{okx_uid}:task_id"
@@ -41,6 +52,21 @@ REDIS_KEY_PREFERENCES = "user:{okx_uid}:preferences"  # 선호도 키도 변경
 REDIS_KEY_LAST_EXECUTION = "user:{okx_uid}:last_execution"
 REDIS_KEY_LAST_LOG_TIME = "user:{okx_uid}:last_log_time"
 REDIS_KEY_USER_LOCK = "lock:user:{okx_uid}:{symbol}:{timeframe}" # 락 키 이름 변경 (user -> okx)
+
+# === 멀티심볼 지원 키 (Phase 2) ===
+# 심볼별 개별 Task 관리
+REDIS_KEY_SYMBOL_TASK_ID = "user:{okx_uid}:symbol:{symbol}:task_id"
+REDIS_KEY_SYMBOL_TASK_RUNNING = "user:{okx_uid}:symbol:{symbol}:task_running"
+REDIS_KEY_SYMBOL_PRESET_ID = "user:{okx_uid}:symbol:{symbol}:preset_id"
+REDIS_KEY_SYMBOL_TIMEFRAME = "user:{okx_uid}:symbol:{symbol}:timeframe"
+REDIS_KEY_SYMBOL_STARTED_AT = "user:{okx_uid}:symbol:{symbol}:started_at"
+REDIS_KEY_SYMBOL_LAST_EXECUTION = "user:{okx_uid}:symbol:{symbol}:last_execution"
+
+# 사용자별 활성 심볼 관리 (SET, 최대 3개)
+REDIS_KEY_ACTIVE_SYMBOLS = "user:{okx_uid}:active_symbols"
+
+# 프리셋 업데이트 알림 채널 (PUB/SUB)
+REDIS_CHANNEL_PRESET_UPDATE = "preset:update:{okx_uid}:{symbol}"
 
 # 모듈 수준의 이벤트 루프 관리
 _loop = None
@@ -73,6 +99,15 @@ async def trading_context(okx_uid: str, symbol: str) -> AsyncGenerator[None, Non
             raise  # 반드시 다시 발생시켜 상위 호출자에게 알림
         except Exception as e:
             logger.error(f"[{okx_uid}] 트레이딩 컨텍스트 오류: {str(e)}")
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="TradingContextError",
+                user_id=okx_uid,
+                severity="ERROR",
+                symbol=symbol,
+                metadata={"component": "trading_tasks.trading_context"}
+            )
             raise
         finally:
             # 모든 리소스 정리 작업
@@ -85,12 +120,30 @@ async def trading_context(okx_uid: str, symbol: str) -> AsyncGenerator[None, Non
                     pass
                 except Exception as e:
                     logger.error(f"[{okx_uid}] 리소스 정리 중 오류: {str(e)}")
+                    # errordb 로깅 (WARNING - 정리 작업 실패)
+                    log_error_to_db(
+                        error=e,
+                        error_type="ResourceCleanupError",
+                        user_id=okx_uid,
+                        severity="WARNING",
+                        symbol=symbol,
+                        metadata={"component": "trading_tasks.trading_context", "phase": "cleanup"}
+                    )
 
             # 태스크 상태 정리 (okx_uid 사용) - within same Redis context
             try:
                 await redis.delete(REDIS_KEY_TASK_RUNNING.format(okx_uid=okx_uid))
             except Exception as e:
                 logger.error(f"[{okx_uid}] Redis 정리 중 오류: {str(e)}")
+                # errordb 로깅 (WARNING - Redis 정리 실패)
+                log_error_to_db(
+                    error=e,
+                    error_type="RedisCleanupError",
+                    user_id=okx_uid,
+                    severity="WARNING",
+                    symbol=symbol,
+                    metadata={"component": "trading_tasks.trading_context", "phase": "redis_cleanup"}
+                )
 
 # 트레이딩 래퍼 함수
 async def execute_trading_with_context(okx_uid: str, symbol: str, timeframe: str, restart: bool = False) -> None: # user_id -> okx_uid
@@ -318,11 +371,15 @@ async def set_symbol_status(okx_uid: str, symbol: str, status: str) -> None: # u
         await redis.set(key, status)
         logger.info(f"[{okx_uid}] {symbol} 심볼 상태를 '{status}'로 설정")
 
-async def set_task_running(okx_uid: str, running: bool = True, expiry: int = 900) -> None: # user_id -> okx_uid
+async def set_task_running(okx_uid: str, running: bool = True, expiry: int = 900, symbol: str = None) -> None: # user_id -> okx_uid
     """
     사용자의 태스크 실행 상태를 설정
     만료 시간을 설정하여 비정상 종료 시에만 만료되도록 함
+
+    멀티심볼 모드에서는 심볼별 상태도 함께 설정합니다.
     """
+    from shared.config import settings as app_settings
+
     # Operations: DELETE + HSET + EXPIRE or just DELETE - all within one context
     async with get_redis_context(user_id=str(okx_uid), timeout=RedisTimeout.NORMAL_OPERATION) as redis:
         status_key = REDIS_KEY_TASK_RUNNING.format(okx_uid=okx_uid)
@@ -337,9 +394,26 @@ async def set_task_running(okx_uid: str, running: bool = True, expiry: int = 900
             })
             await redis.expire(status_key, expiry)
             logger.debug(f"[{okx_uid}] 태스크 상태를 'running'으로 설정 (만료: {expiry}초)")
+
+            # 멀티심볼 모드: 심볼별 태스크 상태도 설정
+            if app_settings.MULTI_SYMBOL_ENABLED and symbol:
+                symbol_status_key = REDIS_KEY_SYMBOL_TASK_RUNNING.format(okx_uid=okx_uid, symbol=symbol)
+                await redis.delete(symbol_status_key)
+                await redis.hset(symbol_status_key, mapping={
+                    "status": "running",
+                    "started_at": str(current_time)
+                })
+                await redis.expire(symbol_status_key, expiry)
+                logger.debug(f"[{okx_uid}] {symbol} 심볼별 태스크 상태 설정")
         else:
             await redis.delete(status_key)
             logger.debug(f"[{okx_uid}] 태스크 상태를 삭제함")
+
+            # 멀티심볼 모드: 심볼별 태스크 상태도 삭제
+            if app_settings.MULTI_SYMBOL_ENABLED and symbol:
+                symbol_status_key = REDIS_KEY_SYMBOL_TASK_RUNNING.format(okx_uid=okx_uid, symbol=symbol)
+                await redis.delete(symbol_status_key)
+                logger.debug(f"[{okx_uid}] {symbol} 심볼별 태스크 상태 삭제")
 
 async def is_task_running(okx_uid: str) -> bool: # user_id -> okx_uid
     """
@@ -394,6 +468,14 @@ async def is_task_running(okx_uid: str) -> bool: # user_id -> okx_uid
 
         except Exception as e:
             logger.error(f"[{okx_uid}] 태스크 실행 상태 확인 중 오류: {str(e)}")
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="TaskStatusCheckError",
+                user_id=okx_uid,
+                severity="WARNING",
+                metadata={"component": "trading_tasks.is_task_running"}
+            )
             # 오류 발생 시 안전하게 False 반환
             return False
 
@@ -414,10 +496,177 @@ async def update_last_execution(okx_uid: str, success: bool, error_message: Opti
 
         await redis.set(key, json.dumps(data))
 
-async def get_active_trading_users(): # 내부 로직 변경 필요
+async def get_active_trading_users():
     """
     Redis에서 'running' 상태인 모든 활성 사용자 정보(OKX UID 기준) 가져오기
-    오류 처리 강화
+
+    Feature Flag에 따라 동작 방식이 달라집니다:
+    - MULTI_SYMBOL_ENABLED=False (레거시): 기존 단일 심볼 방식
+    - MULTI_SYMBOL_ENABLED=True: 멀티심볼 방식 (active_symbols 사용)
+
+    두 모드 모두 후방 호환성을 위해 지원됩니다.
+    """
+    from shared.config import settings as app_settings
+
+    # Feature Flag 확인
+    if app_settings.MULTI_SYMBOL_ENABLED:
+        # 멀티심볼 모드: 새로운 스캔 로직 사용
+        return await _get_multi_symbol_active_users()
+    else:
+        # 레거시 모드: 기존 단일 심볼 스캔 사용
+        return await _get_legacy_active_users()
+
+
+async def _get_multi_symbol_active_users() -> List[Dict[str, Any]]:
+    """
+    멀티심볼 모드용 활성 사용자 스캔
+
+    active_symbols SET을 사용하여 사용자당 최대 3개의 심볼을 스캔합니다.
+    각 심볼별로 독립적인 Task 상태를 관리합니다.
+    """
+    active_users = []
+
+    async with get_redis_context(user_id="_system_scan_", timeout=RedisTimeout.SLOW_OPERATION) as redis:
+        try:
+            # active_symbols 키 스캔
+            cursor = 0
+            pattern = 'user:*:active_symbols'
+
+            while True:
+                cursor, keys = await redis.scan(cursor=cursor, match=pattern, count=100)
+
+                for key in keys:
+                    try:
+                        if isinstance(key, bytes):
+                            key = key.decode('utf-8')
+
+                        # 키 형식: user:{okx_uid}:active_symbols
+                        key_parts = key.split(':')
+                        if len(key_parts) != 3 or key_parts[2] != 'active_symbols':
+                            continue
+
+                        okx_uid = key_parts[1]
+
+                        # 사용자의 트레이딩 상태 확인 (전체 상태)
+                        trading_status_key = REDIS_KEY_TRADING_STATUS.format(okx_uid=okx_uid)
+                        trading_status = await redis.get(trading_status_key)
+
+                        if isinstance(trading_status, bytes):
+                            trading_status = trading_status.decode('utf-8')
+                        if trading_status:
+                            trading_status = trading_status.strip().strip('"\'')
+
+                        if trading_status != "running":
+                            continue
+
+                        # 활성 심볼 목록 가져오기
+                        active_symbols = await redis.smembers(key)
+
+                        for symbol in active_symbols:
+                            if isinstance(symbol, bytes):
+                                symbol = symbol.decode('utf-8')
+
+                            try:
+                                # 심볼별 Task 실행 상태 확인
+                                symbol_task_running = await _is_symbol_task_running(okx_uid, symbol, redis)
+
+                                if symbol_task_running:
+                                    # 오래된 태스크 확인 및 정리
+                                    if await _cleanup_stale_symbol_task(okx_uid, symbol, redis):
+                                        symbol_task_running = False
+
+                                if not symbol_task_running:
+                                    # 심볼 설정 조회
+                                    timeframe_key = REDIS_KEY_SYMBOL_TIMEFRAME.format(okx_uid=okx_uid, symbol=symbol)
+                                    preset_id_key = REDIS_KEY_SYMBOL_PRESET_ID.format(okx_uid=okx_uid, symbol=symbol)
+
+                                    timeframe = await redis.get(timeframe_key)
+                                    preset_id = await redis.get(preset_id_key)
+
+                                    if isinstance(timeframe, bytes):
+                                        timeframe = timeframe.decode('utf-8')
+                                    if isinstance(preset_id, bytes):
+                                        preset_id = preset_id.decode('utf-8')
+
+                                    if not timeframe:
+                                        logger.warning(f"[{okx_uid}] {symbol} 타임프레임 없음, 스킵")
+                                        continue
+
+                                    active_users.append({
+                                        'okx_uid': okx_uid,
+                                        'symbol': symbol,
+                                        'timeframe': timeframe,
+                                        'preset_id': preset_id,  # 멀티심볼 모드에서만 포함
+                                        'multi_symbol_mode': True
+                                    })
+
+                                    logger.debug(f"[{okx_uid}] 멀티심볼 활성: {symbol}/{timeframe}, preset={preset_id}")
+
+                            except Exception as symbol_err:
+                                logger.error(f"[{okx_uid}] 심볼 {symbol} 처리 오류: {str(symbol_err)}")
+                                continue
+
+                    except Exception as key_err:
+                        logger.error(f"키 처리 오류: {key}, {str(key_err)}")
+                        continue
+
+                if cursor == 0:
+                    break
+
+        except Exception as e:
+            logger.error(f"멀티심볼 활성 사용자 스캔 오류: {str(e)}")
+            log_error_to_db(
+                error=e,
+                error_type="MultiSymbolScanError",
+                severity="ERROR",
+                metadata={"component": "trading_tasks._get_multi_symbol_active_users"}
+            )
+
+    return active_users
+
+
+async def _is_symbol_task_running(okx_uid: str, symbol: str, redis) -> bool:
+    """심볼별 태스크 실행 상태 확인"""
+    task_running_key = REDIS_KEY_SYMBOL_TASK_RUNNING.format(okx_uid=okx_uid, symbol=symbol)
+    status = await redis.hgetall(task_running_key)
+    return bool(status and status.get("status") == "running")
+
+
+async def _cleanup_stale_symbol_task(okx_uid: str, symbol: str, redis, max_age: int = 30) -> bool:
+    """
+    오래된 심볼 태스크 상태 정리
+
+    Returns:
+        True if stale task was cleaned up, False otherwise
+    """
+    task_running_key = REDIS_KEY_SYMBOL_TASK_RUNNING.format(okx_uid=okx_uid, symbol=symbol)
+    status_data = await redis.hgetall(task_running_key)
+
+    if not status_data or "started_at" not in status_data:
+        return False
+
+    try:
+        started_at = float(status_data["started_at"])
+        current_time = datetime.now().timestamp()
+
+        if current_time - started_at > max_age:
+            logger.warning(f"[{okx_uid}] {symbol} 오래된 태스크 상태 초기화 ({max_age}초 초과)")
+            await redis.delete(task_running_key)
+            return True
+
+    except (ValueError, TypeError) as e:
+        logger.warning(f"[{okx_uid}] {symbol} 태스크 시간 파싱 오류: {e}")
+        await redis.delete(task_running_key)
+        return True
+
+    return False
+
+
+async def _get_legacy_active_users() -> List[Dict[str, Any]]:
+    """
+    레거시 모드용 활성 사용자 스캔 (기존 단일 심볼 방식)
+
+    기존 get_active_trading_users()의 원래 로직을 유지합니다.
     """
     # Operations: SCAN + TYPE + GET + HGETALL + SET + EXPIRE - all within one context
     # System-wide scan operation - use special identifier for migration
@@ -539,12 +788,27 @@ async def get_active_trading_users(): # 내부 로직 변경 필요
                                     })
                             except Exception as e:
                                 logger.error(f"[{okx_uid}] 활성 사용자 처리 중 오류: {str(e)}")
+                                # errordb 로깅
+                                log_error_to_db(
+                                    error=e,
+                                    error_type="ActiveUserProcessingError",
+                                    user_id=okx_uid,
+                                    severity="WARNING",
+                                    metadata={"component": "trading_tasks.get_active_trading_users"}
+                                )
                                 continue
                     except (ValueError, TypeError, IndexError) as e:
                         logger.warning(f"유효하지 않은 키 형식 또는 파싱 오류: {key}, 오류: {str(e)}")
                         continue
                     except Exception as e:
                         logger.error(f"키 처리 중 예상치 못한 오류: {key}, 오류: {str(e)}")
+                        # errordb 로깅
+                        log_error_to_db(
+                            error=e,
+                            error_type="KeyProcessingError",
+                            severity="WARNING",
+                            metadata={"component": "trading_tasks.get_active_trading_users", "key": key}
+                        )
                         continue
 
                 # cursor가 0으로 돌아오면 스캔 완료
@@ -552,6 +816,13 @@ async def get_active_trading_users(): # 내부 로직 변경 필요
                     break
         except Exception as e:
             logger.error(f"활성 사용자 가져오기 중 오류: {str(e)}")
+            # errordb 로깅
+            log_error_to_db(
+                error=e,
+                error_type="GetActiveUsersError",
+                severity="ERROR",
+                metadata={"component": "trading_tasks.get_active_trading_users"}
+            )
 
         return active_users
 
@@ -593,6 +864,15 @@ async def acquire_okx_lock(okx_uid: str, symbol: str, timeframe: str, ttl: int =
                         logger.debug(f"[{okx_uid}] 락 해제 완료: {symbol}/{timeframe}")
                 except Exception as e:
                     logger.error(f"[{okx_uid}] 락 해제 중 오류: {str(e)}")
+                    # errordb 로깅
+                    log_error_to_db(
+                        error=e,
+                        error_type="LockReleaseError",
+                        user_id=okx_uid,
+                        severity="WARNING",
+                        symbol=symbol,
+                        metadata={"component": "trading_tasks.acquire_okx_lock", "timeframe": timeframe}
+                    )
 
 async def _check_lock_exists(okx_uid: str, symbol: str, timeframe: str) -> bool:
     """
@@ -641,6 +921,149 @@ async def _save_task_id(okx_uid: str, task_id: str) -> None:
     """Helper: Save task ID to Redis"""
     async with get_redis_context(user_id=str(okx_uid), timeout=RedisTimeout.NORMAL_OPERATION) as redis:
         await redis.set(REDIS_KEY_TASK_ID.format(okx_uid=okx_uid), task_id)
+
+
+async def _get_trading_settings(okx_uid: str, symbol: str) -> Dict[str, Any]:
+    """
+    Redis에서 트레이딩 설정값 조회 (세션 시작 시 PostgreSQL에 저장용).
+
+    Returns:
+        Dict containing params_settings and dual_side_settings
+    """
+    params_settings = {}
+    dual_side_settings = {}
+
+    async with get_redis_context(user_id=str(okx_uid), timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+        try:
+            # params_settings (JSON string)
+            settings_key = f"user:{okx_uid}:settings"
+            settings_raw = await redis.get(settings_key)
+            if settings_raw:
+                if isinstance(settings_raw, bytes):
+                    settings_raw = settings_raw.decode('utf-8')
+                try:
+                    params_settings = json.loads(settings_raw)
+                except json.JSONDecodeError:
+                    logger.warning(f"[{okx_uid}] settings 파싱 실패: {settings_raw}")
+
+            # dual_side_settings (HASH)
+            dual_side_key = f"user:{okx_uid}:dual_side"
+            dual_side_raw = await redis.hgetall(dual_side_key)
+            if dual_side_raw:
+                # bytes → str 변환 및 값 타입 복원
+                for k, v in dual_side_raw.items():
+                    key = k.decode() if isinstance(k, bytes) else k
+                    val = v.decode() if isinstance(v, bytes) else v
+
+                    # 타입 복원 시도
+                    if val in ("0", "1") and key in (
+                        'use_dual_side_entry', 'activate_tp_sl_after_all_dca',
+                        'use_dual_sl', 'break_even_active', 'trailing_active'
+                    ):
+                        dual_side_settings[key] = val == "1"
+                    else:
+                        try:
+                            dual_side_settings[key] = json.loads(val)
+                        except (json.JSONDecodeError, TypeError):
+                            try:
+                                if '.' in val:
+                                    dual_side_settings[key] = float(val)
+                                else:
+                                    dual_side_settings[key] = int(val)
+                            except ValueError:
+                                dual_side_settings[key] = val
+
+        except Exception as e:
+            logger.error(f"[{okx_uid}] 설정 조회 실패: {e}")
+
+    return {
+        'params_settings': params_settings,
+        'dual_side_settings': dual_side_settings
+    }
+
+
+async def _start_session_if_needed(
+    okx_uid: str,
+    symbol: str,
+    timeframe: str,
+    is_restart: bool
+) -> Optional[int]:
+    """
+    세션 시작 처리 (restart=True일 때만).
+
+    PostgreSQL에 세션을 생성하고 session_id를 반환합니다.
+
+    Args:
+        okx_uid: OKX 사용자 UID
+        symbol: 거래 심볼
+        timeframe: 타임프레임
+        is_restart: 재시작 모드 여부
+
+    Returns:
+        Optional[int]: 생성된 session_id (restart가 아니면 None)
+    """
+    if not is_restart:
+        return None
+
+    try:
+        # Redis에서 설정값 조회
+        settings = await _get_trading_settings(okx_uid, symbol)
+
+        # 세션 서비스로 세션 시작
+        session_service = get_session_service()
+        session_id = await session_service.start_session(
+            okx_uid=okx_uid,
+            symbol=symbol,
+            timeframe=timeframe,
+            params_settings=settings['params_settings'],
+            dual_side_settings=settings['dual_side_settings'],
+            triggered_by=TriggeredBy.CELERY,
+            trigger_source='trading_tasks._execute_trading_cycle'
+        )
+
+        logger.info(f"[{okx_uid}] 📝 세션 시작: session_id={session_id}, symbol={symbol}")
+        return session_id
+
+    except Exception as e:
+        logger.error(f"[{okx_uid}] 세션 시작 실패 (계속 진행): {e}", exc_info=True)
+        # 세션 시작 실패해도 트레이딩은 계속 진행
+        return None
+
+
+async def _stop_session_if_needed(
+    okx_uid: str,
+    symbol: str,
+    end_reason: str = 'manual',
+    error_message: Optional[str] = None
+) -> None:
+    """
+    세션 종료 처리.
+
+    Args:
+        okx_uid: OKX 사용자 UID
+        symbol: 거래 심볼
+        end_reason: 종료 사유 ('manual', 'error', 'system')
+        error_message: 에러 메시지 (에러 종료 시)
+    """
+    try:
+        session_service = get_session_service()
+        session_id = await session_service.stop_session(
+            okx_uid=okx_uid,
+            symbol=symbol,
+            end_reason=end_reason,
+            error_message=error_message,
+            triggered_by=TriggeredBy.CELERY,
+            trigger_source='trading_tasks._execute_trading_cycle'
+        )
+
+        if session_id:
+            logger.info(f"[{okx_uid}] 📝 세션 종료: session_id={session_id}, reason={end_reason}")
+        else:
+            logger.debug(f"[{okx_uid}] 종료할 활성 세션 없음")
+
+    except Exception as e:
+        logger.error(f"[{okx_uid}] 세션 종료 실패 (무시됨): {e}", exc_info=True)
+        # 세션 종료 실패해도 트레이딩 종료는 계속 진행
 
 
 @celery_app.task(name='trading_tasks.check_and_execute_trading', ignore_result=True)
@@ -697,17 +1120,50 @@ def check_and_execute_trading():
                     run_async(_save_task_id(okx_uid, task.id))
                 except Exception as redis_err:
                     logger.error(f"[{okx_uid}] 태스크 ID 저장 중 오류: {str(redis_err)}")
+                    # errordb 로깅
+                    log_error_to_db(
+                        error=redis_err,
+                        error_type="TaskIdSaveError",
+                        user_id=okx_uid,
+                        severity="WARNING",
+                        symbol=symbol,
+                        metadata={"component": "trading_tasks.check_and_execute_trading", "timeframe": timeframe}
+                    )
 
                 logger.info(f"[{okx_uid}] ✅ 트레이딩 태스크 등록 완료: task_id={task.id}, 심볼={symbol}")
             except Exception as e:
                 logger.error(f"[{okx_uid}] 트레이딩 태스크 등록 중 오류: {str(e)}", exc_info=True)
+                # errordb 로깅
+                log_error_to_db(
+                    error=e,
+                    error_type="TradingTaskRegistrationError",
+                    user_id=okx_uid,
+                    severity="ERROR",
+                    symbol=symbol,
+                    metadata={"component": "trading_tasks.check_and_execute_trading", "timeframe": timeframe}
+                )
                 # 등록 실패 시 running 해제 (okx_uid 사용)
                 try:
                     run_async(set_task_running(okx_uid, False))
                 except Exception as cleanup_err:
                     logger.error(f"[{okx_uid}] 실패 후 상태 정리 중 오류: {str(cleanup_err)}")
+                    # errordb 로깅
+                    log_error_to_db(
+                        error=cleanup_err,
+                        error_type="TaskCleanupError",
+                        user_id=okx_uid,
+                        severity="WARNING",
+                        metadata={"component": "trading_tasks.check_and_execute_trading", "phase": "cleanup_after_failure"}
+                    )
     except Exception as e:
         logger.error(f"check_and_execute_trading 태스크 실행 중 오류: {str(e)}", exc_info=True)
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="CheckAndExecuteTradingError",
+            severity="CRITICAL",
+            metadata={"component": "trading_tasks.check_and_execute_trading"}
+        )
         traceback.print_exc()
 
 @celery_app.task(name='trading_tasks.execute_trading_cycle', bind=True, max_retries=3, time_limit=120, soft_time_limit=90)
@@ -744,13 +1200,44 @@ def execute_trading_cycle(self: Any, okx_uid: str, symbol: str, timeframe: str, 
                 logger.warning(f"[{okx_uid}] 트레이딩 사이클 완료: 실행 시간={execution_time:.2f}초")
 
             return result
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as e:
             error_message = "비동기 작업이 내부 타임아웃을 초과했습니다"
             logger.error(f"[{okx_uid}] {error_message}")
+            # errordb 로깅 (타임아웃 에러)
+            from HYPERRSI.src.utils.error_logger import log_error_to_db
+            log_error_to_db(
+                error=e if e else TimeoutError(error_message),
+                error_type="AsyncTimeoutError",
+                user_id=okx_uid,
+                severity="CRITICAL",
+                symbol=symbol,
+                metadata={
+                    "timeframe": timeframe,
+                    "restart": restart,
+                    "task_id": task_id,
+                    "component": "execute_trading_cycle",
+                    "timeout_seconds": 90
+                }
+            )
             return {"status": "error", "error": error_message}
         except Exception as e:
             error_message = str(e)
             logger.error(f"[{okx_uid}] 트레이딩 사이클 실행 중 오류 발생: {error_message}", exc_info=True)
+            # errordb 로깅 (일반 에러)
+            from HYPERRSI.src.utils.error_logger import log_error_to_db
+            log_error_to_db(
+                error=e,
+                error_type="TradingCycleError",
+                user_id=okx_uid,
+                severity="ERROR",
+                symbol=symbol,
+                metadata={
+                    "timeframe": timeframe,
+                    "restart": restart,
+                    "task_id": task_id,
+                    "component": "execute_trading_cycle"
+                }
+            )
             return {"status": "error", "error": error_message}
 
 async def _execute_trading_cycle(
@@ -760,14 +1247,24 @@ async def _execute_trading_cycle(
     실제 비동기 트레이딩 로직 (OKX UID 기반)
     컨텍스트 매니저 패턴 적용
     모든 async 작업을 단일 이벤트 루프에서 처리
+
+    세션 관리:
+    - restart=True: 새 세션 시작 (PostgreSQL에 기록)
+    - 트레이딩 종료 시: 세션 종료 기록
     """
     # 상태 추적 변수
     success = False
     error_message: Optional[str] = None
+    session_id: Optional[int] = None
 
     try:
         # 1. 태스크 실행 상태를 True로 설정 (60초 만료 - Beat 주기보다 충분히 길게)
-        await set_task_running(okx_uid, True, expiry=60)
+        # 멀티심볼 모드: symbol 전달하여 심볼별 상태도 설정
+        await set_task_running(okx_uid, True, expiry=60, symbol=symbol)
+
+        # 2. 세션 시작 (restart=True일 때만, PostgreSQL SSOT)
+        if restart:
+            session_id = await _start_session_if_needed(okx_uid, symbol, timeframe, restart)
 
         lock_key = REDIS_KEY_USER_LOCK.format(okx_uid=okx_uid, symbol=symbol, timeframe=timeframe)
 
@@ -866,11 +1363,15 @@ async def _execute_trading_cycle(
                     return {"status": "success", "message": f"[{okx_uid}] 트레이딩 사이클 완료"}
                 else:
                     # 중지 상태일 경우 태스크 ID 삭제 및 상태 업데이트 (okx_uid 사용)
-                    await redis.delete(REDIS_KEY_TASK_ID.format(okx_uid=okx_uid))
+                    async with get_redis_context(user_id=str(okx_uid), timeout=RedisTimeout.NORMAL_OPERATION) as redis_conn:
+                        await redis_conn.delete(REDIS_KEY_TASK_ID.format(okx_uid=okx_uid))
                     await set_trading_status(okx_uid, "stopped")
                     # user_id 대신 okx_uid를 보내는 것이 맞는지 확인 필요. 우선 그대로 둠.
                     await send_telegram_message(f"⚠️[{okx_uid}] User의 상태를 Stopped로 강제 변경6.", okx_uid, debug=True)
                     await set_symbol_status(okx_uid, symbol, "stopped")
+
+                    # 세션 종료 (PostgreSQL SSOT)
+                    await _stop_session_if_needed(okx_uid, symbol, end_reason='manual')
 
                     logger.info(f"[{okx_uid}] 트레이딩 중지 상태 감지 - 사이클 실행 중단")
                     success = True  # 정상 중지는 성공으로 간주
@@ -887,6 +1388,15 @@ async def _execute_trading_cycle(
                 return {"status": "margin_blocked", "message": error_message}
             except Exception as e:
                 logger.error(f"[{okx_uid}] 트레이딩 사이클 오류: {str(e)}", exc_info=True)
+                # errordb 로깅
+                log_error_to_db(
+                    error=e,
+                    error_type="TradingCycleInnerError",
+                    user_id=okx_uid,
+                    severity="ERROR",
+                    symbol=symbol,
+                    metadata={"component": "trading_tasks._execute_trading_cycle", "timeframe": timeframe, "restart": restart}
+                )
                 error_message = str(e)
                 success = False
                 await update_last_execution(okx_uid, success, error_message)
@@ -895,32 +1405,89 @@ async def _execute_trading_cycle(
     except InsufficientMarginError as e:
         # 최상위에서도 자금 부족 오류를 처리
         logger.warning(f"[{okx_uid}] 최상위 자금 부족 오류 처리: {str(e)}")
+        # errordb 로깅 (자금 부족)
+        log_error_to_db(
+            error=e,
+            error_type="InsufficientMarginError",
+            user_id=okx_uid,
+            severity="WARNING",
+            symbol=symbol,
+            metadata={"component": "trading_tasks._execute_trading_cycle", "timeframe": timeframe}
+        )
         error_message = str(e)
         success = False
         try:
             await update_last_execution(okx_uid, success, error_message)
         except Exception as update_err:
             logger.error(f"[{okx_uid}] update_last_execution 실패: {str(update_err)}")
+            # errordb 로깅 (update 실패)
+            log_error_to_db(
+                error=update_err,
+                error_type="UpdateLastExecutionError",
+                user_id=okx_uid,
+                severity="WARNING",
+                metadata={"component": "trading_tasks._execute_trading_cycle", "phase": "margin_error_update"}
+            )
         return {"status": "margin_blocked", "message": error_message}
     except Exception as e:
         # 최상위 예외 처리
         error_message = str(e)
         success = False
         logger.error(f"[{okx_uid}] _execute_trading_cycle 최상위 오류: {error_message}", exc_info=True)
+        # errordb 로깅
+        log_error_to_db(
+            error=e,
+            error_type="ExecuteTradingCycleTopLevelError",
+            user_id=okx_uid,
+            severity="CRITICAL",
+            symbol=symbol,
+            metadata={"component": "trading_tasks._execute_trading_cycle", "timeframe": timeframe, "restart": restart}
+        )
         try:
             await update_last_execution(okx_uid, success, error_message)
         except Exception as update_err:
             logger.error(f"[{okx_uid}] update_last_execution 실패: {str(update_err)}")
+            # errordb 로깅 (update 실패)
+            log_error_to_db(
+                error=update_err,
+                error_type="UpdateLastExecutionError",
+                user_id=okx_uid,
+                severity="WARNING",
+                metadata={"component": "trading_tasks._execute_trading_cycle", "phase": "top_level_error_update"}
+            )
         raise
 
     finally:
         # 항상 task_running 상태를 False로 설정
         logger.info(f"[{okx_uid}] 🧹 finally 블록 실행: task_running 상태를 False로 변경")
         try:
-            await set_task_running(okx_uid, False)
+            # 멀티심볼 모드: symbol 전달하여 심볼별 상태도 정리
+            await set_task_running(okx_uid, False, symbol=symbol)
             logger.info(f"[{okx_uid}] ✅ task_running 상태 False 설정 완료")
         except Exception as cleanup_err:
             logger.error(f"[{okx_uid}] ❌ set_task_running cleanup 실패: {str(cleanup_err)}")
+            # errordb 로깅
+            log_error_to_db(
+                error=cleanup_err,
+                error_type="FinalCleanupError",
+                user_id=okx_uid,
+                severity="WARNING",
+                symbol=symbol,
+                metadata={"component": "trading_tasks._execute_trading_cycle", "phase": "finally_cleanup"}
+            )
+
+        # 에러 발생 시 세션 종료 처리 (PostgreSQL SSOT)
+        if not success and error_message:
+            try:
+                await _stop_session_if_needed(
+                    okx_uid=okx_uid,
+                    symbol=symbol,
+                    end_reason='error',
+                    error_message=error_message
+                )
+                logger.info(f"[{okx_uid}] 📝 에러로 인한 세션 종료 처리 완료")
+            except Exception as session_err:
+                logger.error(f"[{okx_uid}] 세션 종료 처리 실패 (무시됨): {session_err}")
 
 # 애플리케이션 종료 시 이벤트 루프 정리 함수
 def cleanup_event_loop():

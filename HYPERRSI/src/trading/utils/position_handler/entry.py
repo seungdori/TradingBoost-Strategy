@@ -52,6 +52,7 @@ from HYPERRSI.src.trading.utils.position_handler.core import (
 )
 from HYPERRSI.src.trading.utils.position_handler.validation import (
     check_any_direction_locked,
+    check_cooldown,
     check_entry_failure_limit,
     check_margin_block,
     increment_entry_failure,
@@ -141,8 +142,8 @@ async def handle_no_position(
         timeframe_str = get_timeframe(timeframe)
         print(f"[{user_id}][{timeframe_str}] 포지션 없는 경우의 디버깅 : {current_rsi}, rsi signals : {rsi_signals},current state : {current_state}", flush=True)
 
-        # Check entry failure limit
-        exceeded, fail_count = await check_entry_failure_limit(user_id)
+        # Check entry failure limit (심볼별로 체크)
+        exceeded, fail_count = await check_entry_failure_limit(user_id, symbol)
 
         # Clear main position direction if exists
         main_position_direction_key = MAIN_POSITION_DIRECTION_KEY.format(
@@ -181,6 +182,17 @@ async def handle_no_position(
                 )
                 return
 
+            # Check cooldown (only if use_cooldown is enabled)
+            use_cooldown = settings.get('use_cooldown', True)
+            if use_cooldown:
+                is_cooldown, cooldown_remaining = await check_cooldown(user_id, symbol, "long")
+                if is_cooldown:
+                    logger.info(
+                        f"[{user_id}] Long entry in cooldown for {symbol}. "
+                        f"Remaining time: {cooldown_remaining}s"
+                    )
+                    return
+
             # Check trend condition for long entry
             should_enter, reason = await should_enter_with_trend(settings, current_state, "long")
             if rsi_signals['is_oversold'] and should_enter:
@@ -200,9 +212,9 @@ async def handle_no_position(
                 )
 
                 if entry_success:
-                    await _handle_entry_success(user_id, redis)
+                    await _handle_entry_success(user_id, symbol, redis)
                 else:
-                    fail_count = await _handle_entry_failure(user_id, "long", fail_count, redis)
+                    fail_count = await _handle_entry_failure(user_id, symbol, "long", fail_count, redis)
 
             elif rsi_signals['is_oversold'] and not should_enter:
                 # Trend condition not met - send alert
@@ -230,6 +242,17 @@ async def handle_no_position(
                 )
                 return
 
+            # Check cooldown (only if use_cooldown is enabled)
+            use_cooldown = settings.get('use_cooldown', True)
+            if use_cooldown:
+                is_cooldown, cooldown_remaining = await check_cooldown(user_id, symbol, "short")
+                if is_cooldown:
+                    logger.info(
+                        f"[{user_id}] Short entry in cooldown for {symbol}. "
+                        f"Remaining time: {cooldown_remaining}s"
+                    )
+                    return
+
             # Check trend condition for short entry
             should_enter, reason = await should_enter_with_trend(settings, current_state, "short")
             #print(f"[{user_id}] 숏 진입 조건2 - is_overbought: {rsi_signals['is_overbought']}, should_enter: {should_enter}, reason: {reason}, current_state: {current_state}", flush=True)
@@ -251,9 +274,9 @@ async def handle_no_position(
                 )
 
                 if entry_success:
-                    await _handle_entry_success(user_id, redis)
+                    await _handle_entry_success(user_id, symbol, redis)
                 else:
-                    fail_count = await _handle_entry_failure(user_id, "short", fail_count, redis)
+                    fail_count = await _handle_entry_failure(user_id, symbol, "short", fail_count, redis)
 
             elif rsi_signals['is_overbought'] and not should_enter:
                 # Trend condition not met - send alert
@@ -263,20 +286,20 @@ async def handle_no_position(
                 if not should_enter:
                     print(f"[{user_id}] Should enter is False - reason: {reason}", flush=True)
 
-        # Check if trading should be stopped due to failures
+        # Check if trading should be stopped due to failures (심볼별로 체크)
         if fail_count >= 3:
-            await redis.set(f"user:{user_id}:trading:status", "stopped")
+            # 심볼별 트레이딩 상태만 stopped로 변경 (다른 심볼에 영향 X)
             await send_telegram_message(
-                f"⚠️[{user_id}] User의 상태를 Stopped로 강제 변경",
+                f"⚠️[{user_id}][{symbol}] 3회 연속 진입 실패",
                 user_id,
                 debug=True
             )
             await send_telegram_message(
-                "3회 연속 진입 실패로 트레이딩이 종료되었습니다.",
+                f"[{symbol}] 3회 연속 진입 실패로 해당 심볼 트레이딩이 일시 중지됩니다.",
                 user_id,
                 debug=True
             )
-            entry_fail_count_key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id)
+            entry_fail_count_key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id, symbol=symbol)
             await redis.delete(entry_fail_count_key)
 
     except Exception as e:
@@ -330,6 +353,18 @@ async def _execute_long_entry(
         # Runtime import to avoid circular dependency
         from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
 
+        # Calculate SL price based on user settings
+        sl_price = None
+        if settings.get('use_sl', False):
+            sl_price = await trading_service.calculate_sl_price(
+                current_price=current_price,
+                side="long",
+                settings=settings,
+                symbol=symbol,
+                atr_value=atr_value
+            )
+            logger.debug(f"[{user_id}] Long entry SL calculated: {sl_price} (use_sl={settings.get('use_sl')}, sl_option={settings.get('sl_option')}, sl_value={settings.get('sl_value')})")
+
         request = OpenPositionRequest(
             user_id=user_id,
             symbol=symbol,
@@ -337,7 +372,7 @@ async def _execute_long_entry(
             size=contracts_amount,
             leverage=settings['leverage'],
             take_profit=None,
-            stop_loss=None,
+            stop_loss=sl_price,
             order_concept='',
             is_DCA=False,
             is_hedge=False,
@@ -486,6 +521,18 @@ async def _execute_short_entry(
         # Runtime import to avoid circular dependency
         from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
 
+        # Calculate SL price based on user settings
+        sl_price = None
+        if settings.get('use_sl', False):
+            sl_price = await trading_service.calculate_sl_price(
+                current_price=current_price,
+                side="short",
+                settings=settings,
+                symbol=symbol,
+                atr_value=atr_value
+            )
+            logger.debug(f"[{user_id}] Short entry SL calculated: {sl_price} (use_sl={settings.get('use_sl')}, sl_option={settings.get('sl_option')}, sl_value={settings.get('sl_value')})")
+
         print("2번")
         request = OpenPositionRequest(
             user_id=user_id,
@@ -494,7 +541,7 @@ async def _execute_short_entry(
             size=contracts_amount,
             leverage=settings['leverage'],
             take_profit=None,
-            stop_loss=None,
+            stop_loss=sl_price,
             order_concept='',
             is_DCA=False,
             is_hedge=False,
@@ -585,19 +632,21 @@ async def _execute_short_entry(
         return False
 
 
-async def _handle_entry_success(user_id: str, redis_client: Any) -> None:
+async def _handle_entry_success(user_id: str, symbol: str, redis_client: Any) -> None:
     """
     Handle successful entry by resetting failure count.
 
     Args:
         user_id: User identifier
+        symbol: Trading symbol
         redis_client: Redis client instance
     """
-    await reset_entry_failure(user_id)
+    await reset_entry_failure(user_id, symbol)
 
 
 async def _handle_entry_failure(
     user_id: str,
+    symbol: str,
     side: str,
     current_fail_count: int,
     redis_client: Any
@@ -607,6 +656,7 @@ async def _handle_entry_failure(
 
     Args:
         user_id: User identifier
+        symbol: Trading symbol
         side: Position side ("long" or "short")
         current_fail_count: Current failure count
         redis_client: Redis client instance
@@ -614,7 +664,7 @@ async def _handle_entry_failure(
     Returns:
         Updated failure count
     """
-    entry_fail_count_key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id)
+    entry_fail_count_key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id, symbol=symbol)
     new_count = current_fail_count + 1
     await redis_client.set(entry_fail_count_key, new_count)
     return new_count
@@ -637,7 +687,7 @@ async def _send_trend_alert(
         side: Position side ("long" or "short")
         redis_client: Redis client instance
     """
-    alert_key = TREND_SIGNAL_ALERT_KEY.format(user_id=user_id)
+    alert_key = TREND_SIGNAL_ALERT_KEY.format(user_id=user_id, symbol=symbol)
     is_alerted = await redis_client.get(alert_key)
 
     if not is_alerted:

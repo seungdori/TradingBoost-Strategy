@@ -11,8 +11,13 @@ from HYPERRSI.src.api.routes.settings import ApiKeyService, get_api_keys_from_ti
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.celery_task import celery_app
 from HYPERRSI.src.core.error_handler import ErrorCategory, handle_critical_error
+from HYPERRSI.src.services.multi_symbol_service import (
+    multi_symbol_service,
+    MaxSymbolsReachedError,
+)
 from HYPERRSI.src.services.timescale_service import TimescaleUserService
 from HYPERRSI.src.trading.trading_service import TradingService, get_okx_client
+from shared.config import settings as app_settings
 from shared.database.redis_helper import get_redis_client
 from shared.database.redis_patterns import scan_keys_pattern, redis_context, RedisTimeout
 from shared.database.redis_helpers import safe_ping
@@ -31,6 +36,7 @@ class TradingTaskRequest(BaseModel):
     user_id: str
     symbol: Optional[str] = "SOL-USDT-SWAP"
     timeframe: str = "1m"
+    preset_id: Optional[str] = None  # 멀티심볼 모드에서 프리셋 지정
 
     model_config = {
         "json_schema_extra": {
@@ -38,6 +44,7 @@ class TradingTaskRequest(BaseModel):
                 "user_id": "1709556958", # user_id -> okx_uid
                 "symbol": "SOL-USDT-SWAP",
                 "timeframe": "1m",
+                "preset_id": "a1b2c3d4"  # optional
             }
         }
     }
@@ -285,7 +292,30 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
         # 심볼과 타임프레임 가져오기
         symbol = request.symbol
         timeframe = request.timeframe
-        
+        preset_id = request.preset_id
+
+        # === 멀티심볼 모드: 심볼 추가 가능 여부 확인 ===
+        if app_settings.MULTI_SYMBOL_ENABLED:
+            can_add, error_msg = await multi_symbol_service.can_add_symbol(okx_uid, symbol)
+            if not can_add:
+                if error_msg and error_msg.startswith("MAX_SYMBOLS_REACHED:"):
+                    # 최대 심볼 수 도달 - 409 Conflict 반환
+                    active_symbols_str = error_msg.split(":", 1)[1]
+                    active_symbols = active_symbols_str.split(",") if active_symbols_str else []
+                    logger.warning(f"[{okx_uid}] 최대 심볼 수 도달. 활성 심볼: {active_symbols}")
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "error": "MAX_SYMBOLS_REACHED",
+                            "message": f"최대 {app_settings.MAX_SYMBOLS_PER_USER}개 심볼까지 동시 트레이딩 가능합니다.",
+                            "active_symbols": active_symbols,
+                            "requested_symbol": symbol,
+                            "hint": "기존 심볼 중 하나를 중지한 후 다시 시도해주세요."
+                        }
+                    )
+                else:
+                    raise HTTPException(status_code=400, detail=error_msg or "심볼 추가 불가")
+
         # 현재 실행 중인 task 확인 (telegram_id와 okx_uid 모두 확인)
         is_running = False
         telegram_status = None
@@ -447,11 +477,48 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
                 await get_redis_client().set(f"user:{telegram_id}:task_id", task.id)
             await get_redis_client().set(f"user:{okx_uid}:task_id", task.id)
 
-            return {
+            # === 멀티심볼 모드: 심볼 등록 ===
+            if app_settings.MULTI_SYMBOL_ENABLED:
+                try:
+                    await multi_symbol_service.add_symbol(
+                        okx_uid=okx_uid,
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        preset_id=preset_id,
+                        task_id=task.id
+                    )
+                    logger.info(f"[{okx_uid}] 멀티심볼 등록 완료: {symbol}")
+                except MaxSymbolsReachedError as e:
+                    # 동시성 이슈로 등록 실패 시 태스크 취소
+                    logger.error(f"[{okx_uid}] 멀티심볼 등록 실패 (race condition): {e}")
+                    celery_app.control.revoke(task.id, terminate=True)
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "error": "MAX_SYMBOLS_REACHED",
+                            "message": str(e),
+                            "active_symbols": e.active_symbols,
+                            "requested_symbol": symbol
+                        }
+                    )
+
+            # 응답 구성
+            response_data = {
                 "status": "success",
                 "message": "트레이딩 태스크가 시작되었습니다.",
-                "task_id": task.id
+                "task_id": task.id,
+                "symbol": symbol,
+                "timeframe": timeframe
             }
+
+            # 멀티심볼 모드에서 추가 정보 제공
+            if app_settings.MULTI_SYMBOL_ENABLED:
+                active_symbols = await multi_symbol_service.get_active_symbols(okx_uid)
+                response_data["multi_symbol_mode"] = True
+                response_data["active_symbols"] = active_symbols
+                response_data["remaining_slots"] = app_settings.MAX_SYMBOLS_PER_USER - len(active_symbols)
+
+            return response_data
         except Exception as task_error:
             logger.error(f"태스크 시작 오류 (okx_uid: {okx_uid}): {str(task_error)}", exc_info=True)
             await handle_critical_error(
@@ -476,7 +543,11 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
 
 @router.post("/start_all_users",
     summary="모든 실행 중인 트레이딩 태스크 재시작 (OKX UID 기준)",
-    description="서버 재시작 등으로 다운 후, 기존에 실행 중이던 모든 사용자의 트레이딩 태스크를 재시작합니다 (OKX UID 기준).",
+    description="""
+서버 재시작 등으로 다운 후, 기존에 실행 중이던 모든 사용자의 트레이딩 태스크를 재시작합니다 (OKX UID 기준).
+
+멀티심볼 모드에서는 각 사용자의 모든 활성 심볼을 재시작합니다.
+    """,
     responses={
         200: {
             "description": "모든 실행 중인 트레이딩 태스크 재시작 성공",
@@ -488,7 +559,8 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
                         "restarted_users": [
                             {"okx_uid": "UID1", "task_id": "new_task_id_1"},
                             {"okx_uid": "UID2", "task_id": "new_task_id_2"}
-                        ]
+                        ],
+                        "multi_symbol_mode": True
                     }
                 }
             }
@@ -507,128 +579,195 @@ async def start_all_users():
             )
             raise HTTPException(status_code=500, detail="Redis 연결 실패")
 
-        # 패턴 변경: user:*:trading:status
-        # Use SCAN instead of KEYS to avoid blocking Redis
-        # Use context manager for proper connection management and timeout protection
-        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
-            status_keys = await scan_keys_pattern("user:*:trading:status", redis=redis)
-            restarted_users = []
-            errors = []
+        restarted_users = []
+        errors = []
 
-            logger.debug(f"총 {len(status_keys)}개의 트레이딩 상태 키 발견")
+        # === 멀티심볼 모드: active_symbols SET 기반 재시작 ===
+        if app_settings.MULTI_SYMBOL_ENABLED:
+            logger.info("멀티심볼 모드로 start_all_users 실행")
+            async with redis_context(timeout=RedisTimeout.SLOW_OPERATION) as redis:
+                # active_symbols 키 스캔
+                cursor = 0
+                pattern = "user:*:active_symbols"
 
-            for key in status_keys:
-                okx_uid = None # 루프 시작 시 초기화
-                status = await asyncio.wait_for(
-                    redis.get(key),
-                    timeout=RedisTimeout.FAST_OPERATION
-                )
+                while True:
+                    cursor, keys = await redis.scan(cursor=cursor, match=pattern, count=100)
 
-                # 바이트 문자열을 디코딩
-                if isinstance(status, bytes):
-                    status = status.decode('utf-8')
+                    for key in keys:
+                        if isinstance(key, bytes):
+                            key = key.decode('utf-8')
 
-                # status가 'running'인 경우만 재시작 처리
-                if status == "running":
-                    try:
-                        # key 구조: user:{okx_uid}:trading:status
-                        parts = key.split(":")
-                        if len(parts) >= 2 and parts[0] == 'user':
-                            okx_uid = parts[1]
-                        else:
-                            logger.warning(f"잘못된 키 형식 발견: {key}")
+                        # 키 형식: user:{okx_uid}:active_symbols
+                        parts = key.split(':')
+                        if len(parts) < 3 or parts[2] != 'active_symbols':
                             continue
-                    
-                        logger.info(f"사용자 {okx_uid} 재시작 시도 중")
 
-                        task_id_key = f"user:{okx_uid}:task_id"
-                        current_task_id = await asyncio.wait_for(
-                            redis.get(task_id_key),
-                            timeout=RedisTimeout.FAST_OPERATION
-                        )
-
-                        # 기존 태스크가 존재하면 종료
-                        if current_task_id:
-                            logger.info(f"기존 태스크 종료: {current_task_id} (okx_uid: {okx_uid})")
-                            celery_app.control.revoke(current_task_id, terminate=True)
-                            await asyncio.wait_for(
-                                redis.delete(task_id_key),
-                                timeout=RedisTimeout.FAST_OPERATION
-                            )
-                            # 상태는 임시로 'restarting'으로 설정
-                            await asyncio.wait_for(
-                                redis.set(key, "restarting"),
-                                timeout=RedisTimeout.FAST_OPERATION
-                            )
-
-                            # 태스크가 완전히 종료될 때까지 짧은 지연 추가
-                            await asyncio.sleep(1)
+                        okx_uid = parts[1]
 
                         try:
-                            preference_key = f"user:{okx_uid}:preferences"
-                            symbol = await asyncio.wait_for(
-                                redis.hget(preference_key, "symbol"),
+                            # 활성 심볼 목록 조회
+                            active_symbols = await redis.smembers(key)
+
+                            for symbol in active_symbols:
+                                if isinstance(symbol, bytes):
+                                    symbol = symbol.decode('utf-8')
+
+                                # 심볼별 timeframe 조회
+                                timeframe_key = f"user:{okx_uid}:symbol:{symbol}:timeframe"
+                                timeframe = await redis.get(timeframe_key)
+                                if isinstance(timeframe, bytes):
+                                    timeframe = timeframe.decode('utf-8')
+                                timeframe = timeframe or "1m"
+
+                                # 기존 심볼별 task_id 확인 및 종료
+                                symbol_task_id_key = f"user:{okx_uid}:symbol:{symbol}:task_id"
+                                current_task_id = await redis.get(symbol_task_id_key)
+                                if current_task_id:
+                                    if isinstance(current_task_id, bytes):
+                                        current_task_id = current_task_id.decode('utf-8')
+                                    logger.info(f"[{okx_uid}] 기존 {symbol} 태스크 종료: {current_task_id}")
+                                    celery_app.control.revoke(current_task_id, terminate=True)
+                                    await redis.delete(symbol_task_id_key)
+
+                                # 새 태스크 시작
+                                task = celery_app.send_task(
+                                    'trading_tasks.execute_trading_cycle',
+                                    args=[okx_uid, symbol, timeframe, True]
+                                )
+
+                                # 심볼별 task_id 저장
+                                await redis.set(symbol_task_id_key, task.id)
+                                await redis.set(f"user:{okx_uid}:symbol:{symbol}:status", "running")
+
+                                logger.info(f"[{okx_uid}] {symbol} 태스크 재시작: {task.id}")
+                                restarted_users.append({
+                                    "okx_uid": okx_uid,
+                                    "symbol": symbol,
+                                    "task_id": task.id
+                                })
+
+                        except Exception as user_err:
+                            logger.error(f"[{okx_uid}] 재시작 중 에러: {str(user_err)}", exc_info=True)
+                            errors.append({"okx_uid": okx_uid, "error": str(user_err)})
+
+                    if cursor == 0:
+                        break
+
+                # 레거시 상태도 업데이트 (호환성)
+                for item in restarted_users:
+                    await redis.set(f"user:{item['okx_uid']}:trading:status", "running")
+
+        # === 레거시 모드: 기존 단일 심볼 방식 ===
+        else:
+            async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+                status_keys = await scan_keys_pattern("user:*:trading:status", redis=redis)
+
+                logger.debug(f"총 {len(status_keys)}개의 트레이딩 상태 키 발견")
+
+                for key in status_keys:
+                    okx_uid = None
+                    status = await asyncio.wait_for(
+                        redis.get(key),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
+
+                    if isinstance(status, bytes):
+                        status = status.decode('utf-8')
+
+                    if status == "running":
+                        try:
+                            parts = key.split(":")
+                            if len(parts) >= 2 and parts[0] == 'user':
+                                okx_uid = parts[1]
+                            else:
+                                logger.warning(f"잘못된 키 형식 발견: {key}")
+                                continue
+
+                            logger.info(f"사용자 {okx_uid} 재시작 시도 중")
+
+                            task_id_key = f"user:{okx_uid}:task_id"
+                            current_task_id = await asyncio.wait_for(
+                                redis.get(task_id_key),
                                 timeout=RedisTimeout.FAST_OPERATION
                             )
-                            timeframe = await asyncio.wait_for(
-                                redis.hget(preference_key, "timeframe"),
-                                timeout=RedisTimeout.FAST_OPERATION
-                            )
-                            # restart 옵션을 True로 해서 새 태스크 실행 (okx_uid 전달)
-                            task = celery_app.send_task(
-                                'trading_tasks.execute_trading_cycle',
-                                args=[okx_uid, symbol, timeframe, True]
-                            )
 
-                            logger.info(f"[{okx_uid}] 새 트레이딩 태스크 시작: {task.id} (symbol: {symbol}, timeframe: {timeframe})")
+                            if current_task_id:
+                                logger.info(f"기존 태스크 종료: {current_task_id} (okx_uid: {okx_uid})")
+                                celery_app.control.revoke(current_task_id, terminate=True)
+                                await asyncio.wait_for(
+                                    redis.delete(task_id_key),
+                                    timeout=RedisTimeout.FAST_OPERATION
+                                )
+                                await asyncio.wait_for(
+                                    redis.set(key, "restarting"),
+                                    timeout=RedisTimeout.FAST_OPERATION
+                                )
+                                await asyncio.sleep(1)
 
-                            # Redis에 새 태스크 정보 업데이트
-                            await asyncio.wait_for(
-                                redis.set(key, "running"),
-                                timeout=RedisTimeout.FAST_OPERATION
-                            ) # 상태 키 사용
-                            await asyncio.wait_for(
-                                redis.set(task_id_key, task.id),
-                                timeout=RedisTimeout.FAST_OPERATION
-                            ) # 태스크 ID 키 사용
+                            try:
+                                preference_key = f"user:{okx_uid}:preferences"
+                                symbol = await asyncio.wait_for(
+                                    redis.hget(preference_key, "symbol"),
+                                    timeout=RedisTimeout.FAST_OPERATION
+                                )
+                                timeframe = await asyncio.wait_for(
+                                    redis.hget(preference_key, "timeframe"),
+                                    timeout=RedisTimeout.FAST_OPERATION
+                                )
 
-                            restarted_users.append({"okx_uid": okx_uid, "task_id": task.id}) # user_id -> okx_uid
-                        except Exception as task_error:
-                            logger.error(f"태스크 시작 오류 (okx_uid: {okx_uid}): {str(task_error)}", exc_info=True)
+                                task = celery_app.send_task(
+                                    'trading_tasks.execute_trading_cycle',
+                                    args=[okx_uid, symbol, timeframe, True]
+                                )
+
+                                logger.info(f"[{okx_uid}] 새 트레이딩 태스크 시작: {task.id} (symbol: {symbol}, timeframe: {timeframe})")
+
+                                await asyncio.wait_for(
+                                    redis.set(key, "running"),
+                                    timeout=RedisTimeout.FAST_OPERATION
+                                )
+                                await asyncio.wait_for(
+                                    redis.set(task_id_key, task.id),
+                                    timeout=RedisTimeout.FAST_OPERATION
+                                )
+
+                                restarted_users.append({"okx_uid": okx_uid, "task_id": task.id})
+                            except Exception as task_error:
+                                logger.error(f"태스크 시작 오류 (okx_uid: {okx_uid}): {str(task_error)}", exc_info=True)
+                                await handle_critical_error(
+                                    error=task_error,
+                                    category=ErrorCategory.CELERY_TASK,
+                                    context={"endpoint": "start_all_users", "okx_uid": okx_uid, "symbol": symbol, "timeframe": timeframe},
+                                    okx_uid=okx_uid
+                                )
+                                errors.append({"okx_uid": okx_uid, "error": f"태스크 시작 실패: {str(task_error)}"})
+                                await asyncio.wait_for(
+                                    redis.set(key, "error"),
+                                    timeout=RedisTimeout.FAST_OPERATION
+                                )
+
+                        except Exception as user_err:
+                            error_id = okx_uid if okx_uid else key
+                            logger.error(f"사용자 {error_id} 재시작 중 에러: {str(user_err)}", exc_info=True)
                             await handle_critical_error(
-                                error=task_error,
-                                category=ErrorCategory.CELERY_TASK,
-                                context={"endpoint": "start_all_users", "okx_uid": okx_uid, "symbol": symbol, "timeframe": timeframe},
-                                okx_uid=okx_uid
+                                error=user_err,
+                                category=ErrorCategory.MASS_OPERATION,
+                                context={"endpoint": "start_all_users", "error_id": error_id, "operation": "restart"},
+                                okx_uid=okx_uid if okx_uid else "system"
                             )
-                            errors.append({"okx_uid": okx_uid, "error": f"태스크 시작 실패: {str(task_error)}"}) # user_id -> okx_uid
-                            # 상태를 'error'로 설정
-                            await asyncio.wait_for(
-                                redis.set(key, "error"),
-                                timeout=RedisTimeout.FAST_OPERATION
-                            ) # 상태 키 사용
+                            errors.append({"identifier": error_id, "error": str(user_err)})
 
-                    except Exception as user_err:
-                        error_id = okx_uid if okx_uid else key # okx_uid 추출 실패 시 키 자체를 ID로 사용
-                        logger.error(f"사용자 {error_id} 재시작 중 에러: {str(user_err)}", exc_info=True)
-                        await handle_critical_error(
-                            error=user_err,
-                            category=ErrorCategory.MASS_OPERATION,
-                            context={"endpoint": "start_all_users", "error_id": error_id, "operation": "restart"},
-                            okx_uid=okx_uid if okx_uid else "system"
-                        )
-                        errors.append({"identifier": error_id, "error": str(user_err)})
-                    
         logger.info(f"재시작 완료: {len(restarted_users)}개 성공, {len(errors)}개 실패")
-                    
+
         response = {
             "status": "success",
             "message": "모든 실행 중인 트레이딩 태스크에 재시작 명령을 보냈습니다.",
-            "restarted_users": restarted_users
+            "restarted_users": restarted_users,
+            "multi_symbol_mode": app_settings.MULTI_SYMBOL_ENABLED
         }
         if errors:
             response["errors"] = errors
-        
+
         return response
 
     except Exception as e:
@@ -1024,7 +1163,18 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
             logger.debug(f"사용자 {okx_uid}의 Redis 상태 초기화 완료")
         except Exception as redis_err:
             logger.error(f"Redis 상태 초기화 중 오류 발생 (user_id: {okx_uid}): {str(redis_err)}", exc_info=True)
-        
+
+        # === 멀티심볼 모드: 심볼 제거 ===
+        if app_settings.MULTI_SYMBOL_ENABLED and symbol:
+            try:
+                # bytes -> str 변환
+                if isinstance(symbol, bytes):
+                    symbol = symbol.decode('utf-8')
+                await multi_symbol_service.remove_symbol(okx_uid, symbol)
+                logger.info(f"[{okx_uid}] 멀티심볼 제거 완료: {symbol}")
+            except Exception as ms_err:
+                logger.warning(f"[{okx_uid}] 멀티심볼 제거 중 오류 (무시됨): {str(ms_err)}")
+
         # TradingService cleanup
         try:
             if trading_service:
@@ -1033,17 +1183,133 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
         except Exception as cleanup_err:
             logger.error(f"TradingService cleanup 중 오류 발생 (user_id: {okx_uid}): {str(cleanup_err)}", exc_info=True)
             
-        return {
+        # 응답 구성
+        response_data = {
             "status": "success",
-            "message": "트레이딩 중지 신호가 보내졌습니다. 잠시 후 중지됩니다."
+            "message": "트레이딩 중지 신호가 보내졌습니다. 잠시 후 중지됩니다.",
+            "stopped_symbol": symbol.decode('utf-8') if isinstance(symbol, bytes) else symbol
         }
+
+        # 멀티심볼 모드에서 추가 정보 제공
+        if app_settings.MULTI_SYMBOL_ENABLED:
+            active_symbols = await multi_symbol_service.get_active_symbols(okx_uid)
+            response_data["multi_symbol_mode"] = True
+            response_data["remaining_active_symbols"] = active_symbols
+            response_data["remaining_slots"] = app_settings.MAX_SYMBOLS_PER_USER - len(active_symbols)
+
+        return response_data
     except Exception as e:
         logger.error(f"트레이딩 중지 중 오류 발생 (user_id: {okx_uid}): {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"트레이딩 중지 실패: {str(e)}"
         )
-        
+
+
+@router.get(
+    "/active_symbols/{okx_uid}",
+    summary="사용자의 활성 심볼 목록 조회",
+    description="""
+# 활성 심볼 목록 조회
+
+멀티심볼 모드에서 특정 사용자가 현재 트레이딩 중인 모든 심볼 목록과 상세 정보를 조회합니다.
+
+## 반환 정보
+
+- **okx_uid**: 사용자 OKX UID
+- **multi_symbol_enabled**: 멀티심볼 모드 활성화 여부
+- **max_symbols**: 최대 동시 트레이딩 가능 심볼 수
+- **active_count**: 현재 활성 심볼 수
+- **remaining_slots**: 추가 가능한 심볼 슬롯 수
+- **symbols**: 활성 심볼 상세 정보 배열
+    """,
+    responses={
+        200: {
+            "description": "활성 심볼 목록 조회 성공",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "okx_uid": "518796558012178692",
+                        "multi_symbol_enabled": True,
+                        "max_symbols": 3,
+                        "active_count": 2,
+                        "remaining_slots": 1,
+                        "symbols": [
+                            {
+                                "symbol": "BTC-USDT-SWAP",
+                                "timeframe": "1m",
+                                "status": "running",
+                                "preset_id": "a1b2c3d4",
+                                "started_at": "1700000000.0"
+                            },
+                            {
+                                "symbol": "ETH-USDT-SWAP",
+                                "timeframe": "5m",
+                                "status": "running",
+                                "preset_id": None,
+                                "started_at": "1700001000.0"
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    }
+)
+async def get_active_symbols(okx_uid: str):
+    """사용자의 활성 심볼 목록 조회"""
+    try:
+        if not app_settings.MULTI_SYMBOL_ENABLED:
+            # 레거시 모드: 현재 preferences에서 심볼 가져오기
+            redis_client = await get_redis_client()
+            symbol = await redis_client.hget(f"user:{okx_uid}:preferences", "symbol")
+            timeframe = await redis_client.hget(f"user:{okx_uid}:preferences", "timeframe")
+            status = await redis_client.get(f"user:{okx_uid}:trading:status")
+
+            symbols_list = []
+            if symbol:
+                if isinstance(symbol, bytes):
+                    symbol = symbol.decode('utf-8')
+                if isinstance(timeframe, bytes):
+                    timeframe = timeframe.decode('utf-8')
+                if isinstance(status, bytes):
+                    status = status.decode('utf-8')
+
+                if status == "running":
+                    symbols_list.append({
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "status": status,
+                        "preset_id": None,
+                        "started_at": None
+                    })
+
+            return {
+                "okx_uid": okx_uid,
+                "multi_symbol_enabled": False,
+                "max_symbols": 1,
+                "active_count": len(symbols_list),
+                "remaining_slots": 1 - len(symbols_list),
+                "symbols": symbols_list
+            }
+
+        # 멀티심볼 모드
+        symbols_info = await multi_symbol_service.list_symbols_with_info(okx_uid)
+
+        return {
+            "okx_uid": okx_uid,
+            "multi_symbol_enabled": True,
+            "max_symbols": app_settings.MAX_SYMBOLS_PER_USER,
+            "active_count": len(symbols_info),
+            "remaining_slots": app_settings.MAX_SYMBOLS_PER_USER - len(symbols_info),
+            "symbols": symbols_info
+        }
+
+    except Exception as e:
+        logger.error(f"활성 심볼 조회 중 오류 (okx_uid: {okx_uid}): {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"활성 심볼 조회 실패: {str(e)}")
+
+
 @router.get(
     "/running_users",
     summary="실행 중인 모든 사용자 조회 (OKX UID 기준)",

@@ -3,12 +3,14 @@
 from HYPERRSI.src.api.routes import (
     account,
     chart,
+    errors,
     examples,
     okx,
     # okx_test,  # Excluded - uses external okx library
     order,
     order_backend_client,
     position,
+    preset,
     settings,
     stats,
     status,
@@ -21,12 +23,14 @@ from HYPERRSI.src.api.routes import (
 __all__ = [
     "account",
     "chart",
+    "errors",
     "examples",
     "okx",
     # "okx_test",  # Excluded - uses external okx library
     "order",
     "order_backend_client",
     "position",
+    "preset",
     "settings",
     "stats",
     "status",

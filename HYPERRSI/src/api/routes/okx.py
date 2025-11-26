@@ -17,6 +17,9 @@ from HYPERRSI.src.config import OKX_API_KEY, OKX_PASSPHRASE, OKX_SECRET_KEY
 from HYPERRSI.src.utils.check_invitee import check_invitee, get_uid_from_api_keys
 from shared.database.redis_helper import get_redis_client
 from shared.database.redis_patterns import redis_context, RedisTimeout
+from shared.logging import get_logger
+
+logger = get_logger(__name__)
 
 # 고정 API 키 (check_invitee.py에서 가져오기)
 fixed_api_key = '29568592-e1de-4c0d-af89-999018c8c3bf'
@@ -69,7 +72,7 @@ def safe_to_string(obj):
             # 기타 타입은 그대로 반환
             return obj
     except Exception as e:
-        print(f"변환 오류: {str(e)}")
+        logger.warning(f"변환 오류: {str(e)}")
         return str(obj)  # 최후의 수단으로 str() 사용
 
 @router.post("/check-invitee")
@@ -128,6 +131,15 @@ async def api_check_invitee(credentials: OkxCredentials):
             raise HTTPException(status_code=400, detail="okxUID 또는 (api_key, api_secret, passphrase) 세트를 제공해야 합니다")
             
     except Exception as e:
+        logger.error(f"초대 확인 API 오류: {str(e)}")
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="InviteeCheckError",
+            severity="ERROR",
+            metadata={"okxUID": credentials.okxUID, "component": "okx.api_check_invitee"}
+        )
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": str(e)}
@@ -212,7 +224,15 @@ def call_okx_api(api_key, secret_key, passphrase, request_path, params=None, met
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        print(f"API 호출 오류: {str(e)}")
+        logger.error(f"OKX API 호출 오류: {str(e)}")
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="OKXAPICallError",
+            severity="ERROR",
+            metadata={"request_path": request_path, "method": method, "component": "okx.call_okx_api"}
+        )
         return {"code": "500", "msg": str(e), "data": []}
 
 @router.post("/check-valid-user")
@@ -333,7 +353,16 @@ async def check_valid_user(credentials: OkxCredentials):
                     }
                     balance_dict["positions"].append(pos_dict)
         except Exception as e:
-            print(f"Balance 객체 변환 오류: {str(e)}")
+            logger.warning(f"Balance 객체 변환 오류: {str(e)}")
+            # errordb 로깅 (WARNING 레벨이라 심각하지 않음)
+            from HYPERRSI.src.utils.error_logger import log_error_to_db
+            log_error_to_db(
+                error=e,
+                error_type="BalanceConversionError",
+                user_id=uid,
+                severity="WARNING",
+                metadata={"component": "okx.check_valid_user"}
+            )
             # 최소한의 기본 정보만 표시
             balance_dict = {
                 "total_equity": str(getattr(balance_result, 'total_equity', '0')),
@@ -393,7 +422,16 @@ async def check_valid_user(credentials: OkxCredentials):
                         }
                     )
             except Exception as e:
-                print(f"캐시 데이터 파싱 오류: {str(e)}")
+                logger.warning(f"캐시 데이터 파싱 오류: {str(e)}")
+                # errordb 로깅 (WARNING 레벨)
+                from HYPERRSI.src.utils.error_logger import log_error_to_db
+                log_error_to_db(
+                    error=e,
+                    error_type="CacheParsingError",
+                    user_id=uid,
+                    severity="WARNING",
+                    metadata={"cache_key": cache_key, "component": "okx.check_valid_user"}
+                )
                 # 캐시 파싱 오류 시 삭제하고 계속 진행
                 async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
                     await asyncio.wait_for(
@@ -547,8 +585,17 @@ async def check_valid_user(credentials: OkxCredentials):
         except Exception as e:
             # API 호출 또는 처리 중 예외 발생
             error_message = str(e)
-            print(f"초대 확인 중 예외 발생: {error_message}")
-            
+            logger.error(f"초대 확인 중 예외 발생: {error_message}")
+            # errordb 로깅
+            from HYPERRSI.src.utils.error_logger import log_error_to_db
+            log_error_to_db(
+                error=e,
+                error_type="InviteeVerificationError",
+                user_id=uid,
+                severity="ERROR",
+                metadata={"component": "okx.check_valid_user.invitee_check"}
+            )
+
             # 예외에 따른 적절한 응답 구성
             if "invitee" in error_message.lower():
                 # 초대 관련 오류는 403 반환
@@ -558,16 +605,16 @@ async def check_valid_user(credentials: OkxCredentials):
                 # 기타 오류는 500 반환
                 status_code = 500
                 user_message = f"서버 오류가 발생했습니다: {error_message}"
-            
+
             response_content = {
                 "success": has_valid_balance,  # 잔고가 유효하면 success=true
                 "is_invitee": False,
                 "message": user_message
             }
-            
+
             if has_valid_balance and balance_dict:
                 response_content["balance"] = balance_dict
-            
+
             return JSONResponse(
                 status_code=status_code,
                 content=response_content
@@ -577,7 +624,16 @@ async def check_valid_user(credentials: OkxCredentials):
         # API 키 유효성 검사 중 발생한 오류 처리
         error_message = str(e)
         user_friendly_message = get_user_friendly_error_message(error_message)
-        print(f"API 키 유효성 검사 중 오류: {error_message}")
+        logger.error(f"API 키 유효성 검사 중 오류: {error_message}")
+        # errordb 로깅
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="APIKeyValidationError",
+            user_id=credentials.okxUID,
+            severity="ERROR",
+            metadata={"component": "okx.check_valid_user"}
+        )
         
         # 오류 유형 분석 및 적절한 상태 코드 설정
         if "unauthorized" in error_message.lower() or "401" in error_message:

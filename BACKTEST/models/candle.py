@@ -45,6 +45,14 @@ class Candle(BaseModel):
         le=2
     )
 
+    # Auto Trend State (higher timeframe trend mapped to current timeframe)
+    auto_trend_state: Optional[int] = Field(
+        None,
+        description="Auto trend state from higher timeframe (5m->30m, 15m->30m, etc.)",
+        ge=-2,
+        le=2
+    )
+
     # PineScript Trend Components
     CYCLE_Bull: Optional[bool] = Field(
         None,

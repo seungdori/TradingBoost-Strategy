@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from HYPERRSI.src.api.routes.account import get_balance
 from shared.cache import Cache  # 캐시 모듈 추가
@@ -14,6 +15,8 @@ from HYPERRSI.src.trading.stats import (
     get_trading_stats,
     get_user_trading_statistics,
 )
+from HYPERRSI.src.services.trading_stats_service import get_trading_stats_service
+from HYPERRSI.src.services.trade_record_service import get_trade_record_service
 from shared.database.redis_helper import get_redis_client
 from shared.database.redis_patterns import scan_keys_pattern, redis_context, RedisTimeout
 from shared.logging import get_logger
@@ -1493,4 +1496,409 @@ async def clear_stats_cache(user_id: str = Query(..., description="사용자 ID"
         }
     except Exception as e:
         logger.error(f"캐시 삭제 실패: {str(e)}")
-        raise HTTPException(status_code=500, detail="캐시 삭제에 실패했습니다.") 
+        raise HTTPException(status_code=500, detail="캐시 삭제에 실패했습니다.")
+
+
+# ==============================================================================
+# DB 기반 종합 트레이딩 통계 API (PostgreSQL SSOT)
+# ==============================================================================
+
+class TradingStatsRequest(BaseModel):
+    """트레이딩 통계 요청 모델."""
+    user_id: str = Field(..., description="OKX UID 또는 텔레그램 ID")
+    symbol: Optional[str] = Field(None, description="거래 심볼 (없으면 전체)")
+    start_date: Optional[str] = Field(None, description="시작 날짜 (YYYY-MM-DD)")
+    end_date: Optional[str] = Field(None, description="종료 날짜 (YYYY-MM-DD)")
+    initial_balance: float = Field(10000.0, description="초기 잔고 (MDD 계산용)")
+
+
+@router.get(
+    "/trading",
+    summary="DB 기반 종합 트레이딩 통계 조회",
+    description="""
+# DB 기반 종합 트레이딩 통계 조회
+
+PostgreSQL에 저장된 거래 기록을 기반으로 종합적인 트레이딩 통계를 제공합니다.
+
+## 제공 통계
+
+### 기본 통계
+- **총 거래 수** (total_trades)
+- **수익 거래 수** (winning_trades)
+- **손실 거래 수** (losing_trades)
+- **승률** (win_rate) %
+
+### 손익 (PnL) 통계
+- **총 손익** (gross_pnl)
+- **총 수수료** (total_fees)
+- **순 손익** (net_pnl)
+- **총 수익 금액** (total_wins)
+- **총 손실 금액** (total_losses)
+- **평균 손익** (avg_pnl)
+- **평균 수익** (avg_win)
+- **평균 손실** (avg_loss)
+- **최대 수익** (max_win)
+- **최대 손실** (max_loss)
+
+### 리스크 지표
+- **수익팩터** (profit_factor) - 총 수익 / 총 손실
+- **샤프비율** (sharpe_ratio) - 연환산
+- **최대 낙폭** (max_drawdown) - MDD 금액
+- **최대 낙폭률** (max_drawdown_percent) - MDD %
+
+### 거래량 통계
+- **총 거래량** (total_volume)
+- **평균 거래 크기** (avg_trade_size)
+
+### 보유 시간 통계
+- **평균 보유 시간** (avg_hours)
+- **최소 보유 시간** (min_hours)
+- **최대 보유 시간** (max_hours)
+
+### 청산 유형별 분포
+- tp1, tp2, tp3, sl, trailing_stop, break_even 등
+
+### 방향별 통계 (Long/Short)
+- 거래 수, 승률, 순 손익
+
+## 쿼리 파라미터
+
+- **user_id** (required): OKX UID 또는 텔레그램 ID
+- **symbol** (optional): 특정 심볼만 조회 (예: BTC-USDT-SWAP)
+- **start_date** (optional): 시작 날짜 (YYYY-MM-DD)
+- **end_date** (optional): 종료 날짜 (YYYY-MM-DD)
+- **initial_balance** (optional): MDD 계산용 초기 잔고 (기본 10000)
+
+## 예시 URL
+
+```
+GET /stats/trading?user_id=518796558012178692
+GET /stats/trading?user_id=518796558012178692&symbol=BTC-USDT-SWAP
+GET /stats/trading?user_id=518796558012178692&start_date=2025-01-01&end_date=2025-01-31
+```
+""",
+    responses={
+        200: {
+            "description": "통계 조회 성공",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "success",
+                        "data": {
+                            "user_id": "518796558012178692",
+                            "symbol": "ALL",
+                            "period": {
+                                "start_date": "2025-01-01",
+                                "end_date": "2025-01-31"
+                            },
+                            "summary": {
+                                "total_trades": 150,
+                                "winning_trades": 90,
+                                "losing_trades": 55,
+                                "breakeven_trades": 5,
+                                "win_rate": 60.0
+                            },
+                            "pnl": {
+                                "gross_pnl": 1500.0,
+                                "total_fees": 75.0,
+                                "net_pnl": 1425.0,
+                                "total_wins": 2500.0,
+                                "total_losses": 1000.0,
+                                "avg_pnl": 9.5,
+                                "avg_win": 27.78,
+                                "avg_loss": -18.18,
+                                "max_win": 250.0,
+                                "max_loss": -150.0
+                            },
+                            "risk_metrics": {
+                                "profit_factor": 2.5,
+                                "sharpe_ratio": 1.85,
+                                "max_drawdown": 350.0,
+                                "max_drawdown_percent": 3.2,
+                                "drawdown_start_date": "2025-01-15",
+                                "drawdown_end_date": "2025-01-18"
+                            },
+                            "volume": {
+                                "total_volume": 500000.0,
+                                "avg_trade_size": 3333.33
+                            },
+                            "holding_time": {
+                                "avg_hours": 2.5,
+                                "min_hours": 0.1,
+                                "max_hours": 48.0
+                            },
+                            "close_types": {
+                                "tp1": 45,
+                                "tp2": 30,
+                                "tp3": 15,
+                                "sl": 40,
+                                "trailing_stop": 15,
+                                "manual": 5
+                            },
+                            "by_side": {
+                                "long": {
+                                    "count": 80,
+                                    "win_rate": 62.5,
+                                    "net_pnl": 900.0
+                                },
+                                "short": {
+                                    "count": 70,
+                                    "win_rate": 57.14,
+                                    "net_pnl": 525.0
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "거래 기록 없음",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "no_data",
+                        "message": "해당 기간에 거래 기록이 없습니다."
+                    }
+                }
+            }
+        }
+    }
+)
+async def get_db_trading_stats(
+    user_id: str = Query(..., description="OKX UID 또는 텔레그램 ID"),
+    symbol: Optional[str] = Query(None, description="거래 심볼 (없으면 전체)"),
+    start_date: Optional[str] = Query(None, description="시작 날짜 (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="종료 날짜 (YYYY-MM-DD)"),
+    initial_balance: float = Query(10000.0, description="초기 잔고 (MDD 계산용)")
+) -> Dict[str, Any]:
+    """
+    DB 기반 종합 트레이딩 통계를 반환합니다.
+
+    PostgreSQL의 hyperrsi_trades 테이블에서 통계를 계산합니다.
+    """
+    try:
+        # 날짜 파싱
+        parsed_start = None
+        parsed_end = None
+
+        if start_date:
+            try:
+                parsed_start = datetime.strptime(start_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid start_date format. Use YYYY-MM-DD"
+                )
+
+        if end_date:
+            try:
+                parsed_end = datetime.strptime(end_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid end_date format. Use YYYY-MM-DD"
+                )
+
+        # 통계 서비스 호출
+        stats_service = get_trading_stats_service()
+        stats = await stats_service.get_trading_statistics(
+            okx_uid=user_id,
+            symbol=symbol,
+            start_date=parsed_start,
+            end_date=parsed_end,
+            initial_balance=initial_balance
+        )
+
+        if not stats:
+            return {
+                "status": "no_data",
+                "message": "해당 기간에 거래 기록이 없습니다."
+            }
+
+        return {
+            "status": "success",
+            "data": stats.to_dict()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"DB 트레이딩 통계 조회 실패: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="트레이딩 통계 조회에 실패했습니다.")
+
+
+@router.get(
+    "/trading/daily-pnl",
+    summary="일별 손익 시계열 조회",
+    description="""
+# 일별 손익 시계열 조회
+
+차트 데이터용 일별 손익 시계열을 제공합니다.
+
+## 반환 데이터
+- **date**: 날짜
+- **trades**: 당일 거래 수
+- **net_pnl**: 당일 순손익
+- **cumulative_pnl**: 누적 손익
+""",
+)
+async def get_daily_pnl_chart(
+    user_id: str = Query(..., description="OKX UID"),
+    symbol: Optional[str] = Query(None, description="거래 심볼"),
+    start_date: Optional[str] = Query(None, description="시작 날짜"),
+    end_date: Optional[str] = Query(None, description="종료 날짜")
+) -> Dict[str, Any]:
+    """일별 손익 시계열 데이터를 반환합니다."""
+    try:
+        parsed_start = None
+        parsed_end = None
+
+        if start_date:
+            parsed_start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        if end_date:
+            parsed_end = datetime.strptime(end_date, "%Y-%m-%d").date()
+
+        stats_service = get_trading_stats_service()
+        daily_pnl = await stats_service.get_daily_pnl_series(
+            okx_uid=user_id,
+            symbol=symbol,
+            start_date=parsed_start,
+            end_date=parsed_end
+        )
+
+        return {
+            "status": "success",
+            "data": {
+                "period": f"{start_date or 'all'} - {end_date or 'now'}",
+                "chart_data": daily_pnl
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"일별 손익 조회 실패: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="일별 손익 조회에 실패했습니다.")
+
+
+@router.get(
+    "/trading/by-symbol",
+    summary="심볼별 통계 조회",
+    description="""
+# 심볼별 통계 조회
+
+각 심볼별 거래 성과를 비교할 수 있는 통계를 제공합니다.
+
+## 반환 데이터
+- **symbol**: 심볼명
+- **total_trades**: 총 거래 수
+- **winning_trades**: 수익 거래 수
+- **win_rate**: 승률
+- **net_pnl**: 순 손익
+- **total_volume**: 총 거래량
+""",
+)
+async def get_stats_by_symbol(
+    user_id: str = Query(..., description="OKX UID"),
+    start_date: Optional[str] = Query(None, description="시작 날짜"),
+    end_date: Optional[str] = Query(None, description="종료 날짜")
+) -> Dict[str, Any]:
+    """심볼별 통계를 반환합니다."""
+    try:
+        parsed_start = None
+        parsed_end = None
+
+        if start_date:
+            parsed_start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        if end_date:
+            parsed_end = datetime.strptime(end_date, "%Y-%m-%d").date()
+
+        stats_service = get_trading_stats_service()
+        symbol_stats = await stats_service.get_symbol_breakdown(
+            okx_uid=user_id,
+            start_date=parsed_start,
+            end_date=parsed_end
+        )
+
+        return {
+            "status": "success",
+            "data": symbol_stats
+        }
+
+    except Exception as e:
+        logger.error(f"심볼별 통계 조회 실패: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="심볼별 통계 조회에 실패했습니다.")
+
+
+@router.get(
+    "/trading/trades",
+    summary="DB 거래 기록 조회",
+    description="""
+# DB 거래 기록 조회
+
+PostgreSQL에 저장된 거래 기록을 직접 조회합니다.
+
+## 필터링 옵션
+- **symbol**: 특정 심볼만 조회
+- **side**: long 또는 short
+- **close_type**: tp1, tp2, tp3, sl, trailing_stop 등
+- **start_date/end_date**: 기간 필터
+""",
+)
+async def get_db_trades(
+    user_id: str = Query(..., description="OKX UID"),
+    symbol: Optional[str] = Query(None, description="거래 심볼"),
+    side: Optional[str] = Query(None, description="거래 방향 (long/short)"),
+    close_type: Optional[str] = Query(None, description="청산 유형"),
+    start_date: Optional[str] = Query(None, description="시작 날짜"),
+    end_date: Optional[str] = Query(None, description="종료 날짜"),
+    limit: int = Query(50, ge=1, le=200, description="조회 수"),
+    offset: int = Query(0, ge=0, description="오프셋")
+) -> Dict[str, Any]:
+    """DB에서 거래 기록을 직접 조회합니다."""
+    try:
+        parsed_start = None
+        parsed_end = None
+
+        if start_date:
+            parsed_start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        if end_date:
+            parsed_end = datetime.strptime(end_date, "%Y-%m-%d").date()
+
+        trade_service = get_trade_record_service()
+
+        # 거래 기록 조회
+        trades = await trade_service.get_trades(
+            okx_uid=user_id,
+            symbol=symbol,
+            start_date=parsed_start,
+            end_date=parsed_end,
+            side=side,
+            close_type=close_type,
+            limit=limit,
+            offset=offset
+        )
+
+        # 총 개수 조회
+        total_count = await trade_service.get_trade_count(
+            okx_uid=user_id,
+            symbol=symbol,
+            start_date=parsed_start,
+            end_date=parsed_end
+        )
+
+        return {
+            "status": "success",
+            "data": {
+                "trades": [trade.to_dict() for trade in trades],
+                "pagination": {
+                    "total": total_count,
+                    "limit": limit,
+                    "offset": offset,
+                    "has_more": offset + limit < total_count
+                }
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"거래 기록 조회 실패: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="거래 기록 조회에 실패했습니다.")
