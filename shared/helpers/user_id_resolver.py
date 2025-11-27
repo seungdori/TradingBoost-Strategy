@@ -3,6 +3,9 @@
 
 텔레그램 ID와 OKX UID 간의 변환을 위한 중앙화된 함수들을 제공합니다.
 Redis 클라이언트는 내부적으로 자동으로 관리됩니다.
+
+⚠️ 중요: 이 모듈이 User ID 변환의 Single Source of Truth입니다.
+다른 모듈에서 ID 변환이 필요하면 반드시 이 모듈의 함수를 사용하세요.
 """
 import logging
 from typing import Any, Optional
@@ -11,6 +14,16 @@ from shared.database.redis_helper import get_redis_client
 from shared.database.redis_patterns import scan_keys_pattern
 
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# User ID 상수 정의 - 모든 곳에서 이 기준을 사용해야 합니다
+# ============================================================================
+TELEGRAM_ID_MAX_LENGTH = 11  # 텔레그램 ID: 보통 9-10자리 (최대 11자리)
+OKX_UID_MIN_LENGTH = 15      # OKX UID: 18자리 (최소 15자리로 판단)
+
+# 유효성 검사 범위
+TELEGRAM_ID_MIN_LENGTH = 6   # 텔레그램 ID 최소 길이
+TELEGRAM_ID_MAX_VALUE_LENGTH = 15  # 텔레그램 ID 최대 허용 길이 (유효성 검사용)
 
 
 async def get_okx_uid_from_telegram(telegram_id: str) -> Optional[str]:
@@ -181,8 +194,12 @@ async def resolve_user_identifier(identifier: str) -> str:
     """
     입력된 식별자가 텔레그램 ID인지 OKX UID인지 자동 판단하여 OKX UID를 반환합니다.
 
-    - 11자리 이하 숫자: 텔레그램 ID로 간주하고 OKX UID로 변환 시도
-    - 12자리 이상 숫자: OKX UID로 간주하고 그대로 반환
+    ⚠️ 이 함수가 User ID 변환의 Single Source of Truth입니다.
+    모든 API 라우트에서 이 함수를 사용해야 합니다.
+
+    판단 기준 (상수 사용):
+    - TELEGRAM_ID_MAX_LENGTH(11)자리 이하 숫자: 텔레그램 ID → OKX UID로 변환
+    - 그 외: OKX UID로 간주하고 그대로 반환
 
     Args:
         identifier: 텔레그램 ID 또는 OKX UID
@@ -201,22 +218,26 @@ async def resolve_user_identifier(identifier: str) -> str:
         >>> print(okx_uid)
         "518796558012178692"
     """
-    identifier_str = str(identifier)
+    identifier_str = str(identifier).strip()
 
-    # 11자리 이하이고 숫자인 경우 텔레그램 ID로 간주
-    if len(identifier_str) <= 11 and identifier_str.isdigit():
+    # TELEGRAM_ID_MAX_LENGTH 이하이고 숫자인 경우 텔레그램 ID로 간주
+    if len(identifier_str) <= TELEGRAM_ID_MAX_LENGTH and identifier_str.isdigit():
         okx_uid = await get_okx_uid_from_telegram(identifier_str)
         if okx_uid:
             logger.debug(f"Resolved telegram_id {identifier_str} to okx_uid {okx_uid}")
             return okx_uid
+        else:
+            logger.warning(f"No OKX UID mapping found for telegram_id: {identifier_str}, returning original")
 
     # OKX UID를 찾지 못하거나 12자리 이상인 경우 그대로 반환
     return identifier_str
 
 
-async def is_telegram_id(identifier: str) -> bool:
+def is_telegram_id(identifier: str) -> bool:
     """
     주어진 식별자가 텔레그램 ID 형식인지 확인합니다.
+
+    ⚠️ 동기 함수로 변경됨 - await 없이 사용 가능
 
     Args:
         identifier: 확인할 식별자
@@ -230,13 +251,15 @@ async def is_telegram_id(identifier: str) -> bool:
         >>> is_telegram_id("518796558012178692")
         False
     """
-    identifier_str = str(identifier)
-    return len(identifier_str) <= 11 and identifier_str.isdigit()
+    identifier_str = str(identifier).strip()
+    return len(identifier_str) <= TELEGRAM_ID_MAX_LENGTH and identifier_str.isdigit()
 
 
-async def is_okx_uid(identifier: str) -> bool:
+def is_okx_uid(identifier: str) -> bool:
     """
     주어진 식별자가 OKX UID 형식인지 확인합니다.
+
+    ⚠️ 동기 함수로 변경됨 - await 없이 사용 가능
 
     Args:
         identifier: 확인할 식별자
@@ -250,5 +273,29 @@ async def is_okx_uid(identifier: str) -> bool:
         >>> is_okx_uid("1234567890")
         False
     """
-    identifier_str = str(identifier)
-    return len(identifier_str) > 11 and identifier_str.isdigit()
+    identifier_str = str(identifier).strip()
+    return len(identifier_str) > TELEGRAM_ID_MAX_LENGTH and identifier_str.isdigit()
+
+
+def get_identifier_type(identifier: str) -> str:
+    """
+    식별자의 타입을 반환합니다.
+
+    Args:
+        identifier: 확인할 식별자
+
+    Returns:
+        str: "telegram_id", "okx_uid", 또는 "unknown"
+    """
+    identifier_str = str(identifier).strip()
+
+    if not identifier_str.isdigit():
+        return "unknown"
+
+    if len(identifier_str) <= TELEGRAM_ID_MAX_LENGTH:
+        return "telegram_id"
+    elif len(identifier_str) >= OKX_UID_MIN_LENGTH:
+        return "okx_uid"
+    else:
+        # 12-14자리는 모호한 영역
+        return "unknown"

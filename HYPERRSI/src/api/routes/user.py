@@ -16,7 +16,7 @@ from HYPERRSI.src.utils.uid_manager import (
 from shared.constants.default_settings import DEFAULT_TRADING_SETTINGS
 from shared.database.redis_helper import get_redis_client
 from shared.database.redis_patterns import scan_keys_pattern, redis_context, RedisTimeout
-from shared.helpers.user_id_resolver import get_okx_uid_from_telegram, store_user_id_mapping
+from shared.helpers.user_id_resolver import get_okx_uid_from_telegram, store_user_id_mapping, is_telegram_id
 
 
 # Module-level attribute for backward compatibility
@@ -753,8 +753,8 @@ async def get_telegram_id_from_okx_uid(okx_uid: str):
                     user_key = key.decode() if isinstance(key, bytes) else key
                     user_id = user_key.split(':')[1]
 
-                    # 숫자로 시작하는 텔레그램 ID만 추가 (13자리 미만은 텔레그램 ID)
-                    if user_id.isdigit() and len(user_id) < 13:
+                    # 숫자로 시작하는 텔레그램 ID만 추가 (통합 기준 사용)
+                    if is_telegram_id(user_id):
                         # 최근 활동 시간 확인 (가능한 경우)
                         last_activity = 0
                         try:

@@ -16,6 +16,7 @@ from telegram.request import HTTPXRequest
 
 from shared.database.redis_helper import get_redis_client
 from shared.database.redis_patterns import scan_keys_pattern
+from shared.helpers.user_id_resolver import is_telegram_id, TELEGRAM_ID_MAX_LENGTH
 from shared.logging import get_logger
 
 from .utils import MESSAGE_PROCESSING_FLAG, MESSAGE_QUEUE_KEY
@@ -192,8 +193,8 @@ async def get_telegram_id_from_okx_uid(okx_uid: str) -> Optional[Dict]:
                 user_key = key.decode() if isinstance(key, bytes) else key
                 user_id = user_key.split(':')[1]
 
-                # 숫자로 시작하는 텔레그램 ID만 추가 (13자리 미만은 텔레그램 ID)
-                if user_id.isdigit() and len(user_id) < 13:
+                # 숫자로 시작하는 텔레그램 ID만 추가 (통합 기준: TELEGRAM_ID_MAX_LENGTH 이하)
+                if is_telegram_id(user_id):
                     # 최근 활동 시간 확인 (가능한 경우)
                     last_activity = 0
                     try:
@@ -265,16 +266,12 @@ async def get_identifier(user_id: str) -> str:
 
     Returns:
         str: OKX UID
+
+    Note:
+        이 함수는 shared.helpers.user_id_resolver.resolve_user_identifier()를 권장합니다.
     """
-    # 13자리 미만이면 텔레그램 ID로 간주하고 변환
-    if len(str(user_id)) < 13:
-        okx_uid = await get_okx_uid_from_telegram_id(user_id)
-        if not okx_uid:
-            logger.error(f"텔레그램 ID {user_id}에 대한 OKX UID를 찾을 수 없습니다")
-            return str(user_id)  # 변환 실패 시 원래 ID 반환
-        return okx_uid
-    # 13자리 이상이면 이미 OKX UID로 간주
-    return str(user_id)
+    from shared.helpers.user_id_resolver import resolve_user_identifier
+    return await resolve_user_identifier(str(user_id))
 
 
 async def process_telegram_messages(user_id: str):

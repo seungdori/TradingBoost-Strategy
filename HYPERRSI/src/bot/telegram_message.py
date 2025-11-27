@@ -18,6 +18,7 @@ from shared.database.redis_helper import get_redis_client  # Legacy - deprecated
 from shared.database.redis_patterns import redis_context, RedisTimeout
 from shared.database.redis_migration import get_redis_context
 from shared.helpers.user_id_converter import get_telegram_id_from_uid
+from shared.helpers.user_id_resolver import is_telegram_id, resolve_user_identifier
 from shared.notifications.telegram import should_send_error_notification
 
 # Dynamic redis_client access
@@ -643,11 +644,11 @@ async def send_telegram_message(message, okx_uid, debug=False, error=False, imme
     """
     logger.info(f"[send_telegram_message] 호출됨 - okx_uid: {okx_uid}, debug: {debug}, error: {error}, immediate: {immediate}")
 
-    # 만약 okx_uid가 텔레그램 ID인 경우 (13자리 미만) OKX UID로 변환 시도
-    if len(str(okx_uid)) < 13:
+    # 만약 okx_uid가 텔레그램 ID인 경우 OKX UID로 변환 시도
+    if is_telegram_id(str(okx_uid)):
         logger.info(f"[send_telegram_message] 텔레그램 ID {okx_uid} 감지, OKX UID로 변환 시도")
-        converted_okx_uid = await get_okx_uid_from_telegram_id(str(okx_uid))
-        if converted_okx_uid:
+        converted_okx_uid = await resolve_user_identifier(str(okx_uid))
+        if converted_okx_uid != str(okx_uid):
             logger.info(f"[send_telegram_message] 변환 성공: {okx_uid} -> {converted_okx_uid}")
             okx_uid = converted_okx_uid
         else:

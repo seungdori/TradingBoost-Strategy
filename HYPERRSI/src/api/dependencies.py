@@ -5,10 +5,10 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from datetime import timedelta
-from typing import Optional, TYPE_CHECKING
+from typing import Annotated, Optional, TYPE_CHECKING
 
 import ccxt.async_support as ccxt
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException, Path
 
 from shared.database.redis_helper import get_redis_client as get_async_redis_client
 
@@ -58,38 +58,31 @@ async def resolve_user_id_to_okx_uid(user_id: str) -> str:
     """
     user_id가 telegram_id인 경우 OKX UID로 변환합니다.
 
+    ⚠️ 이 함수는 shared.helpers.user_id_resolver.resolve_user_identifier의 래퍼입니다.
+    실제 변환 로직은 user_id_resolver 모듈에서 통합 관리됩니다.
+
     Args:
         user_id: 사용자 ID (telegram_id 또는 OKX UID)
 
     Returns:
         str: OKX UID (변환 실패 시 원본 user_id 반환)
     """
-    from shared.database.redis import get_redis_binary
+    from shared.helpers.user_id_resolver import resolve_user_identifier
 
-    # telegram_id 판단: 숫자이고 13자리 이하
-    if user_id.isdigit() and len(user_id) <= 13:
-        try:
-            redis_client = await get_redis_binary()
-            okx_uid = await redis_client.get(f"user:{user_id}:okx_uid")
-            if okx_uid:
-                resolved_uid = okx_uid.decode('utf-8') if isinstance(okx_uid, bytes) else okx_uid
-                logger.debug(f"Resolved telegram_id {user_id} to OKX UID: {resolved_uid}")
-                return resolved_uid
-            else:
-                logger.warning(f"OKX UID not found for telegram_id {user_id}, using original ID")
-        except Exception as e:
-            logger.warning(f"Failed to resolve telegram_id {user_id}: {e}")
-            # errordb 로깅 (WARNING 레벨)
-            from HYPERRSI.src.utils.error_logger import log_error_to_db
-            log_error_to_db(
-                error=e,
-                error_type="UserIdResolutionError",
-                user_id=user_id,
-                severity="WARNING",
-                metadata={"component": "dependencies.resolve_user_id_to_okx_uid"}
-            )
-
-    return user_id
+    try:
+        return await resolve_user_identifier(user_id)
+    except Exception as e:
+        logger.warning(f"Failed to resolve user_id {user_id}: {e}")
+        # errordb 로깅 (WARNING 레벨)
+        from HYPERRSI.src.utils.error_logger import log_error_to_db
+        log_error_to_db(
+            error=e,
+            error_type="UserIdResolutionError",
+            user_id=user_id,
+            severity="WARNING",
+            metadata={"component": "dependencies.resolve_user_id_to_okx_uid"}
+        )
+        return user_id
 
 
 class ExchangeConnectionPool:
@@ -594,3 +587,48 @@ async def invalidate_exchange_client(user_id: str):
             # pool 제거
             pool.pools.pop(resolved_user_id)
             logger.info(f"Invalidated exchange client pool for user {user_id} (resolved: {resolved_user_id})")
+
+
+# ============================================================================
+# FastAPI Dependency Injection - User ID 자동 변환
+# ============================================================================
+
+async def get_resolved_okx_uid(
+    user_id: str = Path(..., description="사용자 ID (텔레그램 ID 또는 OKX UID)")
+) -> str:
+    """
+    FastAPI Dependency: Path 파라미터의 user_id를 자동으로 OKX UID로 변환합니다.
+
+    사용 예시:
+        @router.get("/{user_id}/positions")
+        async def get_positions(okx_uid: ResolvedOkxUid):
+            # okx_uid는 이미 변환된 OKX UID
+            ...
+
+    Args:
+        user_id: Path 파라미터로 받은 사용자 ID
+
+    Returns:
+        str: OKX UID
+    """
+    return await resolve_user_id_to_okx_uid(user_id)
+
+
+async def get_resolved_okx_uid_from_query(
+    user_id: str
+) -> str:
+    """
+    FastAPI Dependency: Query 파라미터의 user_id를 자동으로 OKX UID로 변환합니다.
+
+    Args:
+        user_id: Query 파라미터로 받은 사용자 ID
+
+    Returns:
+        str: OKX UID
+    """
+    return await resolve_user_id_to_okx_uid(user_id)
+
+
+# 타입 별칭 정의 - 라우트에서 사용
+ResolvedOkxUid = Annotated[str, Depends(get_resolved_okx_uid)]
+ResolvedOkxUidQuery = Annotated[str, Depends(get_resolved_okx_uid_from_query)]

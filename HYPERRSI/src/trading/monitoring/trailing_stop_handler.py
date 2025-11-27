@@ -32,6 +32,54 @@ logger = get_logger(__name__)
 MIN_TRAILING_OFFSET_PERCENT = 0.1
 
 
+async def cancel_remaining_trigger_orders(user_id: str, symbol: str, direction: str):
+    """
+    포지션 종료 후 잔여 트리거 주문(SL/TP)을 취소합니다.
+
+    Args:
+        user_id: 사용자 ID (OKX UID)
+        symbol: 심볼 (예: BTC-USDT-SWAP)
+        direction: 포지션 방향 (long/short)
+    """
+    try:
+        from HYPERRSI.src.api.dependencies import get_user_api_keys
+        from HYPERRSI.src.trading.cancel_trigger_okx import TriggerCancelClient
+
+        # API 키 가져오기
+        api_keys = await get_user_api_keys(str(user_id))
+        if not api_keys:
+            logger.warning(f"[{user_id}] 트리거 주문 취소 실패: API 키를 찾을 수 없음")
+            return
+
+        client = TriggerCancelClient(
+            api_key=api_keys['api_key'],
+            secret_key=api_keys['api_secret'],
+            passphrase=api_keys['passphrase']
+        )
+
+        # 트리거 주문 취소 (direction 기준으로 해당 방향의 청산 주문 취소)
+        # long 포지션의 SL은 sell 주문, short 포지션의 SL은 buy 주문
+        result = await client.cancel_all_trigger_orders(
+            inst_id=symbol,
+            side=direction,  # long/short을 넘기면 내부에서 반대 방향 주문을 찾아 취소
+            algo_type="trigger",
+            user_id=str(user_id)
+        )
+
+        if result and result.get('code') == '0':
+            cancelled_count = len(result.get('data', []))
+            if cancelled_count > 0:
+                logger.info(f"✅ [{user_id}] {symbol} {direction} 잔여 트리거 주문 {cancelled_count}건 취소 완료")
+            else:
+                logger.debug(f"[{user_id}] {symbol} {direction} 취소할 트리거 주문 없음")
+        else:
+            logger.warning(f"[{user_id}] 트리거 주문 취소 응답: {result}")
+
+    except Exception as e:
+        logger.error(f"[{user_id}] 잔여 트리거 주문 취소 중 오류: {str(e)}")
+        traceback.print_exc()
+
+
 # Module-level attribute for backward compatibility
 def __getattr__(name):
     if name == "redis_client":
@@ -456,9 +504,6 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
         trailing_offset = float(ts_data.get("trailing_offset", 0))
         contracts_amount = float(ts_data.get("contracts_amount", 0))
         
-        # 트레일링 스탑 업데이트 여부
-        updated = False
-        
         if direction == "long":
             highest_price = float(ts_data.get("highest_price", 0))
             
@@ -485,14 +530,12 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                             logger.warning(f"포지션 데이터가 해시 타입이 아니라 SL 가격 업데이트를 건너뜁니다. (key: {position_key})")
                     except Exception as redis_error:
                         logger.error(f"포지션 SL 가격 업데이트 중 오류: {str(redis_error)}")
-                
-                updated = True
-                
+
                 # 1시간에 한 번 정도만 SL 주문 업데이트 (너무 잦은 업데이트 방지)
                 # 마지막 SL 업데이트 시간 확인
                 last_sl_update = float(ts_data.get("last_sl_update", "0"))
                 current_time = datetime.now().timestamp()
-                
+
                 if current_time - last_sl_update > 3600:  # 1시간(3600초) 간격
                     # SL 주문 API 업데이트
                     from .break_even_handler import move_sl_to_break_even
@@ -503,11 +546,11 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                         break_even_price=trailing_stop_price,
                         contracts_amount=contracts_amount,
                         tp_index=0
-                    ))  
-                    
+                    ))
+
                     # 마지막 SL 업데이트 시간 기록
                     await redis.hset(trailing_key, "last_sl_update", str(current_time))
-                
+
                 logger.info(f"트레일링 스탑 업데이트 (롱) - 사용자:{okx_uid}, 심볼:{symbol}, "
                            f"새 최고가:{highest_price:.2f}, 새 스탑:{trailing_stop_price:.2f}")
 
@@ -539,13 +582,16 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                 return False
                 
             if current_price <= trailing_stop_price:
-                # 🔒 중복 처리 방지: 먼저 status를 triggered로 설정
-                await redis.hset(trailing_key, "status", "triggered")
+                # 🔒 중복 처리 방지: HSETNX를 사용하여 atomic하게 체크
+                # 이미 triggered 상태이면 설정하지 않고 False 반환
+                was_set = await redis.hsetnx(trailing_key, "status", "triggered")
+                if not was_set:
+                    # 이미 triggered 상태 - 다른 프로세스가 처리 중
+                    logger.debug(f"트레일링 스탑 이미 처리 중 (long), 스킵: {trailing_key}")
+                    return False
+
                 await redis.hset(trailing_key, "trigger_price", str(current_price))
                 await redis.hset(trailing_key, "trigger_time", str(int(datetime.now().timestamp())))
-
-                # 트레일링 스탑 알림
-                await send_telegram_message(f"⚠️ 트레일링 스탑 가격({trailing_stop_price:.2f}) 도달\n"f"━━━━━━━━━━━━━━━\n"f"현재가: {current_price:.2f}\n"f"포지션: {symbol} {direction.upper()}\n"f"트레일링 오프셋: {trailing_offset:.2f}",okx_uid)
 
                 try:
                     # Lazy import to avoid circular dependency
@@ -553,15 +599,15 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
 
                     # 먼저 포지션이 실제로 존재하는지 확인
                     position_exists, _ = await check_position_exists(okx_uid, symbol, direction)
-                    
+
                     if not position_exists:
                         logger.info(f"트레일링 스탑 실행 중지 - 포지션이 이미 종료됨: {symbol} {direction}")
                         await clear_trailing_stop(okx_uid, symbol, direction)
                         return False
-                        
-                    # 포지션이 존재하는 경우에만 종료 시도
+
+                    # 포지션이 존재하는 경우에만 종료 시도 (await로 결과 대기)
                     close_request = ClosePositionRequest(close_type='market', price=current_price, close_percent=100.0)
-                    asyncio.create_task(close_position(symbol=symbol, close_request=close_request, user_id=okx_uid, side=direction))
+                    await close_position(symbol=symbol, close_request=close_request, user_id=okx_uid, side=direction)
 
                     # tp_trigger_type이 existing_position인 경우 헷지도 종료
                     from HYPERRSI.src.trading.dual_side_entry import close_hedge_on_main_exit
@@ -571,18 +617,36 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                         main_position_side=direction,
                         exit_reason="trailing_stop"
                     ))
+
+                    # ✅ 포지션 종료 성공 후 잔여 트리거 주문(SL/TP) 취소
+                    asyncio.create_task(cancel_remaining_trigger_orders(okx_uid, symbol, direction))
+
+                    # ✅ 포지션 종료 성공 후에만 알림 전송 (1회만)
+                    await send_telegram_message(
+                        f"🔔 트레일링 스탑 실행 완료\n"
+                        f"━━━━━━━━━━━━━━━\n"
+                        f"심볼: {symbol}\n"
+                        f"방향: {direction.upper()}\n"
+                        f"트리거 가격: {trailing_stop_price:.2f}\n"
+                        f"체결 가격: {current_price:.2f}\n"
+                        f"트레일링 오프셋: {trailing_offset:.2f}",
+                        okx_uid
+                    )
+
                 except Exception as e:
                     # 포지션을 찾을 수 없는 경우 (404 에러)
                     if "활성화된 포지션을 찾을 수 없습니다" in str(e) or "지정한 방향" in str(e) or "종료할 포지션이 없습니다" in str(e):
                         logger.info(f"트레일링 스탑 실행 중 - 포지션이 이미 종료됨: {symbol} {direction}")
+                        # 포지션이 이미 종료되어도 잔여 트리거 주문은 취소
+                        asyncio.create_task(cancel_remaining_trigger_orders(okx_uid, symbol, direction))
                     else:
                         # 다른 오류는 기존대로 처리
                         logger.error(f"포지션 종료 중 오류: {str(e)}")
                         traceback.print_exc()
-                    
+
                     await clear_trailing_stop(okx_uid, symbol, direction)
                     return False
-                
+
                 await clear_trailing_stop(okx_uid, symbol, direction)
 
                 # 트레일링 스탑 실행 로깅
@@ -638,14 +702,12 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                             logger.warning(f"포지션 데이터가 해시 타입이 아니라 SL 가격 업데이트를 건너뜁니다. (key: {position_key})")
                     except Exception as redis_error:
                         logger.error(f"포지션 SL 가격 업데이트 중 오류: {str(redis_error)}")
-                
-                updated = True
-                
+
                 # 1시간에 한 번 정도만 SL 주문 업데이트 (너무 잦은 업데이트 방지)
                 # 마지막 SL 업데이트 시간 확인
                 last_sl_update = float(ts_data.get("last_sl_update", "0"))
                 current_time = datetime.now().timestamp()
-                
+
                 if current_time - last_sl_update > 3600:  # 1시간(3600초) 간격
                     # SL 주문 API 업데이트
                     from .break_even_handler import move_sl_to_break_even
@@ -657,10 +719,10 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                         contracts_amount=contracts_amount,
                         tp_index=0
                     ))
-                    
+
                     # 마지막 SL 업데이트 시간 기록
                     await redis.hset(trailing_key, "last_sl_update", str(current_time))
-                
+
                 logger.info(f"트레일링 스탑 업데이트 (숏) - 사용자:{user_id}, 심볼:{symbol}, "
                            f"새 최저가:{lowest_price:.2f}, 새 스탑:{trailing_stop_price:.2f}")
 
@@ -686,20 +748,16 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
             # 현재가가 트레일링 스탑 가격 위로 올라갔는지 체크 (종료 조건)
             trailing_stop_price = float(ts_data.get("trailing_stop_price", float('inf')))
             if current_price >= trailing_stop_price:
-                # 🔒 중복 처리 방지: 먼저 status를 triggered로 설정
-                await redis.hset(trailing_key, "status", "triggered")
+                # 🔒 중복 처리 방지: 먼저 status를 triggered로 설정하고 atomic하게 체크
+                # HSETNX를 사용하여 이미 triggered 상태이면 설정하지 않음
+                was_set = await redis.hsetnx(trailing_key, "status", "triggered")
+                if not was_set:
+                    # 이미 triggered 상태 - 다른 프로세스가 처리 중
+                    logger.debug(f"트레일링 스탑 이미 처리 중 (short), 스킵: {trailing_key}")
+                    return False
+
                 await redis.hset(trailing_key, "trigger_price", str(current_price))
                 await redis.hset(trailing_key, "trigger_time", str(int(datetime.now().timestamp())))
-
-                # 트레일링 스탑 알림 (await로 동기 실행)
-                await send_telegram_message(
-                    f"⚠️ 트레일링 스탑 가격({trailing_stop_price:.2f}) 도달\n"
-                    f"━━━━━━━━━━━━━━━\n"
-                    f"현재가: {current_price:.2f}\n"
-                    f"포지션: {symbol} {direction.upper()}\n"
-                    f"트레일링 오프셋: {trailing_offset:.2f}",
-                    user_id
-                )
 
                 try:
                     # Lazy import to avoid circular dependency
@@ -725,10 +783,28 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                         main_position_side=direction,
                         exit_reason="trailing_stop"
                     ))
+
+                    # ✅ 포지션 종료 성공 후 잔여 트리거 주문(SL/TP) 취소
+                    asyncio.create_task(cancel_remaining_trigger_orders(user_id, symbol, direction))
+
+                    # ✅ 포지션 종료 성공 후에만 알림 전송 (1회만)
+                    await send_telegram_message(
+                        f"🔔 트레일링 스탑 실행 완료\n"
+                        f"━━━━━━━━━━━━━━━\n"
+                        f"심볼: {symbol}\n"
+                        f"방향: {direction.upper()}\n"
+                        f"트리거 가격: {trailing_stop_price:.2f}\n"
+                        f"체결 가격: {current_price:.2f}\n"
+                        f"트레일링 오프셋: {trailing_offset:.2f}",
+                        user_id
+                    )
+
                 except Exception as e:
                     # 포지션을 찾을 수 없는 경우 (404 에러)
                     if "활성화된 포지션을 찾을 수 없습니다" in str(e) or "지정한 방향" in str(e) or "종료할 포지션이 없습니다" in str(e):
                         logger.info(f"트레일링 스탑 실행 중 - 포지션이 이미 종료됨: {symbol} {direction}")
+                        # 포지션이 이미 종료되어도 잔여 트리거 주문은 취소
+                        asyncio.create_task(cancel_remaining_trigger_orders(user_id, symbol, direction))
                     else:
                         # 다른 오류는 기존대로 처리
                         logger.error(f"포지션 종료 중 오류: {str(e)}")
@@ -765,7 +841,7 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                     logger.error(f"트레일링 스탑 로깅 실패: {str(e)}")
 
                 return True  # 트레일링 스탑 조건 충족
-        
+
         return False  # 트레일링 스탑 조건 미충족
         
     except Exception as e:

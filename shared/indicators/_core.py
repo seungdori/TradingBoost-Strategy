@@ -133,6 +133,60 @@ def resample_candles(candles, target_minutes, is_backtest=True):
     return result
 
 
+def resample_candles_raw(candles, target_minutes):
+    """
+    캔들을 더 높은 타임프레임으로 리샘플링 (forward fill 없이, 실제 MTF 캔들만 반환)
+
+    Pine Script에서 상위 타임프레임으로 MA를 계산할 때 사용합니다.
+    이 함수는 실제 리샘플링된 캔들만 반환합니다 (원본보다 짧은 길이).
+
+    Args:
+        candles: 캔들 리스트
+        target_minutes: 목표 타임프레임 (분)
+
+    Returns:
+        리샘플링된 캔들 리스트 (실제 MTF 캔들 수)
+    """
+    if not candles or target_minutes <= 0:
+        return candles
+
+    resampled = []
+    current_group = []
+    current_start_ts = None
+    target_seconds = target_minutes * 60
+
+    for candle in candles:
+        ts = candle["timestamp"]
+        if isinstance(ts, str):
+            dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+            ts_seconds = int(dt.timestamp())
+        elif isinstance(ts, datetime):
+            ts_seconds = int(ts.timestamp())
+        else:
+            ts_seconds = int(ts)
+
+        group_start = (ts_seconds // target_seconds) * target_seconds
+
+        if current_start_ts is None:
+            current_start_ts = group_start
+
+        if group_start > current_start_ts:
+            if current_group:
+                resampled_candle = _aggregate_candles(current_group)
+                resampled.append(resampled_candle)
+            current_group = [candle]
+            current_start_ts = group_start
+        else:
+            current_group.append(candle)
+
+    # 마지막 그룹 처리
+    if current_group:
+        resampled_candle = _aggregate_candles(current_group)
+        resampled.append(resampled_candle)
+
+    return resampled
+
+
 def _aggregate_candles(candles):
     """
     캔들 그룹을 OHLCV로 집계

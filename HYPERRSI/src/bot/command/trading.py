@@ -7,7 +7,7 @@ import time
 import traceback
 from datetime import datetime
 from typing import Any, Dict, Optional
-
+import asyncio
 import aiohttp
 import ccxt.async_support as ccxt
 import httpx
@@ -22,6 +22,7 @@ from HYPERRSI.src.trading.trading_service import round_to_tick_size
 from HYPERRSI.src.services.multi_symbol_service import multi_symbol_service
 from shared.config import settings as app_settings
 from shared.database.redis_helper import get_redis_client
+from shared.helpers.user_id_resolver import is_telegram_id
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -79,8 +80,8 @@ async def get_telegram_id(identifier: str) -> Optional[int]:
     Returns:
         Optional[int]: 텔레그램 ID
     """
-    # 13자리 미만이면 telegram_id로 간주
-    if len(identifier) < 13:
+    # 통합 기준 사용: telegram_id 여부 확인
+    if is_telegram_id(identifier):
         return int(identifier)
 
     # 13자리 이상이면 okx_uid로 간주하고 텔레그램 ID 조회
@@ -364,7 +365,6 @@ async def trade_command(message: types.Message) -> None:
 
         max_symbols = app_settings.MAX_SYMBOLS_PER_USER
         status_text += f"─────────────────────\n"
-        status_text += f"📈 활성: {len(active_symbols_info)}/{max_symbols}개\n\n"
         status_text += "원하시는 작업을 선택해주세요:"
 
         # 버튼 구성
@@ -2277,7 +2277,6 @@ async def handle_multi_back_to_main(callback: types.CallbackQuery) -> None:
 
         max_symbols = app_settings.MAX_SYMBOLS_PER_USER
         status_text += f"─────────────────────\n"
-        status_text += f"📈 활성: {len(active_symbols_info)}/{max_symbols}개\n\n"
         status_text += "원하시는 작업을 선택해주세요:"
 
         # 버튼 구성

@@ -597,16 +597,21 @@ async def process_break_even_settings(user_id: str, symbol: str, order_type: str
         # TP 체결 시 트레일링 스탑 활성화 여부 확인 (사용자 설정에 따라)
         # 문자열과 불리언 모두 처리
         trailing_stop_active = is_true_value(settings.get('trailing_stop_active', False))
-        
+
         # 문자열 값 처리
         trailing_start_point = str(settings.get('trailing_start_point', 'tp3')).lower()
         current_tp = f"tp{tp_level}"
-        print(f"TRAILING START POIN : {trailing_start_point}, CURRENT TP: {current_tp}")
-        
+        logger.info(f"[트레일링스탑 체크] trailing_stop_active: {trailing_stop_active}, trailing_start_point: {trailing_start_point}, current_tp: {current_tp}")
+
         # 사용자 설정의 시작점에 도달했는지 확인
         if trailing_stop_active and current_tp.lower() == trailing_start_point:
-            logger.info(f"{current_tp.upper()} 체결: 트레일링 스탑 활성화 조건 충족")
+            logger.info(f"✅ {current_tp.upper()} 체결: 트레일링 스탑 활성화 조건 충족! activate_trailing_stop 호출")
             asyncio.create_task(activate_trailing_stop(user_id, symbol, position_side, full_position_data, tp_data))
+        else:
+            if not trailing_stop_active:
+                logger.debug(f"❌ 트레일링 스탑 비활성화 상태 (trailing_stop_active={trailing_stop_active})")
+            elif current_tp.lower() != trailing_start_point:
+                logger.debug(f"❌ 트레일링 스탑 시작점 미도달 (current: {current_tp}, start_point: {trailing_start_point})")
         
         return False
     except Exception as e:

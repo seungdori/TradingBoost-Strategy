@@ -17,7 +17,7 @@ from HYPERRSI.src.core.models.preset import (
 )
 from HYPERRSI.src.services.preset_service import preset_service
 from shared.logging import get_logger
-from shared.helpers.user_id_resolver import get_okx_uid_from_telegram
+from shared.helpers.user_id_resolver import resolve_user_identifier
 
 logger = get_logger(__name__)
 
@@ -28,13 +28,11 @@ async def resolve_okx_uid(user_id: str) -> str:
     """
     user_id를 okx_uid로 변환.
     telegram_id인 경우 okx_uid로 변환 시도.
+
+    Note:
+        이 함수는 shared.helpers.user_id_resolver.resolve_user_identifier()를 사용합니다.
     """
-    # 길이가 짧으면 telegram_id로 간주
-    if not user_id.isdigit() or len(user_id) < 13:
-        okx_uid = await get_okx_uid_from_telegram(user_id)
-        if okx_uid:
-            return okx_uid
-    return user_id
+    return await resolve_user_identifier(user_id)
 
 
 @router.post(

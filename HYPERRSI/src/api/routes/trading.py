@@ -21,7 +21,12 @@ from shared.config import settings as app_settings
 from shared.database.redis_helper import get_redis_client
 from shared.database.redis_patterns import scan_keys_pattern, redis_context, RedisTimeout
 from shared.database.redis_helpers import safe_ping
-from shared.helpers.user_id_resolver import get_okx_uid_from_telegram, get_telegram_id_from_okx_uid
+from shared.helpers.user_id_resolver import (
+    get_okx_uid_from_telegram,
+    get_telegram_id_from_okx_uid,
+    is_telegram_id,
+    resolve_user_identifier,
+)
 from shared.logging import get_logger
 
 # 로거 설정
@@ -238,18 +243,11 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
             )
             raise HTTPException(status_code=500, detail=f"Redis 연결 오류: {str(redis_error)}")
 
-        # telegram_id인지 okx_uid인지 확인
-        is_telegram_id = not okx_uid.isdigit() or len(okx_uid) < 13
-        telegram_id = okx_uid if is_telegram_id else None
+        # 통합 resolver를 사용하여 okx_uid로 변환
+        original_id = okx_uid
+        okx_uid = await resolve_user_identifier(okx_uid)
 
-        # telegram_id인 경우 okx_uid로 변환 시도
-        if is_telegram_id:
-            okx_uid_from_telegram = await get_okx_uid_from_telegram(okx_uid)
-            if okx_uid_from_telegram:
-                okx_uid = okx_uid_from_telegram
-                is_telegram_id = False
-
-    
+        # telegram_id 조회 (알림 발송용)
         telegram_id = await get_telegram_id_from_okx_uid(okx_uid, TimescaleUserService)
 
         # API 키 확인 및 업데이트
@@ -780,11 +778,16 @@ curl -X POST "http://localhost:8000/trading/stop" \\
         }
     }
 )
-async def stop_trading(request: Request, user_id: Optional[str] = Query(None, description="사용자 ID (OKX UID 또는 텔레그램 ID)")):
+async def stop_trading(
+    request: Request,
+    user_id: Optional[str] = Query(None, description="사용자 ID (OKX UID 또는 텔레그램 ID)"),
+    symbol: Optional[str] = Query(None, description="중지할 심볼 (멀티심볼 모드)")
+):
     try:
-        symbol = None
+        # symbol은 쿼리 파라미터로 받은 값 사용 (None일 수 있음)
+        target_symbol = symbol  # 쿼리 파라미터로 받은 심볼
         okx_uid = None
-        print("⭐️user_id: ", user_id)
+        print(f"⭐️user_id: {user_id}, symbol: {symbol}")
         # 1. 쿼리 파라미터에서 user_id 확인
         if user_id:
             okx_uid = user_id
@@ -802,31 +805,21 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
         # 3. 필수 파라미터 확인
         if not okx_uid:
             raise HTTPException(status_code=400, detail="user_id 또는 okx_uid가 필요합니다.")
-        print("⭐️okx_uid444: ", okx_uid)
         logger.info(f"사용자 {okx_uid}의 트레이딩 태스크 중지 시도")
-        
-        # 텔레그램 ID인지 OKX UID인지 확인
-        is_telegram_id = not okx_uid.isdigit() or len(okx_uid) < 13
 
-        # 텔레그램 ID인 경우 OKX UID로 변환 시도
-        telegram_id = okx_uid if is_telegram_id else None
-        if is_telegram_id:
-            okx_uid_from_telegram = await get_okx_uid_from_telegram(okx_uid)
-            if okx_uid_from_telegram:
-                okx_uid = okx_uid_from_telegram
-                is_telegram_id = False
-        else:
-            # OKX UID인 경우 텔레그램 ID 찾기 (선택 사항)
-            try:
-                telegram_id = await get_telegram_id_from_okx_uid(okx_uid, TimescaleUserService)
-            except Exception as e:
-                logger.debug(f"텔레그램 ID 조회 실패 (무시됨): {str(e)}")
+        # 통합 resolver를 사용하여 okx_uid로 변환
+        original_id = okx_uid
+        okx_uid = await resolve_user_identifier(okx_uid)
+
+        # telegram_id 조회 (알림 발송용)
+        telegram_id = None
+        try:
+            telegram_id = await get_telegram_id_from_okx_uid(okx_uid, TimescaleUserService)
+        except Exception as e:
+            logger.debug(f"텔레그램 ID 조회 실패 (무시됨): {str(e)}")
         
         # 멀티심볼 모드: 심볼별 상태 관리
-        # stop_trading은 모든 심볼을 중지하므로, 모든 active_symbols를 stopped로 변경
-        # TODO: 향후 특정 심볼만 중지하는 기능 추가 필요
-
-        # active_symbols 조회
+        # target_symbol이 지정되면 해당 심볼만, 아니면 모든 심볼 중지
         from HYPERRSI.src.services.multi_symbol_service import multi_symbol_service
         active_symbols = await multi_symbol_service.get_active_symbols(okx_uid)
 
@@ -837,11 +830,27 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
                 "message": "트레이딩이 이미 중지되어 있습니다."
             }
 
-        # 모든 활성 심볼의 상태를 stopped로 변경
-        for symbol in active_symbols:
-            symbol_status_key = f"user:{okx_uid}:symbol:{symbol}:status"
+        # 중지할 심볼 결정: target_symbol이 지정되면 해당 심볼만, 아니면 모든 심볼
+        if target_symbol:
+            # 특정 심볼만 중지
+            if target_symbol not in active_symbols:
+                logger.warning(f"사용자 {okx_uid}의 심볼 {target_symbol}이 활성 상태가 아닙니다.")
+                return {
+                    "status": "success",
+                    "message": f"{target_symbol}은(는) 이미 중지되어 있습니다."
+                }
+            symbols_to_stop = [target_symbol]
+            logger.info(f"[{okx_uid}] 특정 심볼 중지 요청: {target_symbol}")
+        else:
+            # 모든 심볼 중지
+            symbols_to_stop = active_symbols
+            logger.info(f"[{okx_uid}] 전체 심볼 중지 요청: {active_symbols}")
+
+        # 선택된 심볼의 상태를 stopped로 변경
+        for sym in symbols_to_stop:
+            symbol_status_key = f"user:{okx_uid}:symbol:{sym}:status"
             await get_redis_client().set(symbol_status_key, "stopped")
-            logger.info(f"심볼 {symbol}의 트레이딩 상태를 stopped로 변경했습니다.")
+            logger.info(f"심볼 {sym}의 트레이딩 상태를 stopped로 변경했습니다.")
         
         # 종료 신호 설정
         if telegram_id:
@@ -874,37 +883,37 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
         else:
             logger.warning(f"태스크 ID를 찾을 수 없습니다 (user_id: {okx_uid})")
             
-        # 선호도 정보에서 심볼과 타임프레임 가져오기
+        # 선호도 정보에서 타임프레임 가져오기 (락 해제용)
+        # 심볼은 쿼리 파라미터(target_symbol) 또는 symbols_to_stop 사용
+        timeframe = None
         try:
             if telegram_id:
                 preference_key = f"user:{telegram_id}:preferences"
-                symbol = await get_redis_client().hget(preference_key, "symbol")
                 timeframe = await get_redis_client().hget(preference_key, "timeframe")
-                
-            if not symbol or not timeframe:
+
+            if not timeframe:
                 preference_key = f"user:{okx_uid}:preferences"
-                symbol = await get_redis_client().hget(preference_key, "symbol")
                 timeframe = await get_redis_client().hget(preference_key, "timeframe")
-                
-            # 1. 사용자 락(lock) 해제
-            if symbol and timeframe:
-                lock_key = f"lock:user:{okx_uid}:{symbol}:{timeframe}"
-                try:
-                    lock_exists = await get_redis_client().exists(lock_key)
-                    if lock_exists:
-                        logger.info(f"[{okx_uid}] 락 해제: {symbol}/{timeframe}")
-                        await get_redis_client().delete(lock_key)
-                except Exception as lock_err:
-                    logger.warning(f"[{okx_uid}] 락 삭제 중 오류 (무시됨): {str(lock_err)}")
-                
-            # 2. 쿨다운 키 해제 (long/short 모두)
-            if symbol:
+
+            # 1. 중지할 심볼들에 대해 락(lock) 해제
+            for sym in symbols_to_stop:
+                if timeframe:
+                    lock_key = f"lock:user:{okx_uid}:{sym}:{timeframe}"
+                    try:
+                        lock_exists = await get_redis_client().exists(lock_key)
+                        if lock_exists:
+                            logger.info(f"[{okx_uid}] 락 해제: {sym}/{timeframe}")
+                            await get_redis_client().delete(lock_key)
+                    except Exception as lock_err:
+                        logger.warning(f"[{okx_uid}] 락 삭제 중 오류 (무시됨): {str(lock_err)}")
+
+                # 2. 쿨다운 키 해제 (long/short 모두)
                 for direction in ["long", "short"]:
-                    cooldown_key = f"user:{okx_uid}:cooldown:{symbol}:{direction}"
+                    cooldown_key = f"user:{okx_uid}:cooldown:{sym}:{direction}"
                     try:
                         cooldown_exists = await get_redis_client().exists(cooldown_key)
                         if cooldown_exists:
-                            logger.info(f"[{okx_uid}] 쿨다운 해제: {symbol}/{direction}")
+                            logger.info(f"[{okx_uid}] 쿨다운 해제: {sym}/{direction}")
                             await get_redis_client().delete(cooldown_key)
                     except Exception as cooldown_err:
                         logger.warning(f"[{okx_uid}] 쿨다운 삭제 중 오류 (무시됨): {str(cooldown_err)}")
@@ -915,10 +924,11 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
         try:
             # telegram_id가 있으면 우선 사용, 없으면 okx_uid 사용
             recipient_id = telegram_id if telegram_id else okx_uid
+            stopped_symbols_str = ", ".join(symbols_to_stop)
             await send_telegram_message(
                 f" 트레이딩이 중지되었습니다.\n\n"
-                f"심볼: {symbol if symbol else '알 수 없음'}\n"
-                f"타임프레임: {timeframe if timeframe else '알 수 없음'}", 
+                f"심볼: {stopped_symbols_str}\n"
+                f"타임프레임: {timeframe if timeframe else '알 수 없음'}",
                 recipient_id
             )
             logger.info(f"사용자 {okx_uid}에게 트레이딩 중지 메시지 전송 완료")
@@ -960,51 +970,49 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
 
             # 핵심 키 목록 (텔레그램 ID와 OKX UID 모두)
             keys_to_delete = []
-            
+
             # 태스크 ID, 중지 신호, 태스크 실행 상태 키 삭제
             if telegram_id:
                 keys_to_delete.extend([
                     f"user:{telegram_id}:task_id",
                     f"user:{telegram_id}:stop_signal"
                 ])
-                
+
             keys_to_delete.extend([
                 f"user:{okx_uid}:task_id",
                 f"user:{okx_uid}:stop_signal",
                 f"user:{okx_uid}:task_running"
             ])
-            
-            # 포지션 관련 키는 심볼이 있는 경우에만 삭제
-            if symbol:
+
+            # 중지할 심볼들에 대해 쿨다운/락 키 삭제
+            for sym in symbols_to_stop:
                 for direction in ["long", "short"]:
-                    cooldown_key = f"user:{okx_uid}:cooldown:{symbol}:{direction}"
+                    cooldown_key = f"user:{okx_uid}:cooldown:{sym}:{direction}"
                     keys_to_delete.append(cooldown_key)
-                    
+
                 if timeframe:
-                    lock_key = f"lock:user:{okx_uid}:{symbol}:{timeframe}"
+                    lock_key = f"lock:user:{okx_uid}:{sym}:{timeframe}"
                     keys_to_delete.append(lock_key)
-            
+
             # 삭제 실행
             for key in keys_to_delete:
                 try:
                     await get_redis_client().delete(key)
                 except Exception as del_err:
                     logger.warning(f"키 삭제 중 오류 발생 (key: {key}): {str(del_err)}")
-            
+
             logger.debug(f"사용자 {okx_uid}의 Redis 상태 초기화 완료")
         except Exception as redis_err:
             logger.error(f"Redis 상태 초기화 중 오류 발생 (user_id: {okx_uid}): {str(redis_err)}", exc_info=True)
 
-        # === 멀티심볼 모드: 심볼 제거 ===
-        if app_settings.MULTI_SYMBOL_ENABLED and symbol:
-            try:
-                # bytes -> str 변환
-                if isinstance(symbol, bytes):
-                    symbol = symbol.decode('utf-8')
-                await multi_symbol_service.remove_symbol(okx_uid, symbol)
-                logger.info(f"[{okx_uid}] 멀티심볼 제거 완료: {symbol}")
-            except Exception as ms_err:
-                logger.warning(f"[{okx_uid}] 멀티심볼 제거 중 오류 (무시됨): {str(ms_err)}")
+        # === 멀티심볼 모드: 중지된 심볼들 제거 ===
+        if app_settings.MULTI_SYMBOL_ENABLED:
+            for sym in symbols_to_stop:
+                try:
+                    await multi_symbol_service.remove_symbol(okx_uid, sym)
+                    logger.info(f"[{okx_uid}] 멀티심볼 제거 완료: {sym}")
+                except Exception as ms_err:
+                    logger.warning(f"[{okx_uid}] 멀티심볼 제거 중 오류 (무시됨): {sym}, {str(ms_err)}")
 
         # TradingService cleanup
         try:
@@ -1018,15 +1026,15 @@ async def stop_trading(request: Request, user_id: Optional[str] = Query(None, de
         response_data = {
             "status": "success",
             "message": "트레이딩 중지 신호가 보내졌습니다. 잠시 후 중지됩니다.",
-            "stopped_symbol": symbol.decode('utf-8') if isinstance(symbol, bytes) else symbol
+            "stopped_symbols": symbols_to_stop
         }
 
         # 멀티심볼 모드에서 추가 정보 제공
         if app_settings.MULTI_SYMBOL_ENABLED:
-            active_symbols = await multi_symbol_service.get_active_symbols(okx_uid)
+            remaining_active_symbols = await multi_symbol_service.get_active_symbols(okx_uid)
             response_data["multi_symbol_mode"] = True
-            response_data["remaining_active_symbols"] = active_symbols
-            response_data["remaining_slots"] = app_settings.MAX_SYMBOLS_PER_USER - len(active_symbols)
+            response_data["remaining_active_symbols"] = remaining_active_symbols
+            response_data["remaining_slots"] = app_settings.MAX_SYMBOLS_PER_USER - len(remaining_active_symbols)
 
         return response_data
     except Exception as e:

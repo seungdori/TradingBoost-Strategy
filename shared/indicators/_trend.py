@@ -4,11 +4,11 @@ Trend analysis indicators
 import math
 
 from ._bollinger import calc_stddev
-from ._core import crossover, rising, falling, pivothigh, pivotlow, resample_candles
+from ._core import crossover, rising, falling, pivothigh, pivotlow, resample_candles, resample_candles_raw
 from ._moving_averages import calc_sma, get_ma
 
 
-def _forward_fill_mtf_to_current_tf(candles_current, candles_mtf, mtf_values, is_backtest=True):
+def _forward_fill_mtf_to_current_tf(candles_current, candles_mtf, mtf_values, is_backtest=True, debug_name=None):
     """
     MTF 값을 현재 타임프레임 길이로 forward fill하고, Pine Script의 f_security() offset 로직 적용
 
@@ -17,6 +17,7 @@ def _forward_fill_mtf_to_current_tf(candles_current, candles_mtf, mtf_values, is
         candles_mtf: MTF 캔들 리스트 (진짜 상위 타임프레임 데이터)
         mtf_values: MTF 캔들에서 계산된 값 리스트 (len(candles_mtf)와 동일)
         is_backtest: 백테스트 모드 여부 (True: 1-offset 적용)
+        debug_name: 디버그용 변수 이름 (None이면 디버그 출력 안 함)
 
     Returns:
         현재 타임프레임 길이로 확장된 값 리스트 (len(candles_current)와 동일)
@@ -54,8 +55,10 @@ def _forward_fill_mtf_to_current_tf(candles_current, candles_mtf, mtf_values, is
         else:
             dt = datetime.fromtimestamp(ts)
 
-        # 현재 캔들 timestamp보다 작거나 같은 가장 최근 MTF 인덱스 찾기
-        while mtf_idx + 1 < len(mtf_timestamps) and mtf_timestamps[mtf_idx + 1] <= dt:
+        # 현재 캔들 timestamp보다 작은 가장 최근 MTF 인덱스 찾기
+        # Pine Script: 현재 캔들과 같은 timestamp의 MTF 캔들은 "아직 시작된" 것으로 처리
+        # 따라서 현재 캔들이 MTF 캔들 시작점과 정확히 일치하면, 이전 MTF 캔들이 "방금 완료된" 것
+        while mtf_idx + 1 < len(mtf_timestamps) and mtf_timestamps[mtf_idx + 1] < dt:
             mtf_idx += 1
 
         # Pine Script의 request.security() 동작:
@@ -65,22 +68,24 @@ def _forward_fill_mtf_to_current_tf(candles_current, candles_mtf, mtf_values, is
             result[i] = 0
             continue
 
-        # Pine Script offset 로직: is_backtest=True일 때 이전 MTF 값 사용
-        if is_backtest:
-            # barstate.isrealtime ? 0 : 1 → 백테스트에서는 1-offset
-            if mtf_idx > 0:
-                result[i] = mtf_values[mtf_idx - 1]
-            else:
-                # mtf_idx = 0일 때는 이전 MTF 값이 없으므로 0
-                result[i] = 0
-        else:
-            # 실시간 모드: 현재 MTF 값 사용
-            result[i] = mtf_values[mtf_idx] if mtf_idx < len(mtf_values) else 0
+        # 현재 MTF 값 저장 (나중에 [1] offset 적용)
+        result[i] = mtf_values[mtf_idx] if mtf_idx < len(mtf_values) else 0
+
+    # Pine Script f_security의 [1] offset 적용:
+    # f_security(_sym, _res, _src) => request.security(...)[barstate.isrealtime ? 0 : 1]
+    # 백테스트에서 [1] = "이전 15분봉 시점의 결과" 사용
+    if is_backtest:
+        # 1개 shift: 이전 캔들의 값 사용
+        # [0] + result[:-1] → 첫 번째 값은 0, 마지막 원본 값은 제거됨
+        # 하지만 Pine Script에서 마지막 캔들도 [1] offset이 적용됨
+        shifted_result = [0] + result[:-1]
+
+        return shifted_result
 
     return result
 
 
-def _calc_bb_state(candle_data, length_bb=15, mult_bb=1.5, ma_length=100, is_confirmed_only=True):
+def _calc_bb_state(candle_data, length_bb=15, mult_bb=1.5, ma_length=100, is_confirmed_only=True, debug=False):
     """
     BB_State 계산 - PineScript 완전 일치 버전
 
@@ -320,6 +325,16 @@ def _calc_bb_state(candle_data, length_bb=15, mult_bb=1.5, ma_length=100, is_con
         if bbw_val < squeeze and current_squeeze:
             new_bb_state = -1
 
+        # Debug output
+        if debug and 20 <= i <= 30:
+            valid_ph = [v for v in ph_array if not math.isnan(v)]
+            valid_pl = [v for v in pl_array if not math.isnan(v)]
+            bbw_prev_str = f"{bbw_prev:.4f}" if not math.isnan(bbw_prev) else "NaN"
+            print(f"[DEBUG i={i}] bbw={bbw_val:.4f}, bbr={bbr_val:.4f}, ma={ma_val:.4f}")
+            print(f"  ph_array valid={len(valid_ph)}, pl_array valid={len(valid_pl)}")
+            print(f"  ph_avg={ph_avg:.4f}, pl_avg={pl_avg:.4f}, buzz={buzz:.4f}, squeeze={squeeze:.4f}")
+            print(f"  bbw_prev={bbw_prev_str}, new_bb_state={new_bb_state}")
+
         # Pine Script Line 345-348: BBR 조건
         if new_bb_state == 2 and bbr_val < 0.2 and is_confirmed:
             new_bb_state = -2
@@ -343,27 +358,29 @@ def rational_quadratic(series, lookback=30, relative_weight=0.5, start_at_bar=5)
     """
     PineScript rationalQuadratic() 정확한 구현
 
-    Pine Script 로직:
-    - for i = 0 to _size + startAtBar: 현재 바부터 과거로 룩백 + start_at_bar까지
+    Pine Script 로직 (Line 180-190):
+    - _size = array.size(array.from(_src)) → 항상 1 (스칼라를 배열로 변환)
+    - for i = 0 to _size + startAtBar → for i = 0 to 1 + 5 = 0 to 6 (7개 반복)
     - _src[i]: i 바 뒤를 봄 (lag)
-    - start_at_bar: 최소 히스토리 데이터 요구사항 (cutoff가 아님)
+
+    중요: Pine Script에서 _size는 항상 1! lookback이 아님!
     """
     import math
     N = len(series)
     out = []
 
+    # Pine Script의 _size = array.size(array.from(_src)) = 1
+    _size = 1
+
     for curr_idx in range(N):
         w_sum = 0.0
         val_sum = 0.0
 
-        # Pine: for i = 0 to _size + startAtBar
-        # _src[i]는 i 바 뒤를 의미하므로, lag=0(현재)부터 lookback+start_at_bar까지
-        for lag in range(lookback + start_at_bar):
+        # Pine: for i = 0 to _size + startAtBar = for i = 0 to 6 (7개 반복: i=0,1,2,3,4,5,6)
+        for lag in range(_size + start_at_bar + 1):  # +1 because "to" is inclusive in Pine
             look_back_idx = curr_idx - lag
 
-            # start_at_bar 미만의 인덱스는 히스토리 부족으로 제외
-            if look_back_idx < start_at_bar:
-                break
+            # 인덱스 범위 체크
             if look_back_idx < 0:
                 break
 
@@ -400,6 +417,8 @@ def compute_trend_state(
     candles_bb_mtf=None,          # BB_State용 MTF 데이터 (bb_mtf)
     current_timeframe_minutes=None,  # 현재 타임프레임 (분), 리샘플링용
     is_confirmed_only=False,     # barstate.isconfirmed 시뮬레이션 (백테스트/히스토리: False, 실시간: True)
+    external_bb_state_list=None,     # 외부 BB_State 리스트 (검증용)
+    external_bb_state_mtf_list=None, # 외부 BB_State_MTF 리스트 (검증용)
 ):
     """
     TradingView PineScript의 CYCLE_Bull/Bear, BBW, trend_state 등을
@@ -448,14 +467,15 @@ def compute_trend_state(
     cycle_2nd_minutes = 240
 
     # MTF 데이터 준비: 제공되지 않으면 리샘플링
+    # CRITICAL: resample_candles_raw 사용 - 실제 MTF 캔들로 MA 계산 후 forward fill 해야 함
     if candles_higher_tf is None and res_minutes is not None:
-        candles_higher_tf = resample_candles(candles, res_minutes)
+        candles_higher_tf = resample_candles_raw(candles, res_minutes)
 
     if candles_4h is None:
-        candles_4h = resample_candles(candles, cycle_2nd_minutes)
+        candles_4h = resample_candles_raw(candles, cycle_2nd_minutes)
 
     if candles_bb_mtf is None and bb_mtf_minutes is not None:
-        candles_bb_mtf = resample_candles(candles, bb_mtf_minutes)
+        candles_bb_mtf = resample_candles_raw(candles, bb_mtf_minutes)
 
     # MTF 데이터가 없으면 현재 타임프레임 사용 (fallback)
     if candles_higher_tf is None:
@@ -550,6 +570,7 @@ def compute_trend_state(
         # Bear 조건
         is_bear = (m3 > m2 and m2 > m1)
 
+        # 디버그: CYCLE_Bear가 False가 되는 지점 찾기
         CYCLE_Bull_htf.append(is_bull)
         CYCLE_Bear_htf.append(is_bear)
 
@@ -616,20 +637,41 @@ def compute_trend_state(
     ##################################################
     # 6) BBW / BB_State - Pine Script 원본 로직 (헬퍼 함수 사용)
     ##################################################
-    # Pine Script Line 261-352: BB_State 계산 (현재 타임프레임)
-    bb_state_list = _calc_bb_state(candles, length_bb=15, mult_bb=1.5, ma_length=100, is_confirmed_only=is_confirmed_only)
+    # 외부 BB_State 사용 (검증용) 또는 자체 계산
+    if external_bb_state_list is not None:
+        bb_state_list = external_bb_state_list
+    else:
+        # Pine Script Line 261-352: BB_State 계산 (현재 타임프레임)
+        bb_state_list = _calc_bb_state(candles, length_bb=15, mult_bb=1.5, ma_length=100, is_confirmed_only=is_confirmed_only, debug=False)
 
-    # Pine Script Line 358: BB_State_MTF = f_security(..., bb_mtf, BB_State)
-    # - MTF 타임프레임(5분봉)의 캔들로 BB_State 계산 후, 현재 TF로 forward fill
-    bb_state_mtf_raw = _calc_bb_state(candles_bb_mtf, length_bb=15, mult_bb=1.5, ma_length=100, is_confirmed_only=is_confirmed_only)
+    # 외부 BB_State_MTF 사용 (검증용) 또는 자체 계산
+    if external_bb_state_mtf_list is not None:
+        bb_state_mtf_list = external_bb_state_mtf_list
+    else:
+        # Pine Script Line 358: BB_State_MTF = f_security(..., bb_mtf, BB_State)
+        # CRITICAL: bb_mtf가 현재 타임프레임과 동일하면 리샘플링/offset 없이 BB_State 직접 사용
+        # Pine Script에서 f_security()는 동일 타임프레임 요청 시 현재 값 반환
+        if bb_mtf_minutes is not None and current_timeframe_minutes is not None and bb_mtf_minutes == current_timeframe_minutes:
+            # 동일 타임프레임: BB_State 직접 사용 (f_security offset 적용)
+            # Pine Script: f_security(...)[barstate.isrealtime ? 0 : 1]
+            # 백테스트 모드: 이전 캔들의 BB_State 사용 (1-offset)
+            bb_state_mtf_list = [0] * len(candles)
+            for i in range(len(candles)):
+                if i > 0:
+                    bb_state_mtf_list[i] = bb_state_list[i - 1]  # 1-offset (백테스트)
+                else:
+                    bb_state_mtf_list[i] = 0
+        else:
+            # 다른 타임프레임: MTF 데이터로 BB_State 계산 후 forward fill
+            bb_state_mtf_raw = _calc_bb_state(candles_bb_mtf, length_bb=15, mult_bb=1.5, ma_length=100, is_confirmed_only=is_confirmed_only)
 
-    # Forward fill: MTF BB_State를 현재 타임프레임 길이로 확장 + offset 적용
-    bb_state_mtf_list = _forward_fill_mtf_to_current_tf(
-        candles_current=candles,
-        candles_mtf=candles_bb_mtf,
-        mtf_values=bb_state_mtf_raw,
-        is_backtest=True  # 백테스트 모드에서는 1-offset 적용
-    )
+            # Forward fill: MTF BB_State를 현재 타임프레임 길이로 확장 + offset 적용
+            bb_state_mtf_list = _forward_fill_mtf_to_current_tf(
+                candles_current=candles,
+                candles_mtf=candles_bb_mtf,
+                mtf_values=bb_state_mtf_raw,
+                is_backtest=True  # 백테스트 모드에서는 1-offset 적용
+            )
 
     ##################################################
     # 7) Trend State (Pine Script Line 364-374, MTF 사용)
@@ -653,15 +695,12 @@ def compute_trend_state(
         # Pine Script Line 370: if barstate.isconfirmed and CYCLE_Bear and (...)
         # Pine Script Line 373: if barstate.isconfirmed and trend_state == -2 and not CYCLE_Bear
         if is_confirmed:
-            # CYCLE_2nd 반대 방향 체크 (Pine Script 추가 로직)
-            # use_longer_trend가 False여도 CYCLE_2nd가 반대 방향이면 진입 막음
-            bull_2nd = CYCLE_Bull_2nd_list[i]
-            bear_2nd = CYCLE_Bear_2nd_list[i]
+            # Pine Script Line 364-374: 정확한 로직 (CYCLE_2nd는 use_longer_trend 때만 사용)
+            # IMPORTANT: use_longer_trend=False일 때는 CYCLE_2nd가 trend_state 진입에 영향을 주지 않음!
 
             # Bull 조건 (Pine Script Line 364-365)
             # if barstate.isconfirmed and CYCLE_Bull and (use_longer_trend ? true : BB_State_MTF == 2)
-            # 추가: Bear_2nd가 True면 Bull 진입 막음
-            if bull and (use_longer_trend or bb_st_mtf == 2) and not bear_2nd:
+            if bull and (use_longer_trend or bb_st_mtf == 2):
                 trend_state_list[i] = 2
             # Bull 종료 조건 (Pine Script Line 367-368)
             # if barstate.isconfirmed and trend_state == 2 and not CYCLE_Bull
@@ -669,19 +708,11 @@ def compute_trend_state(
                 trend_state_list[i] = 0
             # Bear 조건 (Pine Script Line 370-371)
             # if barstate.isconfirmed and CYCLE_Bear and (use_longer_trend ? true : BB_State_MTF == -2)
-            # 추가: Bull_2nd가 True면 Bear 진입 막음
-            elif bear and (use_longer_trend or bb_st_mtf == -2) and not bull_2nd:
+            elif bear and (use_longer_trend or bb_st_mtf == -2):
                 trend_state_list[i] = -2
             # Bear 종료 조건 (Pine Script Line 373-374)
             # if barstate.isconfirmed and trend_state == -2 and not CYCLE_Bear
             elif prev_state == -2 and not bear:
-                trend_state_list[i] = 0
-            # BB_State_MTF 반대 방향 시 리셋
-            # Bear 상태인데 BB_State_MTF가 Bull(2)이면 리셋
-            elif prev_state == -2 and bb_st_mtf == 2:
-                trend_state_list[i] = 0
-            # Bull 상태인데 BB_State_MTF가 Bear(-2)이면 리셋
-            elif prev_state == 2 and bb_st_mtf == -2:
                 trend_state_list[i] = 0
             # 상태 유지 (PineScript의 var 동작)
             else:

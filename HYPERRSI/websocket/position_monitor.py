@@ -22,6 +22,16 @@ from HYPERRSI.src.services.state_service import get_state_service
 from HYPERRSI.src.services.state_change_logger import get_state_change_logger
 from HYPERRSI.src.core.models.state_change import ChangeType, TriggeredBy
 
+# Trailing stop handler
+from HYPERRSI.src.trading.monitoring.trailing_stop_handler import (
+    check_trailing_stop,
+    get_active_trailing_stops,
+    clear_trailing_stop,
+)
+
+# Trade stats for PostgreSQL recording
+from HYPERRSI.src.trading.stats import update_trading_stats
+
 logger = get_logger(__name__)
 
 
@@ -133,6 +143,10 @@ class OKXWebsocketClient:
         # 재연결 진행 중 플래그
         self._reconnecting_public = False
         self._reconnecting_private = False
+
+        # 트레일링 스탑 체크 관련
+        self._last_trailing_check_time = 0
+        self._trailing_check_interval = 1.0  # 1초마다 체크
 
     async def connect(self):
         """Public/Private WebSocket 모두 연결"""
@@ -607,7 +621,7 @@ class OKXWebsocketClient:
 
                                             price_text = f"{current_price:,.3f}" if current_price > 0 else "정보 없음"
                                             message = (
-                                                f"🔵 [WebSocket] 수동 청산 감지\n"
+                                                f"🔵  수동 청산 감지\n"
                                                 f"━━━━━━━━━━━━━━━\n"
                                                 f"심볼: {symbol}\n"
                                                 f"방향: {side.upper()}\n"
@@ -616,7 +630,7 @@ class OKXWebsocketClient:
                                             )
 
                                             await send_telegram_message(message, user_id)
-                                            logger.info(f"✉️ [WebSocket] 수동 청산 텔레그램 알림 전송: {user_id}, {symbol}, {side}")
+                                            logger.info(f"✉️  수동 청산 텔레그램 알림 전송: {user_id}, {symbol}, {side}")
 
                                             # 상태 변경 로깅 (PostgreSQL SSOT) - 수동 청산
                                             try:
@@ -638,9 +652,74 @@ class OKXWebsocketClient:
                                                         'previous_size': previous_size
                                                     }
                                                 )
-                                                logger.debug(f"📝 [StateChange] 수동 청산 기록: {user_id}, {symbol}, {side}")
+                                                logger.debug(f"📝  수동 청산 기록: {user_id}, {symbol}, {side}")
                                             except Exception as log_err:
                                                 logger.warning(f"상태 변경 로깅 실패 (무시됨): {log_err}")
+
+                                            # PostgreSQL 거래 기록 저장 (hyperrsi_trades 테이블)
+                                            try:
+                                                from datetime import datetime
+
+                                                # position_data가 bytes 키를 사용하는지 확인
+                                                is_bytes_key = position_data and len(position_data) > 0 and isinstance(list(position_data.keys())[0], bytes)
+
+                                                def get_pos_value(key: str, default: str = "") -> str:
+                                                    """position_data에서 값을 안전하게 추출"""
+                                                    if not position_data:
+                                                        return default
+                                                    k = key.encode() if is_bytes_key else key
+                                                    val = position_data.get(k, default)
+                                                    if isinstance(val, bytes):
+                                                        return val.decode()
+                                                    return str(val) if val else default
+
+                                                # 필수 필드 추출
+                                                entry_time_str = get_pos_value("entry_time", "")
+                                                leverage = int(float(get_pos_value("leverage", "1") or "1"))
+                                                dca_count = int(get_pos_value("dca_count", "0") or "0")
+                                                avg_entry_price_str = get_pos_value("avg_entry_price", "")
+                                                avg_entry_price = float(avg_entry_price_str) if avg_entry_price_str else None
+                                                entry_order_id = get_pos_value("entry_order_id", "")
+
+                                                # 수수료 정보 (OKX에서 제공되는 경우)
+                                                entry_fee = float(get_pos_value("entry_fee", "0") or "0")
+                                                exit_fee = float(pos.get("fee", "0") or "0") if pos.get("fee") else 0.0
+
+                                                # PnL 계산 (실제 금액)
+                                                pnl_amount = 0.0
+                                                if entry_price > 0 and current_price > 0 and actual_size > 0:
+                                                    if side == "long":
+                                                        pnl_amount = (current_price - entry_price) * actual_size
+                                                    else:  # short
+                                                        pnl_amount = (entry_price - current_price) * actual_size
+
+                                                exit_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+                                                await update_trading_stats(
+                                                    user_id=user_id,
+                                                    symbol=symbol,
+                                                    entry_price=entry_price,
+                                                    exit_price=current_price,
+                                                    position_size=actual_size,
+                                                    pnl=pnl_amount,
+                                                    side=side,
+                                                    entry_time=entry_time_str if entry_time_str else exit_time_str,
+                                                    exit_time=exit_time_str,
+                                                    close_type="manual",
+                                                    leverage=leverage,
+                                                    dca_count=dca_count,
+                                                    avg_entry_price=avg_entry_price,
+                                                    entry_fee=entry_fee,
+                                                    exit_fee=abs(exit_fee),  # 수수료는 양수로 저장
+                                                    entry_order_id=entry_order_id if entry_order_id else None,
+                                                    extra_data={
+                                                        "source": "websocket_manual_close",
+                                                        "previous_size_contracts": previous_size,
+                                                    }
+                                                )
+                                                logger.info(f"📊  거래 기록 DB 저장: {user_id}, {symbol}, {side}, PnL={pnl_amount:.4f}, DCA={dca_count}")
+                                            except Exception as db_err:
+                                                logger.warning(f"거래 기록 DB 저장 실패 (무시됨): {db_err}")
 
                                     except Exception as e:
                                         logger.error(f"수동 청산 알림 전송 실패: {e}")
@@ -657,8 +736,36 @@ class OKXWebsocketClient:
                             redis_key = f"ws:user:{user_id}:{symbol}:{side}"
                             await redis.set(redis_key, json.dumps(pos))
 
+                            # 🔹 트레일링 스탑 체크 (포지션이 존재하고 유효한 가격이 있을 때만)
+                            if float(pos_size) > 0 and side in ["long", "short"]:
+                                try:
+                                    # 현재가 추출 (markPx 우선, 없으면 avgPx)
+                                    mark_px = pos.get("markPx", "")
+                                    avg_px = pos.get("avgPx", "")
+
+                                    try:
+                                        current_price = float(mark_px) if mark_px and mark_px != "" else (float(avg_px) if avg_px and avg_px != "" else 0)
+                                    except (ValueError, TypeError):
+                                        current_price = 0
+
+                                    if current_price > 0:
+                                        # 트레일링 스탑 체크 (1초 간격 제한)
+                                        current_check_time = time.time()
+                                        if current_check_time - self._last_trailing_check_time >= self._trailing_check_interval:
+                                            self._last_trailing_check_time = current_check_time
+
+                                            # 트레일링 스탑 조건 체크 (비동기 태스크로 실행하여 메인 루프 차단 방지)
+                                            asyncio.create_task(self._check_trailing_stop_for_position(
+                                                user_id=user_id,
+                                                symbol=symbol,
+                                                direction=side,
+                                                current_price=current_price
+                                            ))
+                                except Exception as ts_err:
+                                    logger.debug(f"트레일링 스탑 체크 중 오류 (무시됨): {ts_err}")
+
                     elif channel == "orders":
-                        logger.info(f"📝 [OKX] Order Update - instType: {inst_type}, count: {len(payload)}")
+                        logger.info(f"📝  Order Update - instType: {inst_type}, count: {len(payload)}")
                         # 주문 정보도 여러 개가 들어올 수 있음 => 통째로 저장
                         for order in payload:
                             symbol = order.get("instId", inst_id)
@@ -727,17 +834,17 @@ class OKXWebsocketClient:
 
                                     # 메시지 타이틀 설정 (order_type 기반)
                                     if actual_order_type == "break_even":
-                                        title = "🟡 [WebSocket] 브레이크이븐 체결 완료"
+                                        title = "🟡 브레이크이븐 체결 완료"
                                     elif actual_order_type == "sl":
-                                        title = "🔴 [WebSocket] 손절(SL) 체결 완료"
+                                        title = "🔴 손절(SL) 체결 완료"
                                     elif actual_order_type == "tp3":
-                                        title = "🟢 [WebSocket] 익절(TP3) 체결 완료"
+                                        title = "🟢 익절(TP3) 체결 완료"
                                     elif actual_order_type == "tp2":
-                                        title = "🟢 [WebSocket] 익절(TP2) 체결 완료"
+                                        title = "🟢 익절(TP2) 체결 완료"
                                     elif actual_order_type == "tp1":
-                                        title = "🟢 [WebSocket] 익절(TP1) 체결 완료"
+                                        title = "🟢 익절(TP1) 체결 완료"
                                     else:
-                                        title = "✅ [WebSocket] 주문 체결 완료"
+                                        title = "✅ 주문 체결 완료"
 
                                     message = (
                                         f"{title}\n"
@@ -800,6 +907,77 @@ class OKXWebsocketClient:
                                         logger.debug(f"📝 [StateChange] 주문 체결 기록: {user_id}, {symbol}, {actual_order_type}")
                                     except Exception as log_err:
                                         logger.warning(f"상태 변경 로깅 실패 (무시됨): {log_err}")
+
+                                    # PostgreSQL 거래 기록 저장 (hyperrsi_trades 테이블) - TP/SL 체결
+                                    try:
+                                        from datetime import datetime
+
+                                        # close_type 결정
+                                        if "손절(SL)" in title:
+                                            close_type_for_db = "stop_loss"
+                                        elif "브레이크이븐" in title:
+                                            close_type_for_db = "break_even"
+                                        elif "TP3" in title:
+                                            close_type_for_db = "take_profit_3"
+                                        elif "TP2" in title:
+                                            close_type_for_db = "take_profit_2"
+                                        elif "TP1" in title:
+                                            close_type_for_db = "take_profit_1"
+                                        else:
+                                            close_type_for_db = "take_profit"
+
+                                        # position_data에서 필드 추출 (안전하게)
+                                        entry_time_str = position_data.get("entry_time", "") if position_data else ""
+                                        dca_count = int(position_data.get("dca_count", "0") or "0") if position_data else 0
+                                        avg_entry_price_str = position_data.get("avg_entry_price", "") if position_data else ""
+                                        avg_entry_price = float(avg_entry_price_str) if avg_entry_price_str else None
+                                        entry_order_id = position_data.get("entry_order_id", "") if position_data else ""
+                                        entry_fee = float(position_data.get("entry_fee", "0") or "0") if position_data else 0.0
+
+                                        # 주문에서 수수료 추출
+                                        exit_fee = abs(float(order.get("fee", "0") or "0"))
+
+                                        # 실제 수량 계산 (contracts -> quantity)
+                                        contract_size = await get_contract_size(symbol, redis)
+                                        actual_size = float(filled_size) * contract_size
+
+                                        # PnL 계산 (실제 금액)
+                                        pnl_amount = 0.0
+                                        if entry_price > 0 and price > 0 and actual_size > 0:
+                                            if pos_side == "long":
+                                                pnl_amount = (price - entry_price) * actual_size
+                                            else:  # short
+                                                pnl_amount = (entry_price - price) * actual_size
+
+                                        exit_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+                                        await update_trading_stats(
+                                            user_id=user_id,
+                                            symbol=symbol,
+                                            entry_price=entry_price,
+                                            exit_price=price,
+                                            position_size=actual_size,
+                                            pnl=pnl_amount,
+                                            side=pos_side,
+                                            entry_time=entry_time_str if entry_time_str else exit_time_str,
+                                            exit_time=exit_time_str,
+                                            close_type=close_type_for_db,
+                                            leverage=int(leverage),
+                                            dca_count=dca_count,
+                                            avg_entry_price=avg_entry_price,
+                                            entry_fee=entry_fee,
+                                            exit_fee=exit_fee,
+                                            entry_order_id=entry_order_id if entry_order_id else None,
+                                            exit_order_id=order_id,
+                                            extra_data={
+                                                "source": "websocket_order_filled",
+                                                "order_type": actual_order_type,
+                                                "filled_size_contracts": filled_size,
+                                            }
+                                        )
+                                        logger.info(f"📊 [WebSocket] TP/SL 거래 기록 DB 저장: {user_id}, {symbol}, {pos_side}, close_type={close_type_for_db}, PnL={pnl_amount:.4f}, DCA={dca_count}")
+                                    except Exception as db_err:
+                                        logger.warning(f"TP/SL 거래 기록 DB 저장 실패 (무시됨): {db_err}")
 
                                     # TP 주문 체결 시 브레이크이븐/트레일링스탑 처리
                                     if "익절(TP" in title:
@@ -933,11 +1111,64 @@ class OKXWebsocketClient:
         else:
             await public_task
 
+    async def _check_trailing_stop_for_position(
+        self,
+        user_id: str,
+        symbol: str,
+        direction: str,
+        current_price: float
+    ):
+        """
+        특정 포지션에 대해 트레일링 스탑 조건을 체크합니다.
+
+        Args:
+            user_id: 사용자 ID (OKX UID)
+            symbol: 심볼 (예: BTC-USDT-SWAP)
+            direction: 포지션 방향 (long/short)
+            current_price: 현재 가격
+        """
+        try:
+            redis = await get_redis()
+
+            # 트레일링 스탑 키 확인
+            trailing_key = f"trailing:user:{user_id}:{symbol}:{direction}"
+
+            if not await redis.exists(trailing_key):
+                return  # 트레일링 스탑이 활성화되지 않음
+
+            # 트레일링 스탑 데이터 조회
+            ts_data = await redis.hgetall(trailing_key)
+            if not ts_data:
+                return
+
+            # bytes를 str로 변환
+            def decode_value(v):
+                return v.decode() if isinstance(v, bytes) else v
+
+            active = decode_value(ts_data.get(b"active") or ts_data.get("active", "false"))
+            if active.lower() != "true":
+                return
+
+            # 이미 triggered 상태이면 스킵
+            status = decode_value(ts_data.get(b"status") or ts_data.get("status", ""))
+            if status == "triggered":
+                return
+
+            # check_trailing_stop 함수 호출 (trailing_stop_handler.py의 함수)
+            ts_hit = await check_trailing_stop(user_id, symbol, direction, current_price)
+
+            if ts_hit:
+                logger.info(f"🔔 [WebSocket] 트레일링 스탑 조건 충족: {user_id} {symbol} {direction} @ {current_price}")
+
+        except Exception as e:
+            logger.error(f"[WebSocket] 트레일링 스탑 체크 오류: {user_id} {symbol} {direction} - {str(e)}")
+            traceback.print_exc()
+
     def stop(self):
         """루프 종료"""
         self.running = False
-        
-        
+
+
 async def get_active_users() -> list:
     """
     Celery worker에서 실행 중인 활성 사용자 목록을 가져옵니다.

@@ -318,6 +318,73 @@ class TradeRecordService:
             logger.error(f"Failed to get symbols traded: {e}", exc_info=True)
             return []
 
+    async def get_trade_by_order_id(
+        self,
+        okx_uid: str,
+        exit_order_id: str
+    ) -> Optional[HyperrsiTrade]:
+        """
+        청산 주문 ID로 거래 기록 조회.
+
+        Args:
+            okx_uid: OKX 사용자 UID
+            exit_order_id: 청산 주문 ID
+
+        Returns:
+            Optional[HyperrsiTrade]: 거래 기록 (없으면 None)
+        """
+        try:
+            async with get_transactional_session() as session:
+                stmt = select(HyperrsiTrade).where(
+                    HyperrsiTrade.okx_uid == okx_uid,
+                    HyperrsiTrade.exit_order_id == exit_order_id
+                ).limit(1)
+
+                result = await session.execute(stmt)
+                return result.scalar_one_or_none()
+
+        except Exception as e:
+            logger.error(f"Failed to get trade by order_id: {e}", exc_info=True)
+            return None
+
+    async def check_duplicate_trade(
+        self,
+        okx_uid: str,
+        symbol: str,
+        exit_time: datetime,
+        tolerance_seconds: int = 5
+    ) -> bool:
+        """
+        중복 거래 확인 (같은 심볼, 비슷한 시간대).
+
+        Args:
+            okx_uid: OKX 사용자 UID
+            symbol: 거래 심볼
+            exit_time: 청산 시간
+            tolerance_seconds: 허용 오차 (초)
+
+        Returns:
+            bool: 중복 여부
+        """
+        try:
+            from datetime import timedelta
+
+            async with get_transactional_session() as session:
+                stmt = select(func.count(HyperrsiTrade.id)).where(
+                    HyperrsiTrade.okx_uid == okx_uid,
+                    HyperrsiTrade.symbol == symbol,
+                    HyperrsiTrade.exit_time >= exit_time - timedelta(seconds=tolerance_seconds),
+                    HyperrsiTrade.exit_time <= exit_time + timedelta(seconds=tolerance_seconds)
+                )
+
+                result = await session.execute(stmt)
+                count = result.scalar() or 0
+                return count > 0
+
+        except Exception as e:
+            logger.error(f"Failed to check duplicate trade: {e}", exc_info=True)
+            return False
+
 
 # Singleton instance
 _trade_record_service: Optional[TradeRecordService] = None

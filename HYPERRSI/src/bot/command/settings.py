@@ -31,6 +31,7 @@ from shared.constants.default_settings import (
     TRAILING_STOP_TYPES,
 )
 from shared.database.redis_helper import get_redis_client
+from shared.helpers.user_id_resolver import resolve_user_identifier
 from shared.logging import get_logger
 
 router = Router()
@@ -74,16 +75,11 @@ async def get_identifier(user_id: str) -> str:
 
     Returns:
         str: OKX UID
+
+    Note:
+        이 함수는 shared.helpers.user_id_resolver.resolve_user_identifier()를 사용합니다.
     """
-    # 13자리 미만이면 텔레그램 ID로 간주하고 변환
-    if len(str(user_id)) < 13:
-        okx_uid = await get_okx_uid_from_telegram_id(user_id)
-        if not okx_uid:
-            logger.error(f"텔레그램 ID {user_id}에 대한 OKX UID를 찾을 수 없습니다")
-            return str(user_id)  # 변환 실패 시 원래 ID 반환
-        return okx_uid
-    # 13자리 이상이면 이미 OKX UID로 간주
-    return str(user_id)
+    return await resolve_user_identifier(str(user_id))
 
 
 @router.message(Command("settings"))

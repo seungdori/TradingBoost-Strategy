@@ -1,6 +1,6 @@
 import json
 from functools import lru_cache
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
@@ -244,7 +244,7 @@ class TrendStateCalculator:
         Returns:
             BBW 상태 시리즈 (2: 강한 확장, -2: 강한 수축, 0: 중립)
         """
-        bbw, bbw_ma, bbr, upper, middle, lower  = self.calculate_bbw(data)
+        bbw, _, bbr, _, _, _ = self.calculate_bbw(data)
         pivot_highs, pivot_lows = self.find_bbw_pivots(bbw)
         
         # BBW 상태를 저장할 시리즈
@@ -479,10 +479,10 @@ class TrendStateCalculator:
 
     def _validate_input_data(self, data: pd.Series) -> None:
         """입력 데이터 유효성 검사"""
-        if data.empty:
-            raise TrendStateCalculatorException("입력 데이터가 비어있습니다.")
         if not isinstance(data, pd.Series):
             raise TrendStateCalculatorException("입력은 pandas Series여야 합니다.")
+        if data.empty:
+            raise TrendStateCalculatorException("입력 데이터가 비어있습니다.")
 
     def _calculate_volatility_thresholds(self,
                                            recent_high: float,
@@ -506,9 +506,12 @@ class TrendStateCalculator:
             'current_price': 0.0
         }
 
-    async def get_candles_from_redis(symbol: str, timeframe: int) -> pd.DataFrame:
+    async def get_candles_from_redis(self, symbol: str, timeframe: int) -> pd.DataFrame:
         """Redis에서 캔들 데이터를 가져와 DataFrame으로 변환"""
         try:
+            # Redis 클라이언트 가져오기
+            redis = await get_redis_client()
+
             # Redis 키 형식: candles:SOL-USDT-SWAP:240
             tf_str = get_timeframe(timeframe)
             key = f"candles:{symbol}:{tf_str}"

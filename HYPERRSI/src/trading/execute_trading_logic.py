@@ -26,6 +26,7 @@ from shared.database.redis_helper import get_redis_client
 from shared.database.redis_migration import get_redis_context
 from shared.database.redis_patterns import RedisTimeout
 from shared.logging import get_logger
+from shared.helpers.user_id_resolver import is_telegram_id, resolve_user_identifier
 from HYPERRSI.src.utils.error_logger import log_error_to_db, async_log_error_to_db
 
 # 멀티심볼 모드 관련 imports
@@ -79,20 +80,15 @@ async def get_identifier(user_id: str) -> str:
     
     Args:
         user_id: 텔레그램 ID 또는 OKX UID
-        
+
     Returns:
         str: OKX UID
+
+    Note:
+        이 함수는 shared.helpers.user_id_resolver.resolve_user_identifier()를 사용합니다.
     """
-    # 13자리 미만이면 텔레그램 ID로 간주하고 변환
-    if len(str(user_id)) < 13:
-        okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
-        if not okx_uid:
-            logger.error(f"텔레그램 ID {user_id}에 대한 OKX UID를 찾을 수 없습니다")
-            return str(user_id)  # 변환 실패 시 원래 ID 반환
-        logger.info(f"텔레그램 ID {user_id} -> OKX UID {okx_uid} 변환 성공")
-        return okx_uid
-    # 13자리 이상이면 이미 OKX UID로 간주
-    return str(user_id)
+    # 통합 resolver 사용
+    return await resolve_user_identifier(str(user_id))
 
 
 # ======== 메인 트레이딩 로직 ========
@@ -111,7 +107,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
     
         # 원본 user_id를 telegram_id로 저장 (텔레그램 메시지 전송용)
         original_user_id = user_id
-        telegram_id = user_id if len(str(user_id)) < 13 else None
+        telegram_id = user_id if is_telegram_id(user_id) else None
         try:
             user_id = await get_identifier(user_id)
         except Exception as e:
