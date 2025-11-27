@@ -43,20 +43,22 @@ from HYPERRSI.src.core.models.state_change import ChangeType, TriggeredBy
 logger = logging.getLogger(__name__)
 
 # Redis 키 상수 정의 (user_id -> okx_uid)
-# === 레거시 키 (기존 단일 심볼 지원 - 후방 호환성 유지) ===
-REDIS_KEY_TRADING_STATUS = "user:{okx_uid}:trading:status"
-REDIS_KEY_TASK_RUNNING = "user:{okx_uid}:task_running"
-REDIS_KEY_TASK_ID = "user:{okx_uid}:task_id"
+# === 멀티심볼 모드 - 심볼별 상태 관리 ===
 REDIS_KEY_SYMBOL_STATUS = "user:{okx_uid}:symbol:{symbol}:status"
-REDIS_KEY_PREFERENCES = "user:{okx_uid}:preferences"  # 선호도 키도 변경
-REDIS_KEY_LAST_EXECUTION = "user:{okx_uid}:last_execution"
-REDIS_KEY_LAST_LOG_TIME = "user:{okx_uid}:last_log_time"
-REDIS_KEY_USER_LOCK = "lock:user:{okx_uid}:{symbol}:{timeframe}" # 락 키 이름 변경 (user -> okx)
-
-# === 멀티심볼 지원 키 (Phase 2) ===
-# 심볼별 개별 Task 관리
 REDIS_KEY_SYMBOL_TASK_ID = "user:{okx_uid}:symbol:{symbol}:task_id"
 REDIS_KEY_SYMBOL_TASK_RUNNING = "user:{okx_uid}:symbol:{symbol}:task_running"
+REDIS_KEY_ACTIVE_SYMBOLS = "user:{okx_uid}:active_symbols"
+
+# === 공통 키 ===
+REDIS_KEY_PREFERENCES = "user:{okx_uid}:preferences"
+REDIS_KEY_LAST_EXECUTION = "user:{okx_uid}:last_execution"
+REDIS_KEY_LAST_LOG_TIME = "user:{okx_uid}:last_log_time"
+REDIS_KEY_USER_LOCK = "lock:user:{okx_uid}:{symbol}:{timeframe}"
+
+# === 사용자 레벨 태스크 상태 관리 키 (심볼별 상태와 별개로 유지) ===
+# REDIS_KEY_TRADING_STATUS는 심볼별 상태(REDIS_KEY_SYMBOL_STATUS)로 대체됨
+REDIS_KEY_TASK_RUNNING = "user:{okx_uid}:task_running"  # 사용자 레벨 태스크 실행 상태 (유지)
+REDIS_KEY_TASK_ID = "user:{okx_uid}:task_id"  # 사용자 레벨 태스크 ID (유지)
 REDIS_KEY_SYMBOL_PRESET_ID = "user:{okx_uid}:symbol:{symbol}:preset_id"
 REDIS_KEY_SYMBOL_TIMEFRAME = "user:{okx_uid}:symbol:{symbol}:timeframe"
 REDIS_KEY_SYMBOL_STARTED_AT = "user:{okx_uid}:symbol:{symbol}:started_at"
@@ -332,14 +334,15 @@ def run_async(coroutine, timeout=90):
             except Exception as cleanup_error:
                 logger.debug(f"태스크 정리 중 오류 (무시됨): {str(cleanup_error)}")
 
-# 태스크 실행 상태 관리 함수들
-async def check_if_running(okx_uid: str) -> bool: # user_id -> okx_uid
+# 태스크 실행 상태 관리 함수들 - 심볼별 상태 관리로 완전 전환
+async def check_if_symbol_running(okx_uid: str, symbol: str) -> bool:
     """
-    사용자의 트레이딩 상태가 여전히 'running'인지 확인
+    특정 심볼의 트레이딩 상태가 'running'인지 확인
     """
     # Operations: Single GET - fast operation
     async with get_redis_context(user_id=str(okx_uid), timeout=RedisTimeout.FAST_OPERATION) as redis:
-        status = await redis.get(REDIS_KEY_TRADING_STATUS.format(okx_uid=okx_uid))
+        key = REDIS_KEY_SYMBOL_STATUS.format(okx_uid=okx_uid, symbol=symbol)
+        status = await redis.get(key)
 
         # 바이트 문자열을 디코딩
         if isinstance(status, bytes):
@@ -351,17 +354,26 @@ async def check_if_running(okx_uid: str) -> bool: # user_id -> okx_uid
 
         return bool(status == "running")
 
-async def set_trading_status(okx_uid: str, status: str) -> None: # user_id -> okx_uid
+async def check_if_any_symbol_running(okx_uid: str) -> bool:
     """
-    사용자의 트레이딩 상태 설정
+    사용자의 어떤 심볼이라도 running 상태인지 확인
     """
-    # Operations: Single SET - normal operation
-    async with get_redis_context(user_id=str(okx_uid), timeout=RedisTimeout.NORMAL_OPERATION) as redis:
-        key = REDIS_KEY_TRADING_STATUS.format(okx_uid=okx_uid)
-        await redis.set(key, status)
-        logger.info(f"[{okx_uid}] 트레이딩 상태를 '{status}'로 설정")
+    async with get_redis_context(user_id=str(okx_uid), timeout=RedisTimeout.FAST_OPERATION) as redis:
+        active_symbols_key = REDIS_KEY_ACTIVE_SYMBOLS.format(okx_uid=okx_uid)
+        active_symbols = await redis.smembers(active_symbols_key)
 
-async def set_symbol_status(okx_uid: str, symbol: str, status: str) -> None: # user_id -> okx_uid
+        if not active_symbols:
+            return False
+
+        # 각 심볼의 상태 확인
+        for symbol_bytes in active_symbols:
+            symbol = symbol_bytes.decode('utf-8') if isinstance(symbol_bytes, bytes) else symbol_bytes
+            if await check_if_symbol_running(okx_uid, symbol):
+                return True
+
+        return False
+
+async def set_symbol_status(okx_uid: str, symbol: str, status: str) -> None:
     """
     특정 심볼에 대한 트레이딩 상태 설정
     """
@@ -506,15 +518,8 @@ async def get_active_trading_users():
 
     두 모드 모두 후방 호환성을 위해 지원됩니다.
     """
-    from shared.config import settings as app_settings
-
-    # Feature Flag 확인
-    if app_settings.MULTI_SYMBOL_ENABLED:
-        # 멀티심볼 모드: 새로운 스캔 로직 사용
-        return await _get_multi_symbol_active_users()
-    else:
-        # 레거시 모드: 기존 단일 심볼 스캔 사용
-        return await _get_legacy_active_users()
+    # 심볼별 상태 관리로 완전 전환 - 레거시 모드 제거
+    return await _get_multi_symbol_active_users()
 
 
 async def _get_multi_symbol_active_users() -> List[Dict[str, Any]]:
@@ -547,19 +552,7 @@ async def _get_multi_symbol_active_users() -> List[Dict[str, Any]]:
 
                         okx_uid = key_parts[1]
 
-                        # 사용자의 트레이딩 상태 확인 (전체 상태)
-                        trading_status_key = REDIS_KEY_TRADING_STATUS.format(okx_uid=okx_uid)
-                        trading_status = await redis.get(trading_status_key)
-
-                        if isinstance(trading_status, bytes):
-                            trading_status = trading_status.decode('utf-8')
-                        if trading_status:
-                            trading_status = trading_status.strip().strip('"\'')
-
-                        if trading_status != "running":
-                            continue
-
-                        # 활성 심볼 목록 가져오기
+                        # 활성 심볼 목록 가져오기 (심볼별 상태 확인으로 변경)
                         active_symbols = await redis.smembers(key)
 
                         for symbol in active_symbols:
@@ -664,16 +657,17 @@ async def _cleanup_stale_symbol_task(okx_uid: str, symbol: str, redis, max_age: 
 
 async def _get_legacy_active_users() -> List[Dict[str, Any]]:
     """
-    레거시 모드용 활성 사용자 스캔 (기존 단일 심볼 방식)
+    레거시 모드용 활성 사용자 스캔 - 심볼별 상태 패턴으로 변경됨
 
-    기존 get_active_trading_users()의 원래 로직을 유지합니다.
+    심볼별 상태(user:*:symbol:*:status)에서 running인 사용자를 찾습니다.
     """
     # Operations: SCAN + TYPE + GET + HGETALL + SET + EXPIRE - all within one context
     # System-wide scan operation - use special identifier for migration
     async with get_redis_context(user_id="_system_scan_", timeout=RedisTimeout.SLOW_OPERATION) as redis:
         active_users = []
+        active_user_set = set()  # 중복 제거용
         cursor = 0  # Redis SCAN cursor는 숫자 0으로 시작
-        pattern = 'user:*:trading:status' # 스캔 패턴 변경
+        pattern = 'user:*:symbol:*:status'  # 심볼별 상태 패턴
 
         try:
             while True:  # do-while 패턴: 최소 한 번은 실행
@@ -685,13 +679,13 @@ async def _get_legacy_active_users() -> List[Dict[str, Any]]:
                         if isinstance(key, bytes):
                             key = key.decode('utf-8')
 
-                        # 키 형식: user:{okx_uid}:trading:status
+                        # 키 형식: user:{okx_uid}:symbol:{symbol}:status
                         key_parts = key.split(':')
-                        if len(key_parts) < 4 or key_parts[0] != 'user' or key_parts[2] != 'trading' or key_parts[3] != 'status':
+                        if len(key_parts) < 5 or key_parts[0] != 'user' or key_parts[2] != 'symbol' or key_parts[4] != 'status':
                             logger.warning(f"예상치 못한 키 형식 발견: {key}")
                             continue
 
-                        okx_uid = key_parts[1] # okx_uid 추출
+                        okx_uid = key_parts[1]  # okx_uid 추출
 
                         # 상태 키 타입 확인
                         key_type = await redis.type(key)
@@ -781,11 +775,14 @@ async def _get_legacy_active_users() -> List[Dict[str, Any]]:
                                         except Exception as update_err:
                                             logger.debug(f"[{okx_uid}] 로그 시간 업데이트 중 오류: {str(update_err)}")
 
-                                    active_users.append({
-                                        'okx_uid': okx_uid, # user_id -> okx_uid
-                                        'symbol': symbol,
-                                        'timeframe': timeframe
-                                    })
+                                    # 중복 체크 후 추가
+                                    if okx_uid not in active_user_set:
+                                        active_user_set.add(okx_uid)
+                                        active_users.append({
+                                            'okx_uid': okx_uid,  # user_id -> okx_uid
+                                            'symbol': symbol,
+                                            'timeframe': timeframe
+                                        })
                             except Exception as e:
                                 logger.error(f"[{okx_uid}] 활성 사용자 처리 중 오류: {str(e)}")
                                 # errordb 로깅

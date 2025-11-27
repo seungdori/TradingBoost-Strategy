@@ -397,7 +397,8 @@ async def record_trade_entry(
                 except (json.JSONDecodeError, ValueError):
                     pass
             cooldown_key = f"user:{user_id}:cooldown:{symbol}:{side}"
-            if cooldown_seconds > 0 and not await redis.get(cooldown_key):
+            # DCA 진입 시마다 cooldown 타이머를 리셋해야 연속 진입 방지됨
+            if cooldown_seconds > 0:
                 await redis.set(cooldown_key, "true", ex=cooldown_seconds)
 
     except Exception as e:
@@ -466,9 +467,10 @@ async def record_trade_exit(user_id: str, symbol: str, position: Position, excha
                 except (json.JSONDecodeError, ValueError):
                     pass
             cooldown_key = f"user:{user_id}:cooldown:{symbol}:{side}"
-            if cooldown_seconds > 0 and not await redis.get(cooldown_key):
+            # 청산 후에도 cooldown 타이머를 리셋해야 즉시 재진입 방지됨
+            if cooldown_seconds > 0:
                 await redis.set(cooldown_key, "true", ex=cooldown_seconds)
-    
+
 
 async def get_trading_stats(user_id: str) -> Dict[str, Any]:
     stats_key = get_redis_key(user_id, "stats")

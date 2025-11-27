@@ -373,10 +373,10 @@ def get_connection_pool():
     return connection_pool
 
 def get_redis_keys(user_id: str, symbol:str, side:str) -> dict:
-    """사용자별 Redis 키 생성"""
+    """사용자별 Redis 키 생성 (심볼별 상태 관리)"""
     return {
         'api_keys': f"user:{user_id}:api:keys",
-        'trading_status': f"user:{user_id}:trading:status",
+        'symbol_status': f"user:{user_id}:symbol:{symbol}:status",  # 심볼별 상태
         'positions': f"user:{user_id}:position:{symbol}:{side}",
         'settings': f"user:{user_id}:settings"
     }

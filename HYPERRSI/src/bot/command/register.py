@@ -69,12 +69,16 @@ async def check_right_invitee(okx_api, okx_secret, okx_parra, user_id= None):
 router = Router()
 logger = get_logger(__name__)
 
-def get_redis_keys(user_id):
-    return {
-        'status': f"user:{user_id}:trading:status",
+def get_redis_keys(user_id, symbol=None):
+    keys = {
+        # 'status' 키 제거 - 심볼별 상태 관리로 전환됨
+        # 심볼별 상태는 f"user:{user_id}:symbol:{symbol}:status" 패턴 사용
         'api_keys': f"user:{user_id}:api:keys",
         'stats': f"user:{user_id}:stats",
     }
+    if symbol:
+        keys['symbol_status'] = f"user:{user_id}:symbol:{symbol}:status"
+    return keys
 allowed_uid = ["518796558012178692", "549641376070615063", "587662504768345929", "510436564820701267","586156710277369942"]
 def is_allowed_user(user_id):
     """허용된 사용자인지 확인"""

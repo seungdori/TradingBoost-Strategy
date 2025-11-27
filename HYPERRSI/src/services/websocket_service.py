@@ -54,17 +54,21 @@ class OKXWebsocketManager:
         while self.running:
             try:
                 current_time = time.time()
-                # Redis에서 활성 사용자 목록 가져오기
+                # Redis에서 활성 사용자 목록 가져오기 (심볼별 상태 키 패턴)
                 redis = await get_redis()
                 # Use SCAN instead of KEYS to avoid blocking Redis
-                keys = await scan_keys_pattern("user:*:trading:status", redis=redis)
-                active_user_ids = []
-                
+                keys = await scan_keys_pattern("user:*:symbol:*:status", redis=redis)
+                active_user_ids_set = set()  # 중복 제거를 위해 set 사용
+
                 for key in keys:
                     status = await redis.get(key)
                     if status == "running":
-                        user_id = key.split(":")[1]
-                        active_user_ids.append(user_id)
+                        # key 형식: user:{okx_uid}:symbol:{symbol}:status
+                        parts = key.split(":")
+                        user_id = parts[1]
+                        active_user_ids_set.add(user_id)
+
+                active_user_ids = list(active_user_ids_set)
 
                 # 15분(900초)마다 활성 사용자 로깅
                 if current_time - self.last_log_time >= 900:

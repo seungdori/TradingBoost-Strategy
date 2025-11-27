@@ -21,7 +21,7 @@ class CacheSyncService:
     Redis는 성능을 위한 캐시로 사용됩니다.
 
     기존 Redis 키 패턴을 유지하여 후방 호환성을 보장:
-    - user:{okx_uid}:trading:status
+    - user:{okx_uid}:symbol:{symbol}:status (심볼별 상태)
     - user:{okx_uid}:settings
     - user:{okx_uid}:dual_side
     - user:{okx_uid}:position:{symbol}:{side}
@@ -61,14 +61,14 @@ class CacheSyncService:
         try:
             redis = await self._get_redis()
 
-            # 기존 키 패턴 유지
-            status_key = f"user:{okx_uid}:trading:status"
+            # 심볼별 키 패턴 사용
+            status_key = f"user:{okx_uid}:symbol:{symbol}:status"
             settings_key = f"user:{okx_uid}:settings"
             dual_side_key = f"user:{okx_uid}:dual_side"
-            session_key = f"user:{okx_uid}:session_id"
+            session_key = f"user:{okx_uid}:symbol:{symbol}:session_id"
 
             async with redis.pipeline() as pipe:
-                # 트레이딩 상태
+                # 심볼별 트레이딩 상태
                 pipe.set(status_key, "running")
 
                 # 세션 ID
@@ -111,8 +111,9 @@ class CacheSyncService:
         try:
             redis = await self._get_redis()
 
-            status_key = f"user:{okx_uid}:trading:status"
-            session_key = f"user:{okx_uid}:session_id"
+            # 심볼별 상태 키 패턴 사용
+            status_key = f"user:{okx_uid}:symbol:{symbol}:status"
+            session_key = f"user:{okx_uid}:symbol:{symbol}:session_id"
 
             async with redis.pipeline() as pipe:
                 pipe.set(status_key, "stopped")
@@ -263,13 +264,16 @@ class CacheSyncService:
                     f"user:{okx_uid}:{symbol}:dual_side_position",
                 ]
             else:
-                # 사용자 전체 무효화
+                # 사용자 전체 무효화 (심볼별 상태 키들은 패턴으로 삭제)
                 keys_to_delete = [
-                    f"user:{okx_uid}:trading:status",
                     f"user:{okx_uid}:settings",
                     f"user:{okx_uid}:dual_side",
-                    f"user:{okx_uid}:session_id",
                 ]
+                # 심볼별 상태 키들을 패턴으로 찾아서 삭제
+                symbol_status_keys = await redis.keys(f"user:{okx_uid}:symbol:*:status")
+                symbol_session_keys = await redis.keys(f"user:{okx_uid}:symbol:*:session_id")
+                keys_to_delete.extend([k.decode() if isinstance(k, bytes) else k for k in symbol_status_keys])
+                keys_to_delete.extend([k.decode() if isinstance(k, bytes) else k for k in symbol_session_keys])
 
             for key in keys_to_delete:
                 await redis.delete(key)

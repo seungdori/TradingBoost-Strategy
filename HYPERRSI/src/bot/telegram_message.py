@@ -655,18 +655,18 @@ async def send_telegram_message(message, okx_uid, debug=False, error=False, imme
 
     # 트레이딩 상태 확인 (error 또는 debug 메시지가 아닌 경우만)
     # error 메시지는 항상 전송되어야 함
+    # 멀티심볼 모드: 심볼별 상태 확인
     if not error and not debug:
         try:
-            # Operations: Single GET - fast operation
-            async with get_redis_context(user_id=str(okx_uid), timeout=RedisTimeout.FAST_OPERATION) as redis:
-                trading_status = await redis.get(f"user:{okx_uid}:trading:status")
-                if trading_status:
-                    if isinstance(trading_status, bytes):
-                        trading_status = trading_status.decode('utf-8')
+            from HYPERRSI.src.services.multi_symbol_service import multi_symbol_service
+            # 어떤 심볼이라도 running 상태인지 확인
+            active_symbols_info = await multi_symbol_service.list_symbols_with_info(okx_uid)
+            any_running = any(info.get('status') == 'running' for info in active_symbols_info)
 
-                    if trading_status == "stopped":
-                        logger.info(f"[send_telegram_message] 트레이딩이 중지된 상태입니다. 메시지 전송을 건너뜁니다. okx_uid: {okx_uid}")
-                        return False
+            # 활성 심볼이 있지만 모두 stopped인 경우
+            if active_symbols_info and not any_running:
+                logger.info(f"[send_telegram_message] 모든 심볼이 중지된 상태입니다. 메시지 전송을 건너뜁니다. okx_uid: {okx_uid}")
+                return False
         except Exception as e:
             logger.error(f"[send_telegram_message] 트레이딩 상태 확인 중 오류: {str(e)}")
             # 상태 확인 실패 시 메시지는 전송 (안전을 위해)

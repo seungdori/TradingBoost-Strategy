@@ -941,22 +941,23 @@ class OKXWebsocketClient:
 async def get_active_users() -> list:
     """
     Celery worker에서 실행 중인 활성 사용자 목록을 가져옵니다.
+    심볼별 상태에서 running인 사용자를 찾아 중복 제거 후 반환합니다.
 
     Returns:
         활성 사용자 ID 리스트
     """
     redis = await get_redis()
-    active_users = []
+    active_users = set()  # 중복 제거를 위해 set 사용
 
     try:
-        # Redis에서 모든 user:*:trading:status 키 패턴 검색
-        pattern = "user:*:trading:status"
+        # Redis에서 모든 user:*:symbol:*:status 키 패턴 검색 (심볼별 상태)
+        pattern = "user:*:symbol:*:status"
         keys = await redis.keys(pattern)
 
-        logger.debug(f"총 {len(keys)}개의 trading:status 키 발견: {keys}")
+        logger.debug(f"총 {len(keys)}개의 symbol:status 키 발견: {keys}")
 
         for key in keys:
-            # key 형식: user:{okx_uid}:trading:status
+            # key 형식: user:{okx_uid}:symbol:{symbol}:status
             key_str = key.decode('utf-8') if isinstance(key, bytes) else key
             logger.debug(f"키 확인 중: {key_str}")
 
@@ -969,17 +970,19 @@ async def get_active_users() -> list:
                 logger.debug(f"키 {key_str}의 status: {status_str}")
 
                 if status_str == 'running':
-                    # user_id 추출 (user:586156710277369942:trading:status -> 586156710277369942)
-                    user_id = key_str.split(':')[1]
-                    active_users.append(user_id)
+                    # user_id 추출 (user:586156710277369942:symbol:BTC-USDT-SWAP:status -> 586156710277369942)
+                    parts = key_str.split(':')
+                    user_id = parts[1]
+                    active_users.add(user_id)  # set에 추가하여 중복 자동 제거
                     logger.debug(f"✅ 활성 사용자 발견: {user_id}")
                 else:
                     logger.debug(f"status가 'running'이 아님: {status_str}")
             else:
                 logger.warning(f"키 {key_str}에 값이 없음")
 
-        logger.debug(f"최종 활성 사용자 목록: {active_users}")
-        return active_users
+        result = list(active_users)
+        logger.debug(f"최종 활성 사용자 목록: {result}")
+        return result
     except Exception as e:
         logger.error(f"활성 사용자 조회 실패: {str(e)}")
         import traceback

@@ -182,7 +182,7 @@ async def handle_no_position(
             #    user_id,
             #    debug=True
             #)
-            #await redis_client.set(f"user:{user_id}:trading:status", "stopped")
+            #await redis_client.set(f"user:{user_id}:symbol:{symbol}:status", "stopped")
             #await send_telegram_message(f"⚠️[{user_id}] User의 상태를 Stopped로 강제 변경4.", user_id, debug=True)
             #await redis_client.delete(entry_fail_count_key)
             return
@@ -499,9 +499,10 @@ async def handle_no_position(
                     await redis.set(alert_key, "true", ex=7200)
                     logger.info(f"[{user_id}] 숏 포지션 진입 조건 불충족 알림 전송 완료. {symbol} {timeframe}")
             if fail_count >= 3:
-                await redis.set(f"user:{user_id}:trading:status", "stopped")
-                await send_telegram_message(f"⚠️[{user_id}] User의 상태를 Stopped로 강제 변경.5", user_id, debug=True)
-                await send_telegram_message("트레이딩 자동 종료\n""─────────────────────\n""3회 연속 진입 실패로 트레이딩이 종료되었습니다.",user_id, debug=True)
+                # 심볼별 상태 관리
+                await redis.set(f"user:{user_id}:symbol:{symbol}:status", "stopped")
+                await send_telegram_message(f"⚠️[{user_id}] {symbol} 상태를 Stopped로 강제 변경.5", user_id, debug=True)
+                await send_telegram_message(f"트레이딩 자동 종료\n""─────────────────────\n"f"{symbol}: 3회 연속 진입 실패로 트레이딩이 종료되었습니다.",user_id, debug=True)
                 await redis.delete(entry_fail_count_key)
 
     except Exception as e:
@@ -601,7 +602,7 @@ async def handle_existing_position(
     else:
         atr_value = current_price*0.01*0.1
         logger.error(f"캔들 데이터를 찾을 수 없습니다: {key}")
-    trading_status = await redis.get(f"user:{user_id}:trading:status")
+    trading_status = await redis.get(f"user:{user_id}:symbol:{symbol}:status")
     main_position_direction = await redis.get(f"user:{user_id}:position:{symbol}:main_position_direction")
     
 
@@ -1219,7 +1220,7 @@ async def handle_existing_position(
                                 else:
                                     last_filled_price = float(last_filled_price_raw)
                                 
-                                print(f"2. [{user_id}] initial_entry_price : {initial_entry_price}, last_filled_price : {last_filled_price}")
+                                print(f"2. [{user_id}][{symbol}] initial_entry_price : {initial_entry_price}, last_filled_price : {last_filled_price}")
                                 dca_levels = await calculate_dca_levels(
                                     initial_entry_price, 
                                     last_filled_price, 
@@ -1230,19 +1231,19 @@ async def handle_existing_position(
                                     user_id
                                 )
                                 await update_dca_levels_redis(user_id, symbol, dca_levels, "short")
-                                print(f"[{user_id}] DCA 레벨 재계산 완료: {dca_levels}")
+                                print(f"[{user_id}][{symbol}] DCA 레벨 재계산 완료: {dca_levels}")
                             except Exception as e:
-                                print(f"[{user_id}] DCA 레벨 재계산 실패: {e}")
+                                print(f"[{user_id}][{symbol}] DCA 레벨 재계산 실패: {e}")
                                 logger.error(f"DCA 레벨 재계산 실패: {e}")
                         
                         if dca_levels and len(dca_levels) > 0:
                             try:
                                 next_dca_level = float(dca_levels[0])
                                 next_dca_level_str = f"다음 진입가능 가격: {next_dca_level:,.2f}"
-                                print(f"[{user_id}] 다음 DCA 레벨 문자열: {next_dca_level_str}")
+                                print(f"[{user_id}][{symbol}] 다음 DCA 레벨 문자열: {next_dca_level_str}")
                             except ValueError as e:
                                 logger.error(f"DCA 레벨 파싱 오류: {e}")
-                                print(f"[{user_id}] DCA 레벨 파싱 오류: {e}")
+                                print(f"[{user_id}][{symbol}] DCA 레벨 파싱 오류: {e}")
                         
                         telegram_message = "🔽 추가진입 (숏)"
                         telegram_message += "━━━━━━━━━━━━━━━\n"

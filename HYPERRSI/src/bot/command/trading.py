@@ -39,13 +39,16 @@ def is_allowed_user(user_id: Optional[str]) -> bool:
 
 def get_redis_keys(user_id: str, symbol: Optional[str] = None, side: Optional[str] = None) -> Dict[str, str]:
     keys = {
-        'status': f"user:{user_id}:trading:status",
+        # 'status' 키 제거 - 심볼별 상태 관리로 전환됨
+        # 심볼별 상태는 f"user:{user_id}:symbol:{symbol}:status" 패턴 사용
         'api_keys': f"user:{user_id}:api:keys",
         'stats': f"user:{user_id}:stats",
     }
 
-    if symbol is not None and side is not None:
-        keys['position'] = f"user:{user_id}:position:{symbol}:{side}"
+    if symbol is not None:
+        keys['symbol_status'] = f"user:{user_id}:symbol:{symbol}:status"
+        if side is not None:
+            keys['position'] = f"user:{user_id}:position:{symbol}:{side}"
 
     return keys
 
@@ -334,25 +337,11 @@ async def trade_command(message: types.Message) -> None:
 
     # === 멀티심볼 모드: 활성 심볼 목록 조회 ===
     active_symbols_info = []
-    if app_settings.MULTI_SYMBOL_ENABLED and okx_uid:
+    if okx_uid:
         active_symbols_info = await multi_symbol_service.list_symbols_with_info(okx_uid)
 
-    # 레거시 모드 호환: 활성 심볼이 없으면 기존 방식으로 확인
-    if not active_symbols_info:
-        trading_status = await redis.get(f"user:{user_id}:trading:status")
-        if isinstance(trading_status, bytes):
-            trading_status = trading_status.decode('utf-8')
-
-        okx_trading_status = None
-        if okx_uid:
-            okx_keys = get_redis_keys(okx_uid)
-            okx_trading_status = await redis.get(okx_keys['status'])
-            if isinstance(okx_trading_status, bytes):
-                okx_trading_status = okx_trading_status.decode('utf-8')
-
-        is_trading = trading_status == "running" or (okx_uid and okx_trading_status == "running")
-    else:
-        is_trading = len(active_symbols_info) > 0
+    # 활성 심볼 존재 여부로 트레이딩 상태 판단
+    is_trading = len(active_symbols_info) > 0
 
     # OKX UID로 preference 조회 (새 심볼 선택용)
     preference = await redis.hgetall(f"user:{okx_uid if okx_uid else user_id}:preferences")
@@ -776,12 +765,10 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
                 )
                 await safe_edit_message(callback.message, msg)
                 await callback.answer()
-                # 상태를 stopped로 변경
-                await redis.set(f"user:{user_id}:trading:status", "stopped")
-                print("22❤️‍🔥❤️‍🔥❤️‍🔥❤️‍🔥 !!!")
-                if okx_uid:
-                    await redis.set(f"user:{okx_uid}:trading:status", "stopped")
-                    print("33❤️‍🔥❤️‍🔥❤️‍🔥❤️‍🔥 !!!")
+                # 심볼별 상태를 stopped로 변경
+                if okx_uid and selected_symbol:
+                    await redis.set(f"user:{okx_uid}:symbol:{selected_symbol}:status", "stopped")
+                    print("심볼별 상태를 stopped로 변경")
                 return
             
             # FastAPI 엔드포인트 호출 수정
@@ -853,10 +840,9 @@ async def handle_trade_callback(callback: types.CallbackQuery) -> None:
                 # 다른 오류는 기존 처리 유지
                 logger.error(f"Error starting trading task: {e}, detail: {error_detail}")
                 await callback.answer(f"트레이딩 시작 중 오류: {str(error_detail)[:100]}")
-                # 오류 발생 시 상태를 stopped로 변경
-                await redis.set(f"user:{user_id}:trading:status", "stopped")
-                if okx_uid:
-                    await redis.set(f"user:{okx_uid}:trading:status", "stopped")
+                # 오류 발생 시 심볼별 상태를 stopped로 변경
+                if okx_uid and selected_symbol:
+                    await redis.set(f"user:{okx_uid}:symbol:{selected_symbol}:status", "stopped")
                 return
             finally:
                 await client.aclose()  # 클라이언트 명시적 종료
@@ -1059,49 +1045,22 @@ async def status_command(message: types.Message) -> None:
             active_symbols_info = await multi_symbol_service.list_symbols_with_info(okx_uid)
             symbols_to_check = [info.get('symbol') for info in active_symbols_info if info.get('symbol')]
 
-        # 레거시 모드 또는 멀티심볼이 비어있는 경우
+        # 활성 심볼이 없는 경우
         if not symbols_to_check:
-            # 1. 기본 트레이딩 상태 확인 (텔레그램 ID)
-            trading_status = await redis.get(f"user:{user_id}:trading:status")
+            await message.reply(
+                "📊 트레이딩 상태\n"
+                "─────────────────────\n\n"
+                "현재 활성화된 심볼이 없습니다.\n\n"
+                "/trade 명령어로 트레이딩을 시작하세요."
+            )
+            return
 
-            # 바이트 문자열을 디코딩
-            if isinstance(trading_status, bytes):
-                trading_status = trading_status.decode('utf-8')
-
-            # OKX UID가 있는 경우 해당 상태도 확인
-            okx_trading_status = None
-            if okx_uid:
-                okx_trading_status = await redis.get(f"user:{okx_uid}:trading:status")
-
-                # 바이트 문자열을 디코딩
-                if isinstance(okx_trading_status, bytes):
-                    okx_trading_status = okx_trading_status.decode('utf-8')
-
-            # 2. 현재 활성 심볼/타임프레임 조회 (OKX UID로 조회)
-            active_key = f"user:{okx_uid if okx_uid else user_id}:preferences"
-            preferences = await redis.hgetall(active_key)
-            symbol = preferences.get('symbol', '')
-            timeframe = preferences.get('timeframe', '')
-
-            if symbol:
-                symbols_to_check = [symbol]
-                # 레거시 모드용 상태 이모지
-                status_emoji = "🟢" if (trading_status == "running" or (okx_uid and okx_trading_status == "running")) else "🔴"
-            else:
-                await message.reply(
-                    "📊 트레이딩 상태\n"
-                    "─────────────────────\n\n"
-                    "현재 활성화된 심볼이 없습니다.\n\n"
-                    "/trade 명령어로 트레이딩을 시작하세요."
-                )
-                return
-        else:
-            # 멀티심볼 모드: 전체적으로 running 상태 확인
-            any_running = any(info.get('status') == 'running' for info in active_symbols_info)
-            status_emoji = "🟢" if any_running else "🔴"
-            # 레거시 변수 초기화 (아래 코드 호환용)
-            symbol = None
-            timeframe = None
+        # 전체적으로 running 상태 확인
+        any_running = any(info.get('status') == 'running' for info in active_symbols_info)
+        status_emoji = "🟢" if any_running else "🔴"
+        # 레거시 변수 초기화 (아래 코드 호환용)
+        symbol = None
+        timeframe = None
 
         # 3. 현재 포지션 정보 조회 (모든 활성 심볼)
         all_positions_by_symbol = {}  # {symbol: [position_info_list]}
@@ -1323,11 +1282,15 @@ async def button_callback(callback: types.CallbackQuery) -> None:
         if data.startswith('trade_'):
             action = data.split('_')[1]
             if action == 'start':
-                #await redis_client.set(f"user:{user_id}:trading:status", "running")
                 await callback.answer("트레이딩을 시작합니다.")
                 await safe_edit_message(callback.message, "자동 트레이딩이 시작되었습니다.")
             elif action == 'stop':
-                await redis.set(f"user:{user_id}:trading:status", "stopped")
+                # 멀티심볼 모드: 모든 활성 심볼 중지
+                okx_uid = await get_okx_uid_from_telegram_id(str(user_id))
+                if okx_uid:
+                    active_symbols = await multi_symbol_service.get_active_symbols(okx_uid)
+                    for symbol in active_symbols:
+                        await redis.set(f"user:{okx_uid}:symbol:{symbol}:status", "stopped")
                 await callback.answer("트레이딩을 중지합니다.")
                 await safe_edit_message(callback.message, "자동 트레이딩이 중지되었습니다.")
         else:

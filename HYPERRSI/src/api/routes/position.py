@@ -1416,14 +1416,15 @@ async def open_position_endpoint(
         # user_id를 OKX UID로 변환
         okx_uid = await resolve_user_identifier(str(req.user_id))
 
-        # 트레이딩 상태 체크 - 중지되었으면 주문하지 않음
+        # 심볼별 트레이딩 상태 체크 - 중지되었으면 주문하지 않음
         redis = await get_redis_client()
-        trading_status = await redis.get(f"user:{okx_uid}:trading:status")
+        symbol = req.symbol
+        trading_status = await redis.get(f"user:{okx_uid}:symbol:{symbol}:status")
         if isinstance(trading_status, bytes):
             trading_status = trading_status.decode('utf-8')
 
         if trading_status != "running":
-            logger.info(f"[{okx_uid}] 트레이딩이 중지된 상태입니다. 주문을 생성하지 않습니다. (status: {trading_status})")
+            logger.info(f"[{okx_uid}] {symbol} 트레이딩이 중지된 상태입니다. 주문을 생성하지 않습니다. (status: {trading_status})")
             raise HTTPException(
                 status_code=400,
                 detail=f"트레이딩이 중지된 상태입니다. 주문을 생성할 수 없습니다. (현재 상태: {trading_status})"
@@ -2231,7 +2232,7 @@ async def get_position_detail(
                     entry_count=entry_count
                 )
 
-                # Redis에 저장된 SL 가격 확인
+                # Redis에 저장된 SL 가격 확인 (메인 hash → 별도 sl_data hash 순서로 조회)
                 redis_sl_price = position_data.get('sl_price')
                 if redis_sl_price:
                     try:
@@ -2239,6 +2240,63 @@ async def get_position_detail(
                         if sl_price_val > 0:
                             stop_loss_info = StopLossInfo(price=sl_price_val)
                     except (ValueError, TypeError):
+                        pass
+
+                # 별도 sl_data hash에서 SL 정보 조회 (메인 hash에 없는 경우)
+                if not stop_loss_info:
+                    sl_data_key = f"user:{okx_uid}:position:{symbol}:{position_side}:sl_data"
+                    sl_data_raw = await asyncio.wait_for(
+                        redis.hgetall(sl_data_key),
+                        timeout=RedisTimeout.FAST_OPERATION
+                    )
+                    if sl_data_raw:
+                        # bytes 디코딩
+                        sl_data_decoded = {}
+                        for k, v in sl_data_raw.items():
+                            dk = k.decode() if isinstance(k, bytes) else k
+                            dv = v.decode() if isinstance(v, bytes) else v
+                            sl_data_decoded[dk] = dv
+
+                        sl_trigger = sl_data_decoded.get('trigger_price') or sl_data_decoded.get('sl_price')
+                        sl_order_id = sl_data_decoded.get('order_id') or sl_data_decoded.get('algo_id')
+                        if sl_trigger:
+                            try:
+                                sl_price_val = float(sl_trigger)
+                                if sl_price_val > 0:
+                                    stop_loss_info = StopLossInfo(
+                                        price=sl_price_val,
+                                        algo_id=sl_order_id,
+                                        trigger_price=sl_price_val
+                                    )
+                            except (ValueError, TypeError):
+                                pass
+
+                # 별도 tp_data에서 TP 정보 조회
+                tp_data_key = f"user:{okx_uid}:position:{symbol}:{position_side}:tp_data"
+                tp_data_raw = await asyncio.wait_for(
+                    redis.get(tp_data_key),
+                    timeout=RedisTimeout.FAST_OPERATION
+                )
+                if tp_data_raw:
+                    try:
+                        tp_data_str = tp_data_raw.decode() if isinstance(tp_data_raw, bytes) else tp_data_raw
+                        # JSON 배열 형식 파싱: [88010.6, 88186.3, 88361.9]
+                        import json
+                        tp_prices_list = json.loads(tp_data_str)
+                        if isinstance(tp_prices_list, list):
+                            for i, tp_price in enumerate(tp_prices_list):
+                                try:
+                                    tp_price_val = float(tp_price)
+                                    if tp_price_val > 0:
+                                        take_profit_list.append(TakeProfitInfo(
+                                            price=tp_price_val,
+                                            size=None,
+                                            algo_id=None,
+                                            trigger_price=tp_price_val
+                                        ))
+                                except (ValueError, TypeError):
+                                    continue
+                    except (json.JSONDecodeError, ValueError, TypeError):
                         pass
 
                 # 트레일링 스톱 정보 조회

@@ -443,6 +443,14 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
             # 비활성화된 트레일링 스탑은 삭제
             await redis.delete(trailing_key)
             return False
+
+        # 🔒 중복 처리 방지: 이미 triggered 상태이면 스킵
+        current_status = ts_data.get("status", "")
+        if isinstance(current_status, bytes):
+            current_status = current_status.decode()
+        if current_status == "triggered":
+            logger.debug(f"트레일링 스탑 이미 triggered 상태, 스킵: {trailing_key}")
+            return False
             
         # 기본 정보
         trailing_offset = float(ts_data.get("trailing_offset", 0))
@@ -531,6 +539,11 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                 return False
                 
             if current_price <= trailing_stop_price:
+                # 🔒 중복 처리 방지: 먼저 status를 triggered로 설정
+                await redis.hset(trailing_key, "status", "triggered")
+                await redis.hset(trailing_key, "trigger_price", str(current_price))
+                await redis.hset(trailing_key, "trigger_time", str(int(datetime.now().timestamp())))
+
                 # 트레일링 스탑 알림
                 await send_telegram_message(f"⚠️ 트레일링 스탑 가격({trailing_stop_price:.2f}) 도달\n"f"━━━━━━━━━━━━━━━\n"f"현재가: {current_price:.2f}\n"f"포지션: {symbol} {direction.upper()}\n"f"트레일링 오프셋: {trailing_offset:.2f}",okx_uid)
 
@@ -571,18 +584,13 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                     return False
                 
                 await clear_trailing_stop(okx_uid, symbol, direction)
-                
-                # 트레일링 스탑 키에 조건 충족 상태 기록
-                await redis.hset(trailing_key, "status", "triggered")
-                await redis.hset(trailing_key, "trigger_price", str(current_price))
-                await redis.hset(trailing_key, "trigger_time", str(int(datetime.now().timestamp())))
-                
+
                 # 트레일링 스탑 실행 로깅
                 try:
                     position_key = f"user:{okx_uid}:position:{symbol}:{direction}"
                     position_data = await redis.hgetall(position_key)
                     position_size = float(position_data.get("size", "0")) if position_data else 0
-                    
+
                     log_order(
                         user_id=okx_uid,
                         symbol=symbol,
@@ -601,9 +609,9 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                     )
                 except Exception as e:
                     logger.error(f"트레일링 스탑 로깅 실패: {str(e)}")
-                
+
                 return True  # 트레일링 스탑 조건 충족
-        
+
         else:  # short
             lowest_price = float(ts_data.get("lowest_price", float('inf')))
             
@@ -678,15 +686,20 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
             # 현재가가 트레일링 스탑 가격 위로 올라갔는지 체크 (종료 조건)
             trailing_stop_price = float(ts_data.get("trailing_stop_price", float('inf')))
             if current_price >= trailing_stop_price:
-                # 트레일링 스탑 알림
-                asyncio.create_task(send_telegram_message(
+                # 🔒 중복 처리 방지: 먼저 status를 triggered로 설정
+                await redis.hset(trailing_key, "status", "triggered")
+                await redis.hset(trailing_key, "trigger_price", str(current_price))
+                await redis.hset(trailing_key, "trigger_time", str(int(datetime.now().timestamp())))
+
+                # 트레일링 스탑 알림 (await로 동기 실행)
+                await send_telegram_message(
                     f"⚠️ 트레일링 스탑 가격({trailing_stop_price:.2f}) 도달\n"
                     f"━━━━━━━━━━━━━━━\n"
                     f"현재가: {current_price:.2f}\n"
                     f"포지션: {symbol} {direction.upper()}\n"
                     f"트레일링 오프셋: {trailing_offset:.2f}",
-                    user_id 
-                ))
+                    user_id
+                )
 
                 try:
                     # Lazy import to avoid circular dependency
@@ -694,12 +707,12 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
 
                     # 먼저 포지션이 실제로 존재하는지 확인
                     position_exists, _ = await check_position_exists(user_id, symbol, direction)
-                    
+
                     if not position_exists:
                         logger.info(f"트레일링 스탑 실행 중지 - 포지션이 이미 종료됨: {symbol} {direction}")
                         await clear_trailing_stop(user_id, symbol, direction)
                         return False
-                        
+
                     # 포지션이 존재하는 경우에만 종료 시도
                     close_request = ClosePositionRequest(close_type='market', price=current_price, close_percent=100.0)
                     await close_position(symbol=symbol, close_request=close_request, user_id=user_id, side=direction)
@@ -721,22 +734,17 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                         logger.error(f"포지션 종료 중 오류: {str(e)}")
                         traceback.print_exc()
 
-                    asyncio.create_task(clear_trailing_stop(user_id, symbol, direction))
+                    await clear_trailing_stop(user_id, symbol, direction)
                     return False
 
-                asyncio.create_task(clear_trailing_stop(user_id, symbol, direction))
-                
-                # 트레일링 스탑 키에 조건 충족 상태 기록
-                await redis.hset(trailing_key, "status", "triggered")
-                await redis.hset(trailing_key, "trigger_price", str(current_price))
-                await redis.hset(trailing_key, "trigger_time", str(int(datetime.now().timestamp())))
-                
+                await clear_trailing_stop(user_id, symbol, direction)
+
                 # 트레일링 스탑 실행 로깅
                 try:
                     position_key = f"user:{user_id}:position:{symbol}:{direction}"
                     position_data = await redis.hgetall(position_key)
                     position_size = float(position_data.get("size", "0")) if position_data else 0
-                    
+
                     log_order(
                         user_id=user_id,
                         symbol=symbol,
@@ -755,7 +763,7 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                     )
                 except Exception as e:
                     logger.error(f"트레일링 스탑 로깅 실패: {str(e)}")
-                
+
                 return True  # 트레일링 스탑 조건 충족
         
         return False  # 트레일링 스탑 조건 미충족
@@ -772,17 +780,20 @@ async def clear_trailing_stop(user_id: str, symbol: str, direction: str):
 
     try:
         redis = await get_redis_client()
+        # user_id를 OKX UID로 변환 (일관된 키 사용)
+        okx_uid = await get_identifier(str(user_id))
+
         # 트레일링 스탑 키 삭제
-        trailing_key = f"trailing:user:{user_id}:{symbol}:{direction}"
-        await redis.delete(trailing_key)
-        
+        trailing_key = f"trailing:user:{okx_uid}:{symbol}:{direction}"
+        deleted = await redis.delete(trailing_key)
+
         # 포지션 키가 있으면 트레일링 스탑 관련 필드도 리셋
-        position_key = f"user:{user_id}:position:{symbol}:{direction}"
+        position_key = f"user:{okx_uid}:position:{symbol}:{direction}"
         if await redis.exists(position_key):
             await redis.hset(position_key, "trailing_stop_active", "false")
             await redis.hdel(position_key, "trailing_stop_key")
-            
-        logger.info(f"트레일링 스탑 데이터 삭제 완료: {trailing_key}")
+
+        logger.info(f"트레일링 스탑 데이터 삭제 완료: {trailing_key} (deleted={deleted})")
         return True
     except Exception as e:
         logger.error(f"트레일링 스탑 데이터 삭제 오류: {str(e)}")

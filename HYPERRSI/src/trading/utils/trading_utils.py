@@ -87,16 +87,32 @@ async def get_tp_prices(user_id: str, symbol: str, side: str):
     data = await redis.get(tp_data_key)
     return json.loads(data) if data else {}
 
-async def is_trading_running(user_id: str) -> bool:
-    """trading_status 확인 후 'running'이면 True, 아니면 False."""
+async def is_trading_running(user_id: str, symbol: str = None) -> bool:
+    """trading_status 확인 후 'running'이면 True, 아니면 False.
+
+    Args:
+        user_id: 사용자 ID (OKX UID)
+        symbol: 심볼 (옵션). None이면 모든 활성 심볼 중 하나라도 running이면 True
+    """
     redis = await get_redis_client()
-    status = await redis.get(f"user:{user_id}:trading:status")
-    
-    # 바이트 문자열을 디코딩
-    if isinstance(status, bytes):
-        status = status.decode('utf-8')
-        
-    return (status == "running")
+
+    if symbol:
+        # 특정 심볼의 상태 확인
+        status = await redis.get(f"user:{user_id}:symbol:{symbol}:status")
+        if isinstance(status, bytes):
+            status = status.decode('utf-8')
+        return (status == "running")
+    else:
+        # 모든 심볼 중 하나라도 running이면 True
+        pattern = f"user:{user_id}:symbol:*:status"
+        keys = await redis.keys(pattern)
+        for key in keys:
+            status = await redis.get(key)
+            if isinstance(status, bytes):
+                status = status.decode('utf-8')
+            if status == "running":
+                return True
+        return False
 
 async def calculate_dca_levels(entry_price: float, last_filled_price:float ,settings: dict, side: str, atr_value: float, current_price: float, user_id: str) -> list:
     pyramiding_entry_type = settings.get('pyramiding_entry_type', '퍼센트 기준')

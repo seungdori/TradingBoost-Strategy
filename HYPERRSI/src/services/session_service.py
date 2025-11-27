@@ -109,10 +109,7 @@ class SessionService:
                 await session.flush()  # ID 확보
 
                 session_id = new_session.id
-                logger.info(
-                    f"Session created: session_id={session_id}, "
-                    f"okx_uid={okx_uid}, symbol={symbol}"
-                )
+
 
                 # 3. hyperrsi_current UPSERT
                 await self._upsert_current_state(

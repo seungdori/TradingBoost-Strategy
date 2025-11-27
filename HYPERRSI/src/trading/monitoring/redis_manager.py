@@ -51,21 +51,21 @@ async def get_all_running_users() -> List[int]:
                 logger.warning(f"Redis 연결 상태 불량, 재연결 시도 ({retry_count+1}/{max_retry})")
                 await reconnect_redis()
 
-            # Use SCAN instead of KEYS to avoid blocking Redis
-            status_keys = await scan_keys_pattern("user:*:trading:status", redis=redis)
-            running_users = []
+            # Use SCAN instead of KEYS to avoid blocking Redis (심볼별 상태 키 패턴)
+            status_keys = await scan_keys_pattern("user:*:symbol:*:status", redis=redis)
+            running_users = set()  # 중복 제거를 위해 set 사용
 
             for key in status_keys:
                 status = await redis.get(key)
                 if status == "running":
-                    # key 구조: user:{user_id}:trading:status
+                    # key 구조: user:{user_id}:symbol:{symbol}:status
                     parts = key.split(":")
                     user_id = parts[1]
                     # OKX UID로 변환
                     okx_uid = await get_identifier(user_id)
-                    running_users.append(int(okx_uid))
+                    running_users.add(int(okx_uid))
 
-            return running_users
+            return list(running_users)
         except Exception as e:
             retry_count += 1
             logger.error(f"running_users 조회 실패 (시도 {retry_count}/{max_retry}): {str(e)}")

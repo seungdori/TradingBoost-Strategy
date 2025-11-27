@@ -24,7 +24,7 @@ REDIS_KEY_SYMBOL_PRESET_ID = "user:{okx_uid}:symbol:{symbol}:preset_id"
 REDIS_KEY_SYMBOL_TIMEFRAME = "user:{okx_uid}:symbol:{symbol}:timeframe"
 REDIS_KEY_SYMBOL_STARTED_AT = "user:{okx_uid}:symbol:{symbol}:started_at"
 REDIS_KEY_SYMBOL_STATUS = "user:{okx_uid}:symbol:{symbol}:status"
-REDIS_KEY_TRADING_STATUS = "user:{okx_uid}:trading:status"
+# REDIS_KEY_TRADING_STATUS 제거 - 심볼별 상태 관리로 완전히 전환
 
 
 class MaxSymbolsReachedError(Exception):

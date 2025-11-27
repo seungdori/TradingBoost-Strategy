@@ -119,7 +119,7 @@ OKX API 자격증명을 사용하여 새로운 사용자를 등록하고 초기 
 ### Redis 키 구조
 - `user:{user_id}:api:keys` - API 자격증명
 - `user:{user_id}:preferences` - 트레이딩 설정
-- `user:{user_id}:trading:status` - 거래 상태
+- `user:{user_id}:symbol:{symbol}:status` - 심볼별 거래 상태
 - `user:{user_id}:stats` - 통계 정보
 - `user:{user_id}:okx_uid` - OKX UID 매핑
 
@@ -279,11 +279,8 @@ async def register_user(
                 ),
                 timeout=RedisTimeout.FAST_OPERATION
             )
-            # 사용자 상태 초기화
-            await asyncio.wait_for(
-                redis.set(f"user:{request.user_id}:trading:status", "stopped"),
-                timeout=RedisTimeout.FAST_OPERATION
-            )
+            # 심볼별 상태는 트레이딩 시작 시 생성됨 (user:{okx_uid}:symbol:{symbol}:status)
+            # 등록 시점에는 특정 심볼이 없으므로 상태 키를 생성하지 않음
 
             if okx_uid is not None:
                 await asyncio.wait_for(
@@ -293,10 +290,7 @@ async def register_user(
                     ),
                     timeout=RedisTimeout.FAST_OPERATION
                 )
-                await asyncio.wait_for(
-                    redis.hmset(f"user:{okx_uid}:trading:status", "stopped"),
-                    timeout=RedisTimeout.FAST_OPERATION
-                )
+                # 심볼별 상태는 트레이딩 시작 시 생성됨
                 print("❤️‍❤️‍❤️‍❤️‍ ")
 
 
@@ -433,19 +427,21 @@ async def get_user(user_id: str, db: Session = Depends(get_db)):
                 redis.hgetall(f"user:{user_id}:stats"),
                 timeout=RedisTimeout.FAST_OPERATION
             )
-            status = await asyncio.wait_for(
-                redis.get(f"user:{user_id}:trading:status"),
-                timeout=RedisTimeout.FAST_OPERATION
-            )
 
         # OKX UID 조회
         okx_uid = await get_okx_uid_from_telegram(user_id)
 
-        # status 처리 - bytes일 수도 있고 str일 수도 있음
-        status_str = status.decode() if isinstance(status, bytes) else status
-        if not status_str:
-            status_str = "stopped"
-            print("❤️‍❤️‍❤️‍❤️‍ !!!")
+        # 심볼별 상태 확인 - 하나라도 running이면 running
+        status_str = "stopped"
+        async with asyncio.timeout(RedisTimeout.FAST_OPERATION):
+            symbol_status_keys = await redis.keys(f"user:{user_id}:symbol:*:status")
+            for key in symbol_status_keys:
+                status = await redis.get(key)
+                if status:
+                    s = status.decode() if isinstance(status, bytes) else status
+                    if s == "running":
+                        status_str = "running"
+                        break
 
         # registration_date 처리 - bytes일 수도 있고 str일 수도 있음
         registration_date_bytes = stats.get(b'registration_date', b'0')

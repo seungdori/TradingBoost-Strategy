@@ -370,14 +370,14 @@ async def try_send_order(
         executor = APIDirectExecutor(user_id=user_id, api_keys=api_keys)
         logger.warning(f"⚠️ [{user_id}][{symbol}] 기본 API Direct Executor 사용")
 
-    # 트레이딩 상태 체크 - 중지되었으면 주문하지 않음
+    # 심볼별 트레이딩 상태 체크 - 중지되었으면 주문하지 않음
     redis = await get_redis_client()
-    trading_status = await redis.get(f"user:{user_id}:trading:status")
+    trading_status = await redis.get(f"user:{user_id}:symbol:{symbol}:status")
     if isinstance(trading_status, bytes):
         trading_status = trading_status.decode('utf-8')
 
     if trading_status != "running":
-        logger.info(f"[{user_id}] 트레이딩이 중지된 상태입니다. 주문을 생성하지 않습니다. (status: {trading_status})")
+        logger.info(f"[{user_id}] {symbol} 트레이딩이 중지된 상태입니다. 주문을 생성하지 않습니다. (status: {trading_status})")
         now = datetime.datetime.now()
         return OrderStatus(
             order_id="trading_stopped",

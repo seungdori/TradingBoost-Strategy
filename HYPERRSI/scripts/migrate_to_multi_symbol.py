@@ -29,17 +29,19 @@ from shared.logging import get_logger
 
 logger = get_logger(__name__)
 
-# 레거시 Redis 키 패턴
-LEGACY_STATUS_KEY = "user:{okx_uid}:trading:status"
+# 레거시 Redis 키 패턴 (마이그레이션 대상 - 더 이상 사용하지 않음)
+# 참고: 새 시스템에서는 심볼별 상태 키(user:{okx_uid}:symbol:{symbol}:status)를 사용
+LEGACY_STATUS_KEY = "user:{okx_uid}:trading:status"  # 구 버전 (사용자 레벨)
 LEGACY_PREFERENCES_KEY = "user:{okx_uid}:preferences"
 LEGACY_TASK_ID_KEY = "user:{okx_uid}:task_id"
 
-# 멀티심볼 Redis 키 패턴
+# 멀티심볼 Redis 키 패턴 (현재 사용 중)
 MULTI_ACTIVE_SYMBOLS_KEY = "user:{okx_uid}:active_symbols"
-MULTI_SYMBOL_STATUS_KEY = "user:{okx_uid}:symbol:{symbol}:status"
+MULTI_SYMBOL_STATUS_KEY = "user:{okx_uid}:symbol:{symbol}:status"  # 새 버전 (심볼 레벨)
 MULTI_SYMBOL_TIMEFRAME_KEY = "user:{okx_uid}:symbol:{symbol}:timeframe"
 MULTI_SYMBOL_TASK_ID_KEY = "user:{okx_uid}:symbol:{symbol}:task_id"
 MULTI_SYMBOL_STARTED_AT_KEY = "user:{okx_uid}:symbol:{symbol}:started_at"
+MULTI_SYMBOL_PRESET_ID_KEY = "user:{okx_uid}:symbol:{symbol}:preset_id"
 
 
 class MigrationResult:

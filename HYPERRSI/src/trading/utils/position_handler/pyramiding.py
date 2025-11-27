@@ -150,7 +150,7 @@ async def handle_pyramiding(
     else:
         last_filled_price = float(last_filled_price_raw)
 
-    print(f"3. [{user_id}] initial_entry_price : {initial_entry_price}, last_filled_price : {last_filled_price}")
+    print(f"3. [{user_id}][{symbol}] initial_entry_price : {initial_entry_price}, last_filled_price : {last_filled_price}")
     dca_levels = await calculate_dca_levels(
         initial_entry_price,
         last_filled_price,
@@ -186,7 +186,7 @@ async def handle_pyramiding(
     else:
         dca_order_count = int(dca_order_count)
 
-    print(f"[{user_id}] dca_order_count: {dca_order_count}")
+    print(f"[{user_id}][{symbol}] dca_order_count: {dca_order_count}")
 
     # Get position size info
     position_size = float(position_info.get('size', 0))

@@ -172,10 +172,7 @@ async def check_position_lock(
     remaining_time = await redis.ttl(lock_key) if is_locked else 0
 
     if is_locked:
-        logger.info(
-            f"[{user_id}] Position locked for {symbol} {side} on {tf_str}. "
-            f"Remaining: {remaining_time}s"
-        )
+        logger.info(f"[{user_id}][{symbol}] Position locked for {symbol} {side} on {tf_str}. Remaining: {remaining_time}s")
 
     return bool(is_locked), remaining_time
 
@@ -239,7 +236,7 @@ async def check_any_direction_locked(
         return False, None, 0
 
     except Exception as e:
-        logger.error(f"[{user_id}] Error checking position locks: {str(e)}")
+        logger.error(f"[{user_id}][{symbol}] Error checking position locks: {str(e)}")
         return False, None, 0
 
 

@@ -154,8 +154,9 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
             # Redis 연결 확인
             #logger.warning("Redis 연결 확인 중")
             await redis.ping()
-            await redis.set(f"user:{user_id}:trading:status", "running")
-            #logger.warning(f"Redis 상태 업데이트 완료: user:{user_id}:trading:status = running")
+            # 심볼별 상태 관리로 전환
+            await redis.set(f"user:{user_id}:symbol:{symbol}:status", "running")
+            #logger.warning(f"Redis 상태 업데이트 완료: user:{user_id}:symbol:{symbol}:status = running")
 
         except Exception as e:
             error_msg = f"트레이딩 초기화 실패: {str(e)}"
@@ -195,7 +196,8 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
 
                 await send_telegram_message(f"⚠️ {error_msg}\n User의 상태를 Stopped로 강제 변경.", user_id, debug=True)
                 await send_telegram_message(f"에러가 발생했습니다. 잠시 후에 다시 시도해주세요.", user_id)
-                await redis.set(f"user:{user_id}:trading:status", "stopped")
+                # 심볼별 상태 관리
+                await redis.set(f"user:{user_id}:symbol:{symbol}:status", "stopped")
             except Exception as telegram_error:
                 logger.error(f"텔레그램 메시지 전송 실패: {str(telegram_error)}", exc_info=True)
                 # errordb 로깅 (텔레그램 전송 실패)
@@ -230,7 +232,8 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
             user_settings = await redis_service.get_user_settings(user_id)
             if not user_settings:
                 await send_telegram_message("⚠️ 트레이딩 설정 오류\n""─────────────────────\n""사용자 설정을 찾을 수 없습니다.\n""/settings 명령어로 설정을 확인해주세요.",user_id)
-                await redis.set(f"user:{user_id}:trading:status", "stopped")
+                # 심볼별 상태 관리
+                await redis.set(f"user:{user_id}:symbol:{symbol}:status", "stopped")
                 return
 
             # === 멀티심볼 모드: 프리셋 설정 로드 및 병합 ===
@@ -278,7 +281,9 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
             await redis.delete(entry_fail_count_key)
             if not symbol or not timeframe:
                 await send_telegram_message("⚠️ 트레이딩 설정 오류\n""─────────────────────\n""심볼 또는 타임프레임이 설정되지 않았습니다.\n""설정을 확인하고 다시 시작해주세요.",user_id)
-                await redis.set(f"user:{user_id}:trading:status", "stopped")
+                # 심볼별 상태 관리 (symbol이 없으면 기본값 사용)
+                status_key = f"user:{user_id}:symbol:{symbol or 'unknown'}:status"
+                await redis.set(status_key, "stopped")
                 await send_telegram_message(f"⚠️[{user_id}] User의 상태를 Stopped로 강제 변경1.", user_id, debug=True)
                 return
         
@@ -332,7 +337,8 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                         f"설정을 수정하고 다시 시작해주세요.",
                         user_id
                     )
-                    await redis.set(f"user:{user_id}:trading:status", "stopped")
+                    # 심볼별 상태 관리
+                    await redis.set(f"user:{user_id}:symbol:{symbol}:status", "stopped")
                     await send_telegram_message(f"⚠️[{user_id}] User의 상태를 Stopped로 강제 변경2.", user_id, debug=True)
                     return
             
@@ -402,7 +408,8 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
 
             #print(f"레버리지: {leverage}, 현재 레버리지: {current_leverage}")
             is_hedge_mode, tdMode = await trading_service.get_position_mode(user_id, symbol)
-            is_running = await redis.get(f"user:{user_id}:trading:status")
+            # 심볼별 상태 확인
+            is_running = await redis.get(f"user:{user_id}:symbol:{symbol}:status")
             if not restart:
                 try:
                     if leverage > 1.0 and current_leverage != leverage:
@@ -485,7 +492,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                     logger.error(f"설정을 찾을 수 없음: user_id={user_id}")
                     return
                 #print("설정 업데이트 완료")
-                trading_status = await redis.get(f"user:{user_id}:trading:status")
+                trading_status = await redis.get(f"user:{user_id}:symbol:{symbol}:status")
                 # 바이트 문자열을 디코딩
                 if isinstance(trading_status, bytes):
                     trading_status = trading_status.decode('utf-8')
@@ -500,7 +507,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                     )
                     return
                 #=======================================
-                trading_status = await redis.get(f"user:{user_id}:trading:status")
+                trading_status = await redis.get(f"user:{user_id}:symbol:{symbol}:status")
                 if isinstance(trading_status, bytes):
                     trading_status = trading_status.decode('utf-8')
                 if trading_status != "running":
@@ -555,7 +562,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                         return
 
                 #=======================================
-                trading_status = await redis.get(f"user:{user_id}:trading:status")
+                trading_status = await redis.get(f"user:{user_id}:symbol:{symbol}:status")
                 if isinstance(trading_status, bytes):
                     trading_status = trading_status.decode('utf-8')
                 if trading_status != "running":
@@ -663,7 +670,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                     logger.debug(f"Current Position : {current_position}")
                     await redis.set(last_print_key, str(current_time))
             
-                trading_status = await redis.get(f"user:{user_id}:trading:status")
+                trading_status = await redis.get(f"user:{user_id}:symbol:{symbol}:status")
                 if isinstance(trading_status, bytes):
                     trading_status = trading_status.decode('utf-8')
                 if trading_status != "running":
@@ -676,7 +683,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                         symbol, timeframe,
                         current_rsi, rsi_signals, current_state
                     )
-                    trading_status = await redis.get(f"user:{user_id}:trading:status")
+                    trading_status = await redis.get(f"user:{user_id}:symbol:{symbol}:status")
                     if isinstance(trading_status, bytes):
                         trading_status = trading_status.decode('utf-8')
                     if trading_status is None:
@@ -698,7 +705,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                             symbol, timeframe,
                             current_position, current_rsi, rsi_signals, current_state, side = direction
                         )
-                        trading_status = await redis.get(f"user:{user_id}:trading:status")
+                        trading_status = await redis.get(f"user:{user_id}:symbol:{symbol}:status")
                         if isinstance(trading_status, bytes):
                             trading_status = trading_status.decode('utf-8')
                         if trading_status != "running":
@@ -748,7 +755,7 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                 logger.debug(f"[{user_id}] 트레이딩 로직 루프 완료. 현재 RSI: {current_rsi}, 현재 상태: {current_state}") # 디버깅용
 
                 #=======================================
-                trading_status = await redis.get(f"user:{user_id}:trading:status")
+                trading_status = await redis.get(f"user:{user_id}:symbol:{symbol}:status")
                 if isinstance(trading_status, bytes):
                     trading_status = trading_status.decode('utf-8')
                 if trading_status != "running":
@@ -785,8 +792,10 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
                 await trading_service.close()
                 #print("trading_service 종료")
         
-            # 트레이딩 종료 여부 확인 및 로그 기록
-            trading_status = await redis.get(f"user:{user_id}:trading:status")
+            # 심볼별 트레이딩 종료 여부 확인 및 로그 기록
+            trading_status = await redis.get(f"user:{user_id}:symbol:{symbol}:status")
+            if isinstance(trading_status, bytes):
+                trading_status = trading_status.decode('utf-8')
             if trading_status == "stopped":
                 # 가장 먼저 로그를 기록
                 log_bot_stop(user_id=user_id, symbol=symbol, reason="사용자 요청 또는 시스템에 의한 종료")
