@@ -32,6 +32,13 @@ from HYPERRSI.src.trading.monitoring.trailing_stop_handler import (
 # Trade stats for PostgreSQL recording
 from HYPERRSI.src.trading.stats import update_trading_stats
 
+# PositionMonitorService - core.py 기능 통합
+from HYPERRSI.websocket.position_monitor_service import (
+    get_position_monitor_service,
+    start_position_monitor_service,
+    stop_position_monitor_service,
+)
+
 logger = get_logger(__name__)
 
 
@@ -1394,6 +1401,12 @@ async def main():
     """
     활성 사용자들의 포지션을 WebSocket으로 모니터링합니다.
     사용자가 없어도 계속 실행되며, 주기적으로 활성 사용자를 체크합니다.
+
+    추가로 PositionMonitorService를 시작하여 core.py의 기능들을 수행합니다:
+    - 알고리즘 주문 검증 및 중복 정리
+    - 주문 상태 모니터링
+    - 고아 알고리즘 주문 취소
+    - 메모리 관리 및 Redis 연결 상태 확인
     """
     try:
         # 0. 기존 프로세스 종료
@@ -1402,7 +1415,11 @@ async def main():
         kill_existing_processes()
         logger.info("=" * 50)
 
-        # 1. 지속적인 모니터링 시작
+        # 1. PositionMonitorService 시작 (core.py 기능 대체)
+        logger.info("🚀 PositionMonitorService 시작 (알고 주문 검증, 주문 상태 모니터링, 메모리 관리 등)")
+        await start_position_monitor_service()
+
+        # 2. 지속적인 WebSocket 모니터링 시작
         await monitor_active_users()
 
     except KeyboardInterrupt:
@@ -1411,6 +1428,11 @@ async def main():
         logger.error(f"에러 발생: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
+    finally:
+        # 서비스 정리
+        logger.info("🧹 PositionMonitorService 중지 중...")
+        await stop_position_monitor_service()
+        logger.info("✅ PositionMonitorService 중지 완료")
 
 if __name__ == "__main__":
     asyncio.run(main())

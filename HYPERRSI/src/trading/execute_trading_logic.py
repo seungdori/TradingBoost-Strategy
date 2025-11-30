@@ -6,7 +6,7 @@ import time
 import traceback
 from datetime import datetime
 from os import error
-from typing import Dict
+from typing import Dict, Optional
 
 from HYPERRSI.src.api.trading.Calculate_signal import TrendStateCalculator
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
@@ -92,7 +92,14 @@ async def get_identifier(user_id: str) -> str:
 
 
 # ======== 메인 트레이딩 로직 ========
-async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, restart = False):
+async def execute_trading_logic(
+    user_id: str,
+    symbol: str,
+    timeframe: str,
+    restart: bool = False,
+    execution_mode: str = "api_direct",
+    signal_token: Optional[str] = None
+):
 
     # MIGRATED: Using get_redis_context() with NORMAL_OPERATION
     async with get_redis_context(user_id=user_id, timeout=RedisTimeout.NORMAL_OPERATION) as redis:
@@ -139,13 +146,21 @@ async def execute_trading_logic(user_id: str, symbol: str, timeframe: str, resta
         logger.debug(f"execute_trading_logic 호출 - user_id: {user_id}, telegram_id: {telegram_id}, symbol: {symbol}, timeframe: {timeframe}, restart: {restart}")
     
         try:
-            # 트레이딩 서비스 초기화
+            # 트레이딩 서비스 초기화 (execution_mode, signal_token 전달)
             #logger.warning("트레이딩 서비스 초기화 시작")
-            trading_service = await TradingService.create_for_user(user_id)
+            trading_service = await TradingService.create_for_user(
+                user_id,
+                execution_mode=execution_mode,
+                signal_token=signal_token
+            )
            # logger.warning("트레이딩 서비스 초기화 완료")
             okx_instance = trading_service.client
             calculator = TrendStateCalculator()
             redis_service = RedisService()
+
+            # Signal Bot 모드 로깅
+            if execution_mode == "signal_bot":
+                logger.info(f"[{user_id}] Signal Bot 모드로 트레이딩 시작 (token: {signal_token[:8] if signal_token else 'N/A'}...)")
 
             # Redis 연결 확인
             #logger.warning("Redis 연결 확인 중")

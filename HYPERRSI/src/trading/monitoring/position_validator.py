@@ -11,6 +11,7 @@ from typing import Dict, Tuple, TYPE_CHECKING
 
 from HYPERRSI.src.api.dependencies import get_exchange_context
 from HYPERRSI.src.api.routes.order.services import PositionService
+from HYPERRSI.src.trading.utils.position_handler.constants import COOLDOWN_KEY, POSITION_KEY
 from shared.database.redis_helper import get_redis_client
 from shared.database.redis_patterns import scan_keys_pattern
 from shared.logging import get_logger, log_order
@@ -29,6 +30,52 @@ from .utils import (
 )
 
 logger = get_logger(__name__)
+
+# 종료 시 기본 쿨다운 (초) - 사용자 설정이 없을 때 사용
+DEFAULT_EXIT_COOLDOWN_SECONDS = 5
+
+
+async def _set_exit_cooldown(user_id: str, symbol: str, direction: str, closure_reason: str) -> None:
+    """
+    포지션 종료 후 쿨다운을 설정합니다.
+    TP/SL/브레이크이븐 등 어떤 이유로든 포지션이 종료되면 즉시 재진입을 방지합니다.
+
+    Args:
+        user_id: 사용자 ID
+        symbol: 심볼
+        direction: 포지션 방향 ('long' 또는 'short')
+        closure_reason: 종료 원인 ('tp_complete', 'stop_loss', 'breakeven')
+    """
+    try:
+        redis = await get_redis_client()
+
+        # 사용자 설정에서 쿨다운 시간 조회
+        settings_str = await redis.get(f"user:{user_id}:settings")
+        cooldown_seconds = DEFAULT_EXIT_COOLDOWN_SECONDS  # 기본 5초
+        use_cooldown = True
+
+        if settings_str:
+            try:
+                user_settings = json.loads(settings_str)
+                use_cooldown = user_settings.get('use_cooldown', True)
+                if use_cooldown:
+                    # 사용자 설정된 쿨다운 시간 사용 (최소 5초 보장)
+                    configured_cooldown = int(user_settings.get('cooldown_time', DEFAULT_EXIT_COOLDOWN_SECONDS))
+                    cooldown_seconds = max(configured_cooldown, DEFAULT_EXIT_COOLDOWN_SECONDS)
+                else:
+                    cooldown_seconds = 0
+            except (json.JSONDecodeError, ValueError):
+                logger.warning(f"[{user_id}] 설정 파싱 실패, 기본 쿨다운 {DEFAULT_EXIT_COOLDOWN_SECONDS}초 사용")
+
+        if cooldown_seconds > 0:
+            cooldown_key = COOLDOWN_KEY.format(user_id=user_id, symbol=symbol, side=direction)
+            await redis.set(cooldown_key, "true", ex=cooldown_seconds)
+            logger.info(f"[{user_id}][{symbol}][{direction}] 🔒 종료 후 쿨다운 설정: {cooldown_seconds}초 (사유: {closure_reason})")
+        else:
+            logger.info(f"[{user_id}][{symbol}][{direction}] 쿨다운 비활성화됨 (사유: {closure_reason})")
+
+    except Exception as e:
+        logger.error(f"[{user_id}][{symbol}][{direction}] 종료 쿨다운 설정 실패: {str(e)}")
 
 
 # Module-level attribute for backward compatibility
@@ -98,23 +145,26 @@ async def check_position_exists(user_id: str, symbol: str, direction: str) -> tu
 async def verify_and_handle_position_closure(user_id: str, symbol: str, direction: str, closure_reason: str):
     """
     주문 체결 후 포지션이 실제로 종료되었는지 확인하고 적절한 조치를 취합니다.
-    
+
     Args:
         user_id: 사용자 ID
-        symbol: 심볼  
+        symbol: 심볼
         direction: 포지션 방향
         closure_reason: 종료 원인 ('tp_complete', 'stop_loss', 'breakeven')
     """
     try:
         # 잠시 대기 (API 반영 시간 고려)
         await asyncio.sleep(2)
-        
+
         # 포지션이 실제로 종료되었는지 확인
         position_exists, current_position_info = await check_position_exists(user_id, symbol, direction)
-        
+
         if not position_exists:
             # 포지션이 정말 종료됨 - 종료 알림 전송
             logger.info(f"포지션 종료 확인됨: {user_id} {symbol} {direction} - {closure_reason}")
+
+            # 🔥 종료 후 쿨다운 설정 (즉시 재진입 방지)
+            await _set_exit_cooldown(user_id, symbol, direction, closure_reason)
         else:
             # 포지션이 여전히 존재 - 강제 종료 후 종료 알림 전송
             remaining_size = current_position_info.get('size', 0)
@@ -139,14 +189,17 @@ async def verify_and_handle_position_closure(user_id: str, symbol: str, directio
                 )
                 
                 logger.info(f"{closure_reason} 후 남은 포지션 강제 종료 완료: {user_id} {symbol} {direction}")
-                
-                # 강제 종료 후에도 자연스러운 종료 알림 전송 (사용자는 내부 처리 과정 모름)
-                
+
+                # 🔥 강제 종료 후에도 쿨다운 설정
+                await _set_exit_cooldown(user_id, symbol, direction, closure_reason)
+
             except Exception as close_error:
                 logger.error(f"남은 포지션 강제 종료 실패: {str(close_error)}")
                 # 강제 종료 실패해도 dust면 종료로 간주 (사용자에게는 자연스러운 종료로 알림)
                 if remaining_size < 0.001:
                     logger.info(f"Dust 포지션이므로 종료로 간주: {remaining_size}")
+                    # 🔥 Dust 종료에도 쿨다운 설정
+                    await _set_exit_cooldown(user_id, symbol, direction, closure_reason)
                     
     except Exception as e:
         logger.error(f"포지션 종료 확인 중 오류: {str(e)}")
@@ -297,7 +350,51 @@ async def check_and_cleanup_orders(user_id: str, symbol: str, direction: str):
         
         # 포지션이 없으면 해당 방향의 모든 주문 확인
         logger.info(f"사용자 {user_id}의 {symbol} {direction} 포지션이 없어 모니터링 데이터 정리 시작")
-        position_key = f"user:{user_id}:position:{symbol}:{direction}"
+        position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=direction)
+
+        # 0. 거래소의 알고리즘 주문(트리거 주문) 먼저 취소
+        logger.info(f"[정리] 🔄 알고리즘 주문 취소 시작: {user_id} {symbol} {direction}")
+        try:
+            from HYPERRSI.src.api.dependencies import get_user_api_keys
+            from HYPERRSI.src.trading.cancel_trigger_okx import TriggerCancelClient
+
+            # symbol이 이미 OKX 형식(예: SOL-USDT-SWAP)인지 확인
+            # 아니라면 변환 필요
+            trading_symbol = symbol
+            if "-" not in symbol:
+                from .utils import convert_to_trading_symbol
+                trading_symbol = convert_to_trading_symbol(symbol)
+
+            logger.info(f"[정리] 알고리즘 주문 취소 대상: {user_id} {trading_symbol} {direction}")
+
+            api_keys = await get_user_api_keys(str(user_id))
+            if not api_keys or not api_keys.get('api_key'):
+                logger.error(f"[정리] API 키를 찾을 수 없음: {user_id}")
+            else:
+                cancel_client = TriggerCancelClient(
+                    api_key=api_keys.get('api_key'),
+                    secret_key=api_keys.get('api_secret'),
+                    passphrase=api_keys.get('passphrase')
+                )
+
+                # 해당 방향의 알고리즘 주문 취소
+                result = await cancel_client.cancel_all_trigger_orders(
+                    inst_id=trading_symbol,
+                    side=direction,
+                    algo_type="trigger",
+                    user_id=str(user_id)
+                )
+
+                if result and result.get('code') == '0':
+                    if 'No active orders to cancel' in result.get('msg', ''):
+                        logger.info(f"[정리] ✅ 취소할 알고리즘 주문 없음: {user_id} {trading_symbol} {direction}")
+                    else:
+                        logger.info(f"[정리] ✅ 알고리즘 주문 취소 성공: {user_id} {trading_symbol} {direction} - 취소된 주문: {len(result.get('data', []))}개")
+                else:
+                    logger.warning(f"[정리] ⚠️ 알고리즘 주문 취소 실패: {user_id} {trading_symbol} {direction} - {result}")
+        except Exception as cancel_error:
+            logger.error(f"[정리] ❌ 알고리즘 주문 취소 중 오류: {str(cancel_error)}")
+            traceback.print_exc()
 
         # 1. 해당 방향의 모니터링 중인 모든 주문 가져오기
         pattern = f"monitor:user:{user_id}:{symbol}:order:*"
@@ -481,11 +578,11 @@ async def check_and_cleanup_orders(user_id: str, symbol: str, direction: str):
         from .trailing_stop_handler import clear_trailing_stop
         asyncio.create_task(clear_trailing_stop(user_id, symbol, direction))
         
-        # 4. 포지션 데이터 정리
-        position_key = f"user:{user_id}:position:{symbol}:{direction}"
+        # 4. 포지션 데이터 정리 - 안전한 삭제 로직 사용 (fetch_okx_position에서 이미 처리됨)
+        # fetch_okx_position의 안전 삭제 로직(2회 확인)에 의존하므로 여기서는 직접 삭제하지 않음
+        position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=direction)
         if await redis.exists(position_key):
-            logger.info(f"포지션이 없어 Redis에서 포지션 데이터 삭제: {position_key}")
-            await redis.delete(position_key)
+            logger.info(f"[{user_id}][{symbol}][{direction}] 포지션 키가 여전히 존재함 - fetch_okx_position의 안전 삭제 로직에 의존 (직접 삭제 안함)")
             
         logger.info(f"사용자 {user_id}의 {symbol} {direction} 모니터링 데이터 정리 완료")
         await asyncio.sleep(1)
@@ -589,7 +686,7 @@ async def cancel_algo_orders_for_no_position_sides(user_id: str):
                     # 포지션이 없는 방향이 있으면 처리
                     for missing_side in missing_sides:
                         # 반대 방향의 주문 취소
-                        logger.info(f"포지션 없음 확인 (전체 검사): {okx_uid}:{trading_symbol}:{missing_side}")
+                        logger.info(f"{okx_uid}:{trading_symbol}:{missing_side} 방향 포지션 없음 확인 (전체 검사): ")
                         
                         try:
                             # TriggerCancelClient를 사용하여 알고리즘 주문 취소

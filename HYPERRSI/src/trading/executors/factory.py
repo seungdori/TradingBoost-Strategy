@@ -22,6 +22,26 @@ from shared.logging import get_logger
 logger = get_logger(__name__)
 
 
+# OKX Signal Bot Webhook URL (환경변수로 설정 가능)
+from shared.config import get_settings
+
+def _get_signal_bot_webhook_url() -> str:
+    """환경변수 또는 기본값에서 Signal Bot Webhook URL 가져오기"""
+    try:
+        settings = get_settings()
+        return settings.SIGNAL_BOT_WEBHOOK_URL
+    except Exception:
+        return "https://www.okx.com/algo/signal/trigger"
+
+def _get_signal_bot_max_lag() -> int:
+    """환경변수 또는 기본값에서 Signal Bot Max Lag 가져오기"""
+    try:
+        settings = get_settings()
+        return settings.SIGNAL_BOT_MAX_LAG
+    except Exception:
+        return 60
+
+
 class ExecutorFactory:
     """
     주문 실행 전략 팩토리
@@ -32,6 +52,73 @@ class ExecutorFactory:
 
     주의: execution_mode는 실행별로 다를 수 있음!
     """
+
+    @staticmethod
+    async def create_signal_bot_executor(
+        user_id: str,
+        signal_token: str,
+        webhook_url: Optional[str] = None
+    ) -> SignalBotExecutor:
+        """
+        Signal Bot Executor를 직접 생성 (execution_mode가 이미 확인된 경우)
+
+        TradingService에서 execution_mode='signal_bot'과 signal_token이
+        이미 설정된 경우, settings 조회 없이 바로 Executor 생성
+
+        Args:
+            user_id: 사용자 ID
+            signal_token: OKX Signal Bot Token
+            webhook_url: OKX Webhook URL (None이면 기본값 사용)
+
+        Returns:
+            SignalBotExecutor: Signal Bot Executor 인스턴스
+        """
+        if not signal_token:
+            raise ValueError(
+                f"Signal Bot token is required for user {user_id}"
+            )
+
+        url = webhook_url or _get_signal_bot_webhook_url()
+        max_lag = _get_signal_bot_max_lag()
+
+        logger.info(
+            f"[ExecutorFactory] Creating SignalBotExecutor for user {user_id} "
+            f"with token={signal_token[:8]}... (max_lag={max_lag}s)"
+        )
+
+        return SignalBotExecutor(
+            user_id=user_id,
+            signal_token=signal_token,
+            webhook_url=url,
+            max_lag=max_lag,
+        )
+
+    @staticmethod
+    async def create_api_direct_executor(user_id: str) -> APIDirectExecutor:
+        """
+        API Direct Executor를 직접 생성 (execution_mode가 이미 확인된 경우)
+
+        Args:
+            user_id: 사용자 ID
+
+        Returns:
+            APIDirectExecutor: API Direct Executor 인스턴스
+        """
+        api_keys = await get_user_api_keys(user_id)
+
+        if not api_keys or not api_keys.get('api_key'):
+            raise ValueError(
+                f"User {user_id} has no API keys configured."
+            )
+
+        logger.info(
+            f"[ExecutorFactory] Creating APIDirectExecutor for user {user_id}"
+        )
+
+        return APIDirectExecutor(
+            user_id=user_id,
+            api_keys=api_keys
+        )
 
     @staticmethod
     async def get_executor(

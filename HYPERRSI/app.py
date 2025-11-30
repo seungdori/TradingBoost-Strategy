@@ -23,6 +23,6 @@ if __name__ == "__main__":
         "HYPERRSI.main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
-        workers=4,
+        reload=True,  # reload + workers 조합은 문제 발생 가능
+        workers=4,     # 테스트를 위해 단일 워커로 변경
     )

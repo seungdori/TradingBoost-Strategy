@@ -6,6 +6,10 @@ import traceback
 from datetime import datetime
 
 from HYPERRSI.src.core.logger import setup_error_logger
+from HYPERRSI.src.trading.utils.position_handler.constants import (
+    POSITION_SIDE_KEYS,
+    POSITION_SYMBOL_KEYS,
+)
 from shared.database.redis_helper import get_redis_client
 from shared.database.redis_patterns import scan_keys_pattern
 from shared.logging import get_logger
@@ -16,40 +20,57 @@ error_logger = setup_error_logger()
 
 # redis_client는 사용 시점에 동적으로 import
 
-async def init_user_position_data(user_id: str, symbol: str, side: str):
 
+async def init_user_position_data(
+    user_id: str,
+    symbol: str,
+    side: str,
+    cleanup_symbol_keys: bool = True
+):
+    """
+    포지션 관련 Redis 데이터를 초기화(삭제)합니다.
+
+    Args:
+        user_id: 사용자 ID
+        symbol: 거래 심볼 (e.g., "BTC-USDT-SWAP")
+        side: 포지션 방향 ("long" 또는 "short")
+        cleanup_symbol_keys: True면 심볼 전체 키도 삭제, False면 side별 키만 삭제
+                            (반대쪽 포지션이 있을 수 있는 경우 False 사용)
+
+    Returns:
+        int: 삭제된 키 개수
+    """
     redis = await get_redis_client()
 
-    dual_side_position_key = f"user:{user_id}:{symbol}:dual_side_position"
-    position_state_key = f"user:{user_id}:position:{symbol}:position_state"
-    tp_data_key = f"user:{user_id}:position:{symbol}:{side}:tp_data"
-    ts_key = f"trailing:user:{user_id}:{symbol}:{side}"
-    dual_side_position_key = f"user:{user_id}:{symbol}:dual_side_position"
-    dca_count_key = f"user:{user_id}:position:{symbol}:{side}:dca_count"
-    dca_levels_key = f"user:{user_id}:position:{symbol}:{side}:dca_levels"
-    position_key = f"user:{user_id}:position:{symbol}:{side}"
-    min_size_key = f"user:{user_id}:position:{symbol}:min_sustain_contract_size"
-    #main_position_direction_key = f"user:{user_id}:position:{symbol}:main_position_direction"
-    tp_state = f"user:{user_id}:position:{symbol}:{side}:tp_state"
-    hedging_direction_key = f"user:{user_id}:position:{symbol}:hedging_direction"
-    entry_fail_count_key = f"user:{user_id}:{symbol}:entry_fail_count"
-    dual_side_count_key = f"user:{user_id}:{symbol}:dual_side_count"
-    current_trade_key = f"user:{user_id}:current_trade:{symbol}:{side}"
+    keys_to_delete = []
 
-    await redis.delete(position_state_key)
-    await redis.delete(dual_side_position_key)
-    await redis.delete(tp_data_key)
-    await redis.delete(ts_key)
-    await redis.delete(dca_count_key)
-    await redis.delete(dca_levels_key)
-    await redis.delete(position_key)
-    await redis.delete(min_size_key)
-    #await redis_client.delete(main_position_direction_key)
-    await redis.delete(tp_state)
-    await redis.delete(entry_fail_count_key)
-    await redis.delete(hedging_direction_key)
-    await redis.delete(dual_side_count_key)
-    await redis.delete(current_trade_key)
+    # 1. Side별 키 수집 (POSITION_SIDE_KEYS 사용)
+    for key_pattern in POSITION_SIDE_KEYS:
+        key = key_pattern.format(user_id=user_id, symbol=symbol, side=side)
+        keys_to_delete.append(key)
+
+    # 2. 심볼 전체 키 수집 (cleanup_symbol_keys가 True일 때만)
+    if cleanup_symbol_keys:
+        for key_pattern in POSITION_SYMBOL_KEYS:
+            key = key_pattern.format(user_id=user_id, symbol=symbol)
+            keys_to_delete.append(key)
+
+    # 3. 일괄 삭제 (pipeline 사용으로 성능 최적화)
+    deleted_count = 0
+    if keys_to_delete:
+        try:
+            deleted_count = await redis.delete(*keys_to_delete)
+            logger.debug(
+                f"[{user_id}] Position init: {deleted_count}/{len(keys_to_delete)} keys deleted "
+                f"for {symbol} {side} (symbol_keys={cleanup_symbol_keys})"
+            )
+        except Exception as e:
+            logger.error(f"[{user_id}] Position init failed: {e}")
+            raise
+
+    return deleted_count
+
+
 async def init_user_monitoring_data(user_id: str, symbol: str):
     """
     monitor:user:{user_id}:{symbol}:* 패턴에 해당하는 모든 키를 삭제합니다.

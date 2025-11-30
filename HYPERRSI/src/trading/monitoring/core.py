@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
     from HYPERRSI.src.api.routes.order.order import close_position
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
+from HYPERRSI.src.trading.utils.position_handler.constants import POSITION_KEY
 from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger, log_order
 
@@ -63,6 +64,7 @@ from .utils import (
     MONITOR_INTERVAL,
     ORDER_CHECK_INTERVAL,
     add_recent_symbol,
+    close_position_with_signal_bot_support,
     get_actual_order_type,
     should_log,
 )
@@ -217,23 +219,14 @@ async def monitor_orders_loop():
 
                                     # 트레일링 스탑 조건 충족 시
                                     if ts_hit:
-                                        # SL 주문 ID 확인
-
-                                        # Lazy import to avoid circular dependency
-                                        from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
-                                        from HYPERRSI.src.api.routes.order.order import close_position
-
-                                        close_request = ClosePositionRequest(
-                                            close_type="market",
-                                            price=current_price,
-                                            close_percent=100
-                                        )
-
-                                        await close_position(
-                                            symbol=symbol,
-                                            close_request=close_request,
+                                        # Signal Bot 모드 지원 청산 함수 사용
+                                        await close_position_with_signal_bot_support(
                                             user_id=str(user_id),
-                                            side=direction
+                                            symbol=symbol,
+                                            side=direction,
+                                            current_price=current_price,
+                                            close_percent=100,
+                                            reason="trailing_stop"
                                         )
 
                                         # tp_trigger_type이 existing_position인 경우 헷지도 종료
@@ -642,7 +635,7 @@ async def monitor_orders_loop():
                                                 if status == 'filled' and (order_type.startswith('tp') or order_type.startswith('take_profit')):
                                                     try:
                                                         # position_key 정의
-                                                        position_key = f"user:{user_id}:position:{symbol}:{position_side}"
+                                                        position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=position_side)
                                                         
                                                         # TP 중복 처리 방지 체크
                                                         tp_already_processed = await redis.hget(position_key, f"get_tp{tp_index}")
@@ -730,14 +723,17 @@ async def monitor_orders_loop():
                                                 
                                                 # TP 주문이 체결된 경우 로깅
                                                 if status == 'filled' and (order_type.startswith('tp') or order_type.startswith('take_profit')):
+                                                    # TP 체결 후 쿨다운 설정
+                                                    asyncio.create_task(verify_and_handle_position_closure(str(user_id), symbol, position_side, f"tp_{order_type}"))
+
                                                     try:
                                                         # TP 레벨 추출
                                                         tp_index = int(order_type[2:]) if len(order_type) > 2 and order_type[2:].isdigit() else 0
-                                                        
+
                                                         # 가격 정보 추출
                                                         price = float(order_status.get('avgPx', order_status.get('px', 0)))
                                                         filled_amount = float(filled_sz) if filled_sz else 0
-                                                        
+
                                                         # OKX API - TP 주문 체결 로깅
                                                         log_order(
                                                             user_id=user_id,

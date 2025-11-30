@@ -74,13 +74,19 @@ def _forward_fill_mtf_to_current_tf(candles_current, candles_mtf, mtf_values, is
     # Pine Script f_security의 [1] offset 적용:
     # f_security(_sym, _res, _src) => request.security(...)[barstate.isrealtime ? 0 : 1]
     # 백테스트에서 [1] = "이전 15분봉 시점의 결과" 사용
-    if is_backtest:
-        # 1개 shift: 이전 캔들의 값 사용
-        # [0] + result[:-1] → 첫 번째 값은 0, 마지막 원본 값은 제거됨
-        # 하지만 Pine Script에서 마지막 캔들도 [1] offset이 적용됨
-        shifted_result = [0] + result[:-1]
-
-        return shifted_result
+    #
+    # CRITICAL FIX: 1-offset 제거
+    # Line 61에서 이미 mtf_timestamps[mtf_idx + 1] < dt 조건으로
+    # "이전 확정된 MTF 바"를 선택하고 있음 (lookahead 방지)
+    # 추가 1-offset은 불필요한 중복으로 2바 늦어지는 문제 발생
+    #
+    # if is_backtest:
+    #     # 1개 shift: 이전 캔들의 값 사용
+    #     # [0] + result[:-1] → 첫 번째 값은 0, 마지막 원본 값은 제거됨
+    #     # 하지만 Pine Script에서 마지막 캔들도 [1] offset이 적용됨
+    #     shifted_result = [0] + result[:-1]
+    #
+    #     return shifted_result
 
     return result
 
@@ -652,15 +658,13 @@ def compute_trend_state(
         # CRITICAL: bb_mtf가 현재 타임프레임과 동일하면 리샘플링/offset 없이 BB_State 직접 사용
         # Pine Script에서 f_security()는 동일 타임프레임 요청 시 현재 값 반환
         if bb_mtf_minutes is not None and current_timeframe_minutes is not None and bb_mtf_minutes == current_timeframe_minutes:
-            # 동일 타임프레임: BB_State 직접 사용 (f_security offset 적용)
+            # 동일 타임프레임: BB_State 직접 사용 (offset 없이 현재 값)
             # Pine Script: f_security(...)[barstate.isrealtime ? 0 : 1]
-            # 백테스트 모드: 이전 캔들의 BB_State 사용 (1-offset)
-            bb_state_mtf_list = [0] * len(candles)
-            for i in range(len(candles)):
-                if i > 0:
-                    bb_state_mtf_list[i] = bb_state_list[i - 1]  # 1-offset (백테스트)
-                else:
-                    bb_state_mtf_list[i] = 0
+            # 실시간 모드: offset=0 (현재 값) - TradingView에서 실시간 진입 시 적용되는 로직
+            # 동일 타임프레임에서 request.security는 현재 값을 그대로 반환하고,
+            # 실시간 모드에서 진입한 trend_state는 var 변수로 유지되므로
+            # offset=0을 사용해야 Pine Script와 동일한 결과를 얻음
+            bb_state_mtf_list = bb_state_list.copy()  # 0-offset (현재 값)
         else:
             # 다른 타임프레임: MTF 데이터로 BB_State 계산 후 forward fill
             bb_state_mtf_raw = _calc_bb_state(candles_bb_mtf, length_bb=15, mult_bb=1.5, ma_length=100, is_confirmed_only=is_confirmed_only)

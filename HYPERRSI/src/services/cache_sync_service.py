@@ -8,6 +8,11 @@ PostgreSQL ↔ Redis 동기화 서비스.
 import json
 from typing import Optional, Dict, Any
 
+from HYPERRSI.src.trading.utils.position_handler.constants import (
+    DUAL_SIDE_POSITION_KEY,
+    POSITION_KEY,
+)
+from HYPERRSI.src.trading.utils.trading_utils import init_user_position_data
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -148,9 +153,9 @@ class CacheSyncService:
             redis = await self._get_redis()
 
             if side in ('long', 'short'):
-                position_key = f"user:{okx_uid}:position:{symbol}:{side}"
+                position_key = POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side=side)
             else:  # hedge
-                position_key = f"user:{okx_uid}:{symbol}:dual_side_position"
+                position_key = DUAL_SIDE_POSITION_KEY.format(user_id=okx_uid, symbol=symbol)
 
             # HASH로 저장
             hash_data = self._prepare_hash_data(position_data)
@@ -176,25 +181,35 @@ class CacheSyncService:
         """
         포지션 청산 시 Redis 캐시 정리.
 
+        통합 삭제 함수를 사용하여 모든 관련 키를 일괄 삭제합니다.
+        이는 고아 키(orphaned keys) 문제를 방지합니다.
+
         Args:
             okx_uid: OKX 사용자 UID
             symbol: 거래 심볼
             side: 포지션 방향 ('long', 'short', 'hedge')
         """
         try:
-            redis = await self._get_redis()
-
             if side in ('long', 'short'):
-                position_key = f"user:{okx_uid}:position:{symbol}:{side}"
+                # 통합 삭제 함수 사용 - 모든 관련 키 일괄 삭제
+                deleted_count = await init_user_position_data(
+                    user_id=okx_uid,
+                    symbol=symbol,
+                    side=side,
+                    cleanup_symbol_keys=False  # 반대 포지션 존재 가능성
+                )
+                logger.debug(
+                    f"Position cleared from Redis: okx_uid={okx_uid}, "
+                    f"symbol={symbol}, side={side}, deleted_keys={deleted_count}"
+                )
             else:  # hedge
-                position_key = f"user:{okx_uid}:{symbol}:dual_side_position"
-
-            await redis.delete(position_key)
-
-            logger.debug(
-                f"Position cleared from Redis: okx_uid={okx_uid}, "
-                f"symbol={symbol}, side={side}"
-            )
+                redis = await self._get_redis()
+                position_key = DUAL_SIDE_POSITION_KEY.format(user_id=okx_uid, symbol=symbol)
+                await redis.delete(position_key)
+                logger.debug(
+                    f"Hedge position cleared from Redis: okx_uid={okx_uid}, "
+                    f"symbol={symbol}"
+                )
 
         except Exception as e:
             logger.error(f"Failed to clear position from Redis: {e}", exc_info=True)
@@ -259,9 +274,9 @@ class CacheSyncService:
             if symbol:
                 # 특정 심볼만 무효화
                 keys_to_delete = [
-                    f"user:{okx_uid}:position:{symbol}:long",
-                    f"user:{okx_uid}:position:{symbol}:short",
-                    f"user:{okx_uid}:{symbol}:dual_side_position",
+                    POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side="long"),
+                    POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side="short"),
+                    DUAL_SIDE_POSITION_KEY.format(user_id=okx_uid, symbol=symbol),
                 ]
             else:
                 # 사용자 전체 무효화 (심볼별 상태 키들은 패턴으로 삭제)
@@ -307,9 +322,9 @@ class CacheSyncService:
             redis = await self._get_redis()
 
             if side in ('long', 'short'):
-                position_key = f"user:{okx_uid}:position:{symbol}:{side}"
+                position_key = POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side=side)
             else:
-                position_key = f"user:{okx_uid}:{symbol}:dual_side_position"
+                position_key = DUAL_SIDE_POSITION_KEY.format(user_id=okx_uid, symbol=symbol)
 
             data = await redis.hgetall(position_key)
 

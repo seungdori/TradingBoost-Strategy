@@ -60,7 +60,7 @@ class SettingsUpdateRequest(BaseModel):
                         "settings": {
                             "execution_mode": "signal_bot",
                             "signal_bot_token": "your_okx_signal_bot_token_here",
-                            "signal_bot_webhook_url": "https://www.okx.com/priapi/v5/trading/bot/signal"
+                            "signal_bot_webhook_url": "https://www.okx.com/algo/signal/trigger"
                         }
                     }
                 },

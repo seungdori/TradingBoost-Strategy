@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from HYPERRSI.src.api.dependencies import get_exchange_context
+from HYPERRSI.src.trading.utils.position_handler.constants import POSITION_KEY
 from shared.database.redis_helper import get_redis_client
 
 # Lazy imports to avoid circular dependencies
@@ -493,7 +494,7 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
             position_side = order_data.get("position_side", "")
             if position_side:
                 try:
-                    position_key = f"user:{okx_uid}:position:{symbol}:{position_side}"
+                    position_key = POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side=position_side)
                     position_data = await redis.hgetall(position_key)
                     
                     # 포지션 정보가 있으면 주요 데이터 추가
@@ -575,7 +576,7 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                                 position_side = order_data.get("position_side", "unknown")
                                 
                                 # 포지션 정보에서 TP 가격들 가져오기
-                                position_key = f"user:{okx_uid}:position:{symbol}:{position_side}"
+                                position_key = POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side=position_side)
                                 position_data = await redis.hgetall(position_key)
                                 
                                 if position_data:
@@ -676,7 +677,7 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
             position_side = order_data.get("position_side", "unknown")
 
             # PnL 계산을 위한 추가 정보 가져오기
-            position_key = f"user:{okx_uid}:position:{symbol}:{position_side}"
+            position_key = POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side=position_side)
             position_data = await redis.hgetall(position_key)
             position_qty = f"{float(position_data.get('position_qty', '0')):.4f}"
             is_hedge = is_true_value(position_data.get("is_hedge", "false"))
@@ -877,7 +878,7 @@ async def update_order_status(user_id: str, symbol: str, order_id: str, status: 
                     
                     # TP1 체결 후 브레이크이븐 로직 처리
                     try:
-                        position_key = f"user:{okx_uid}:position:{symbol}:{position_side}"
+                        position_key = POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side=position_side)
                         position_data = await redis.hgetall(position_key)
                         
                         if position_data:

@@ -17,6 +17,13 @@ import pytz
 from fastapi import HTTPException
 
 from HYPERRSI.src.trading.modules.trading_utils import init_user_position_data
+from HYPERRSI.src.trading.utils.position_handler.constants import (
+    DCA_COUNT_KEY,
+    DCA_LEVELS_KEY,
+    PENDING_DELETION_KEY,
+    POSITION_KEY,
+    TP_DATA_KEY,
+)
 from HYPERRSI.telegram_message import send_telegram_message
 from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger
@@ -83,7 +90,7 @@ class OKXPositionFetcher:
         return {
             'api_keys': f"user:{user_id}:api:keys",
             'symbol_status': f"user:{user_id}:symbol:{symbol}:status",  # 심볼별 상태
-            'positions': f"user:{user_id}:position:{symbol}:{side}",
+            'positions': POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side),
             'settings': f"user:{user_id}:settings"
         }
 
@@ -161,12 +168,12 @@ class OKXPositionFetcher:
                 )
                 try:
                     if side is None:
-                        positions_long = await redis.hgetall(f"user:{user_id}:position:{symbol}:long")
-                        positions_short = await redis.hgetall(f"user:{user_id}:position:{symbol}:short")
+                        positions_long = await redis.hgetall(POSITION_KEY.format(user_id=user_id, symbol=symbol, side="long"))
+                        positions_short = await redis.hgetall(POSITION_KEY.format(user_id=user_id, symbol=symbol, side="short"))
                         positions = {**positions_long, **positions_short}
                         return positions
                     else:
-                        positions = await redis.hgetall(f"user:{user_id}:position:{symbol}:{side}")
+                        positions = await redis.hgetall(POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side))
                         return positions
                 except Exception as e2:
                     logger.error(f"Error in fetch_okx_position fallback for {symbol}: {str(e2)}")
@@ -175,24 +182,59 @@ class OKXPositionFetcher:
                     fetched_redis_position = True
                 fail_to_fetch_position = True
 
-            # 2) 포지션이 없는 경우, Redis에 실제 키가 있는 경우만 삭제
+            # 2) 포지션이 없는 경우 - 안전한 삭제 로직 (2회 연속 확인 필요)
             if not positions:
                 has_redis_position = False
                 for side in ['long', 'short']:
-                    position_key = f"user:{user_id}:position:{symbol}:{side}"
+                    position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side)
+                    pending_deletion_key = PENDING_DELETION_KEY.format(user_id=user_id, symbol=symbol, side=side)
+
                     # Redis에 실제로 키가 존재하는지 확인
                     exists = await redis.exists(position_key)
                     if exists:
                         has_redis_position = True
-                        dca_count_key = f"user:{user_id}:position:{symbol}:{side}:dca_count"
-                        await redis.set(dca_count_key, "0")
-                        await redis.set(position_state_key, "0")
-                        await redis.delete(position_key)
 
-                # 실제로 Redis 키가 있어서 삭제한 경우만 로깅
+                        # 삭제 대기 상태 확인 (2회 연속 확인 로직)
+                        pending_deletion = await redis.get(pending_deletion_key)
+
+                        if not pending_deletion:
+                            # 첫 번째 "포지션 없음" - 삭제 대기 상태로 설정 (60초 TTL)
+                            await redis.set(pending_deletion_key, "1", ex=60)
+                            logger.warning(f"[{user_id}][{symbol}][{side}] OKX에서 포지션 없음 (1차 확인) - 삭제 대기 상태로 설정. 다음 확인 시 삭제 예정.")
+                            await send_telegram_message(f"[{user_id}][{symbol}][{side}] ⚠️ OKX 포지션 없음 (1차). 60초 내 재확인 후 삭제 여부 결정.", debug=True)
+                        else:
+                            # 두 번째 "포지션 없음" - 실제 삭제 진행
+                            logger.warning(f"[{user_id}][{symbol}][{side}] OKX에서 포지션 없음 (2차 확인) - 실제 삭제 진행")
+
+                            dca_count_key = DCA_COUNT_KEY.format(user_id=user_id, symbol=symbol, side=side)
+                            tp_data_key = TP_DATA_KEY.format(user_id=user_id, symbol=symbol, side=side)
+                            dca_levels_key = DCA_LEVELS_KEY.format(user_id=user_id, symbol=symbol, side=side)
+
+                            # 삭제 전 백업 생성 (24시간 보관)
+                            position_data = await redis.hgetall(position_key)
+                            if position_data:
+                                backup_key = f"user:{user_id}:position_deleted_backup:{symbol}:{side}"
+                                await redis.set(backup_key, json.dumps(position_data), ex=86400)
+                                logger.info(f"[{user_id}][{symbol}][{side}] 삭제 전 백업 생성: {backup_key}")
+
+                            # 삭제 전 데이터 존재 여부 로깅
+                            tp_exists = await redis.exists(tp_data_key)
+                            dca_exists = await redis.exists(dca_levels_key)
+                            logger.warning(f"[{user_id}][{symbol}][{side}] 포지션 없음 - Redis 삭제 시작: position_key 존재, tp_data_key 존재={tp_exists}, dca_levels_key 존재={dca_exists}")
+
+                            # 통합 삭제 함수 사용 - 모든 관련 키를 일괄 삭제 (고아 키 방지)
+                            deleted_count = await init_user_position_data(
+                                user_id=user_id,
+                                symbol=symbol,
+                                side=side,
+                                cleanup_symbol_keys=False  # 반대 포지션 존재 가능성
+                            )
+                            logger.warning(f"[{user_id}][{symbol}][{side}] 포지션 관련 데이터 삭제 완료: {deleted_count}개 키 삭제")
+                            await send_telegram_message(f"[{user_id}][{symbol}][{side}] ✅ 포지션 삭제 완료 (2차 확인 후)", debug=True)
+
+                # 실제로 Redis 키가 있어서 처리한 경우만 로깅
                 if has_redis_position:
-                    logger.error(f"[{user_id}] 포지션 없음. Redis 데이터 삭제.")
-                    await send_telegram_message(f"[{user_id}] [{debug_entry_number}] 포지션 없음. Redis 데이터 삭제. 여기서 아마 경합 일어날 가능성 있으니, 실제로 어떻게 된건지 체크.", debug=True)
+                    logger.info(f"[{user_id}] OKX 포지션 없음 감지. 안전 삭제 로직 실행됨.")
 
             # 3) 각 포지션 처리
             if fail_to_fetch_position:
@@ -223,12 +265,12 @@ class OKXPositionFetcher:
                 # 02 05 15:16 수정 -> 이미 contracts가 , 바로 계약수량으로 들어옴. 그래서 이걸로 바로 size를 씀.
                 position_qty = contracts * contract_size
                 contracts_amount = contracts
-                dca_count_key = f"user:{user_id}:position:{symbol}:{side}:dca_count"
+                dca_count_key = DCA_COUNT_KEY.format(user_id=user_id, symbol=symbol, side=side)
                 dca_count = await redis.get(dca_count_key)
 
                 try:
                     if contracts > 0:
-                        position_key = f"user:{user_id}:position:{symbol}:{side}"
+                        position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side)
                         existing_data = await redis.hgetall(position_key)
                         previous_contracts = safe_float(existing_data.get('contracts_amount')) if existing_data.get('contracts_amount') else None
                         previous_last_entry = safe_float(existing_data.get('last_entry_size')) if existing_data.get('last_entry_size') else None
@@ -305,13 +347,21 @@ class OKXPositionFetcher:
                         await redis.hset(position_key, mapping=mapping)
                         result[side] = mapping
 
+                        # 포지션이 확인되면 삭제 대기 플래그 제거
+                        pending_deletion_key = PENDING_DELETION_KEY.format(user_id=user_id, symbol=symbol, side=side)
+                        await redis.delete(pending_deletion_key)
+
                     else:
                         # contracts가 0인 경우 해당 side의 포지션 삭제
-                        await init_user_position_data(user_id, symbol, side)
-                        position_key = f"user:{user_id}:position:{symbol}:{side}"
-                        await redis.delete(position_key)
-                        dca_count_key = f"user:{user_id}:position:{symbol}:{side}:dca_count"
-                        await redis.set(dca_count_key, "0")
+                        # 통합 삭제 함수 사용 - 모든 관련 키 일괄 삭제 (고아 키 방지)
+                        logger.warning(f"[{user_id}][{symbol}][{side}] contracts=0 감지 - 포지션 데이터 삭제")
+                        deleted_count = await init_user_position_data(
+                            user_id=user_id,
+                            symbol=symbol,
+                            side=side,
+                            cleanup_symbol_keys=False  # 반대 포지션 존재 가능성
+                        )
+                        logger.warning(f"[{user_id}][{symbol}][{side}] contracts=0 처리 완료 - {deleted_count}개 키 삭제")
                         await send_telegram_message(f"[{user_id}] contracts가 0인 경우여서, 해당 Side의 포지션을 삭제하는데, 정상적이지 않은 로직. 체크 필요", debug=True)
                 except Exception as e:
                     logger.error(f"포지션 업데이트 실패 ({symbol}): {str(e)}")
@@ -340,7 +390,7 @@ class OKXPositionFetcher:
             # 에러 발생시 양쪽 포지션 모두 조회
             result = {}
             for side in ['long', 'short']:
-                position_key = f"user:{user_id}:position:{symbol}:{side}"
+                position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side)
                 position_data = await redis.hgetall(position_key)
                 if position_data:
                     result[side] = position_data
@@ -363,12 +413,12 @@ class OKXPositionFetcher:
             if position['symbol'] == symbol and position['side'] == side:
                 entry_price = position['entryPrice']
                 # redis 업데이트
-                position_key = f"user:{user_id}:position:{symbol}:{side}"
+                position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side)
                 await redis.hset(position_key, 'entry_price', str(entry_price))
                 return entry_price
 
         # ccxt에서 찾지 못한 경우 redis 확인
-        position_key = f"user:{user_id}:position:{symbol}:{side}"
+        position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side)
         position_data = await redis.hgetall(position_key)
         if not position_data:
             return None

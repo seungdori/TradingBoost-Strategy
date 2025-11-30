@@ -25,6 +25,22 @@ from HYPERRSI.src.api.routes.order.services.base_service import BaseService
 from HYPERRSI.src.api.routes.order.services.order_service import OrderService
 from HYPERRSI.src.api.routes.order.validators import validate_close_percent, validate_symbol_format
 from HYPERRSI.src.core.logger import error_logger
+from HYPERRSI.src.trading.utils.position_handler.constants import (
+    CURRENT_TRADE_KEY,
+    DCA_COUNT_KEY,
+    DCA_LEVELS_KEY,
+    DUAL_SIDE_COUNT_KEY,
+    DUAL_SIDE_POSITION_KEY,
+    ENTRY_FAIL_COUNT_KEY,
+    HEDGING_DIRECTION_KEY,
+    INITIAL_SIZE_KEY,
+    MIN_SUSTAIN_CONTRACT_SIZE_KEY,
+    POSITION_KEY,
+    POSITION_STATE_KEY,
+    TP_DATA_KEY,
+    TP_STATE_KEY,
+    TRAILING_STOP_KEY,
+)
 from shared.database.redis_patterns import RedisTimeout
 from shared.logging import get_logger
 from shared.utils.symbol_helpers import normalize_symbol
@@ -223,20 +239,20 @@ class PositionService(BaseService):
         """
         try:
             # Redis 키 생성 - order.py의 init_user_position_data와 동일
-            dual_side_position_key = f"user:{user_id}:{symbol}:dual_side_position"
-            position_state_key = f"user:{user_id}:position:{symbol}:position_state"
-            tp_data_key = f"user:{user_id}:position:{symbol}:{side}:tp_data"
-            ts_key = f"trailing:user:{user_id}:{symbol}:{side}"
-            dca_count_key = f"user:{user_id}:position:{symbol}:{side}:dca_count"
-            dca_levels_key = f"user:{user_id}:position:{symbol}:{side}:dca_levels"
-            position_key = f"user:{user_id}:position:{symbol}:{side}"
-            min_size_key = f"user:{user_id}:position:{symbol}:min_sustain_contract_size"
-            tp_state = f"user:{user_id}:position:{symbol}:{side}:tp_state"
-            hedging_direction_key = f"user:{user_id}:position:{symbol}:hedging_direction"
-            entry_fail_count_key = f"user:{user_id}:{symbol}:entry_fail_count"
-            dual_side_count_key = f"user:{user_id}:{symbol}:dual_side_count"
-            initial_size_key = f"user:{user_id}:position:{symbol}:{side}:initial_size"
-            current_trade_key = f"user:{user_id}:current_trade:{symbol}:{side}"
+            dual_side_position_key = DUAL_SIDE_POSITION_KEY.format(user_id=user_id, symbol=symbol)
+            position_state_key = POSITION_STATE_KEY.format(user_id=user_id, symbol=symbol)
+            tp_data_key = TP_DATA_KEY.format(user_id=user_id, symbol=symbol, side=side)
+            ts_key = TRAILING_STOP_KEY.format(user_id=user_id, symbol=symbol, side=side)
+            dca_count_key = DCA_COUNT_KEY.format(user_id=user_id, symbol=symbol, side=side)
+            dca_levels_key = DCA_LEVELS_KEY.format(user_id=user_id, symbol=symbol, side=side)
+            position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side)
+            min_size_key = MIN_SUSTAIN_CONTRACT_SIZE_KEY.format(user_id=user_id, symbol=symbol)
+            tp_state = TP_STATE_KEY.format(user_id=user_id, symbol=symbol, side=side)
+            hedging_direction_key = HEDGING_DIRECTION_KEY.format(user_id=user_id, symbol=symbol)
+            entry_fail_count_key = ENTRY_FAIL_COUNT_KEY.format(user_id=user_id, symbol=symbol)
+            dual_side_count_key = DUAL_SIDE_COUNT_KEY.format(user_id=user_id, symbol=symbol)
+            initial_size_key = INITIAL_SIZE_KEY.format(user_id=user_id, symbol=symbol, side=side)
+            current_trade_key = CURRENT_TRADE_KEY.format(user_id=user_id, symbol=symbol, side=side)
 
             # Pipeline으로 batch 삭제
             pipeline = redis_client.pipeline()

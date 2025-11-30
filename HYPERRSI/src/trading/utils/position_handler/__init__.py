@@ -21,13 +21,13 @@ Usage:
 
 import json
 from datetime import datetime
-from typing import Any, Dict
+from typing import TYPE_CHECKING, Any, Dict
 
-from HYPERRSI.src.bot.telegram_message import send_telegram_message
-from HYPERRSI.src.trading.models import Position, get_timeframe
-from HYPERRSI.src.trading.position_manager import PositionStateManager
-from HYPERRSI.src.trading.services.get_current_price import get_current_price
-from HYPERRSI.src.trading.trading_service import TradingService
+# Type checking imports (순환 import 방지)
+if TYPE_CHECKING:
+    from HYPERRSI.src.trading.trading_service import TradingService
+
+# 이 import들은 순환을 유발하지 않음
 from HYPERRSI.src.trading.utils.position_handler.constants import (
     MAIN_POSITION_DIRECTION_KEY,
     POSITION_KEY,
@@ -37,29 +37,56 @@ from HYPERRSI.src.trading.utils.position_handler.core import (
     get_investment_amount,
     get_redis_client,
 )
-
-# Import public API functions from modules
-from HYPERRSI.src.trading.utils.position_handler.entry import handle_no_position
-from HYPERRSI.src.trading.utils.position_handler.exit import handle_trend_reversal_exit
-from HYPERRSI.src.trading.utils.position_handler.pyramiding import handle_pyramiding
 from HYPERRSI.src.trading.utils.position_handler.validation import check_margin_block
 from shared.logging import get_logger
 
 logger = get_logger(__name__)
 
 
+# Lazy imports for functions that cause circular dependencies
+# These will be imported on first access via __getattr__
+_handle_no_position = None
+_handle_trend_reversal_exit = None
+_handle_pyramiding = None
+
+
+def __getattr__(name):
+    """Lazy loading for functions that cause circular imports"""
+    global _handle_no_position, _handle_trend_reversal_exit, _handle_pyramiding
+
+    if name == "handle_no_position":
+        if _handle_no_position is None:
+            from HYPERRSI.src.trading.utils.position_handler.entry import handle_no_position as _hnp
+            _handle_no_position = _hnp
+        return _handle_no_position
+
+    if name == "handle_trend_reversal_exit":
+        if _handle_trend_reversal_exit is None:
+            from HYPERRSI.src.trading.utils.position_handler.exit import handle_trend_reversal_exit as _htre
+            _handle_trend_reversal_exit = _htre
+        return _handle_trend_reversal_exit
+
+    if name == "handle_pyramiding":
+        if _handle_pyramiding is None:
+            from HYPERRSI.src.trading.utils.position_handler.pyramiding import handle_pyramiding as _hp
+            _handle_pyramiding = _hp
+        return _handle_pyramiding
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 async def handle_existing_position(
     user_id: str,
     settings: dict,
-    trading_service: TradingService,
+    trading_service: "TradingService",
     symbol: str,
     timeframe: str,
-    current_position: Position,
+    current_position: "Any",  # Position type
     current_rsi: float,
     rsi_signals: dict,
     current_state: int,
     side: str,
-) -> Position:
+) -> "Any":
     """
     Handle existing position management including DCA/pyramiding and trend-based exits.
 
@@ -89,6 +116,14 @@ async def handle_existing_position(
         - Updates Redis position state
         - Sends Telegram notifications
     """
+    # Lazy imports to avoid circular dependencies
+    from HYPERRSI.src.bot.telegram_message import send_telegram_message
+    from HYPERRSI.src.trading.models import Position, get_timeframe
+    from HYPERRSI.src.trading.position_manager import PositionStateManager
+    from HYPERRSI.src.trading.services.get_current_price import get_current_price
+    from HYPERRSI.src.trading.utils.position_handler.exit import handle_trend_reversal_exit
+    from HYPERRSI.src.trading.utils.position_handler.pyramiding import handle_pyramiding
+
     redis = await get_redis_client()
 
     try:
@@ -249,6 +284,7 @@ async def handle_existing_position(
         return current_position
 
     except Exception as e:
+        from HYPERRSI.src.bot.telegram_message import send_telegram_message
         logger.error(f"[{user_id}] handle_existing_position error: {str(e)}", exc_info=True)
         await send_telegram_message(
             f"⚠️ 포지션 처리 중 오류:\n{str(e)}",

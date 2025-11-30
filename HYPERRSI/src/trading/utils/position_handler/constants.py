@@ -24,6 +24,66 @@ DCA_LEVELS_KEY = "user:{user_id}:position:{symbol}:{side}:dca_levels"
 
 # Take Profit
 TP_DATA_KEY = "user:{user_id}:position:{symbol}:{side}:tp_data"
+TP_STATE_KEY = "user:{user_id}:position:{symbol}:{side}:tp_state"
+
+# Stop Loss
+SL_DATA_KEY = "user:{user_id}:position:{symbol}:{side}:sl_data"
+
+# Position Size Tracking
+INITIAL_SIZE_KEY = "user:{user_id}:position:{symbol}:{side}:initial_size"
+LAST_ENTRY_SIZE_KEY = "user:{user_id}:position:{symbol}:{side}:last_entry_size"
+
+# Position State
+POSITION_STATE_KEY = "user:{user_id}:position:{symbol}:position_state"
+PENDING_DELETION_KEY = "user:{user_id}:position:{symbol}:{side}:pending_deletion"
+
+# Trading Mode
+HEDGE_MODE_KEY = "user:{user_id}:position:{symbol}:hedge_mode"
+TD_MODE_KEY = "user:{user_id}:position:{symbol}:tdMode"
+HEDGING_DIRECTION_KEY = "user:{user_id}:position:{symbol}:hedging_direction"
+
+# ============================================================================
+# Position Cleanup Key Patterns
+# ============================================================================
+# 포지션 청산/삭제 시 삭제해야 할 모든 키 패턴
+# side 변수가 필요한 키 (long/short 별도 삭제)
+POSITION_SIDE_KEYS = [
+    POSITION_KEY,           # 메인 포지션 hash
+    DCA_COUNT_KEY,          # DCA 카운트
+    DCA_LEVELS_KEY,         # DCA 레벨 목록
+    TP_DATA_KEY,            # TP 가격 데이터
+    TP_STATE_KEY,           # TP 상태
+    SL_DATA_KEY,            # SL 데이터
+    INITIAL_SIZE_KEY,       # 초기 사이즈
+    LAST_ENTRY_SIZE_KEY,    # 마지막 진입 사이즈
+    PENDING_DELETION_KEY,   # 삭제 대기 플래그
+    "trailing:user:{user_id}:{symbol}:{side}",  # Trailing Stop (TRAILING_STOP_KEY)
+    "user:{user_id}:current_trade:{symbol}:{side}",  # Current Trade (CURRENT_TRADE_KEY)
+    "user:{user_id}:cooldown:{symbol}:{side}",  # Cooldown (COOLDOWN_KEY)
+]
+
+# side 변수가 필요 없는 키 (심볼 전체에 적용)
+POSITION_SYMBOL_KEYS = [
+    MAIN_POSITION_DIRECTION_KEY,    # 메인 포지션 방향
+    MIN_SUSTAIN_CONTRACT_SIZE_KEY,  # 최소 유지 사이즈
+    POSITION_STATE_KEY,             # 포지션 상태
+    HEDGE_MODE_KEY,                 # 헤지 모드
+    TD_MODE_KEY,                    # 거래 모드
+    HEDGING_DIRECTION_KEY,          # 헤징 방향
+    "user:{user_id}:position:{symbol}:entry_price",  # 진입가 (레거시)
+    "user:{user_id}:{symbol}:dual_side_position",  # Dual Side Position
+    "user:{user_id}:{symbol}:entry_fail_count",  # Entry Fail Count
+    "user:{user_id}:{symbol}:dual_side_count",  # Dual Side Count
+]
+
+# Trailing Stop
+TRAILING_STOP_KEY = "trailing:user:{user_id}:{symbol}:{side}"
+
+# Dual Side Trading
+DUAL_SIDE_POSITION_KEY = "user:{user_id}:{symbol}:dual_side_position"
+
+# Current Trade
+CURRENT_TRADE_KEY = "user:{user_id}:current_trade:{symbol}:{side}"
 
 # Cooldown and Locking
 COOLDOWN_KEY = "user:{user_id}:cooldown:{symbol}:{side}"

@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 import ccxt
 
 from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
-from HYPERRSI.src.api.routes.order.order import cancel_algo_orders, close_position
+# NOTE: cancel_algo_orders, close_position are imported inside functions to avoid circular imports
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.error_handler import log_error
 from HYPERRSI.src.core.logger import log_dual_side_debug
@@ -1399,14 +1399,16 @@ async def update_hedge_sl_tp_after_dca(
         logger.info("헷지 포지션이 없어서 SL/TP 갱신 불필요.")
         return
 
+    # Import here to avoid circular dependency
+    from HYPERRSI.src.api.routes.order.order import cancel_algo_orders
 
     hedge_side = hedge_position["side"]  # "long" or "short"
-    
+
     hedge_cancel_side = "buy" if hedge_side == "short" else "sell"
     # (1) 기존 알고주문/감시주문/리듀스온리주문 모두 취소
     #     pos_side는 "long"/"short" 그대로 전달
     try:
-        
+
         await cancel_algo_orders(symbol = symbol, user_id = user_id, side = hedge_cancel_side, algo_type="trigger")
     except Exception as e:
         log_dual_side_debug(

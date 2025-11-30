@@ -98,6 +98,10 @@ class TradingService:
         self.initialized = True
         self._locks: Dict[str, asyncio.Lock] = {}  # 락 딕셔너리 초기화 추가
 
+        # Execution mode settings (for Signal Bot support)
+        self.execution_mode: str = "api_direct"  # "api_direct" or "signal_bot"
+        self.signal_token: Optional[str] = None  # Signal Bot token
+
         # Module instances (will be initialized in create_for_user)
         self.market_data: Optional[MarketDataService] = None
         self.tp_sl_calc: Optional[TPSLCalculator] = None
@@ -107,10 +111,26 @@ class TradingService:
         self.position_mgr: Optional[PositionManager] = None
 
     @classmethod
-    async def create_for_user(cls, user_id: str) -> "TradingService":
-        """해당 user_id에 대한 TradingService 인스턴스 생성(OKX 클라이언트 연결)"""
+    async def create_for_user(
+        cls,
+        user_id: str,
+        execution_mode: str = "api_direct",
+        signal_token: Optional[str] = None
+    ) -> "TradingService":
+        """
+        해당 user_id에 대한 TradingService 인스턴스 생성(OKX 클라이언트 연결)
+
+        Args:
+            user_id: 사용자 OKX UID
+            execution_mode: 실행 모드 ("api_direct" 또는 "signal_bot")
+            signal_token: Signal Bot 토큰 (signal_bot 모드일 때 필수)
+        """
         try:
             instance = cls(user_id)
+
+            # Execution mode 설정 (싱글톤이므로 호출 시마다 업데이트)
+            instance.execution_mode = execution_mode
+            instance.signal_token = signal_token
 
             # 컨텍스트 매니저 사용하여 클라이언트 자동 반환 보장
             async with get_exchange_context(str(user_id)) as client:
@@ -126,6 +146,7 @@ class TradingService:
             instance.tp_sl_creator = TPSLOrderCreator(instance)
             instance.position_mgr = PositionManager(instance)
 
+            logger.debug(f"TradingService created: user={user_id}, mode={execution_mode}")
             return instance
         except Exception as e:
             # 초기화 실패 시 싱글톤 캐시에서 제거 (다음 호출에서 재시도 가능하도록)

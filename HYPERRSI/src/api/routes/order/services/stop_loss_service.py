@@ -27,6 +27,7 @@ from HYPERRSI.src.api.routes.order.validators import (
     validate_symbol_format,
 )
 from HYPERRSI.src.core.logger import error_logger
+from HYPERRSI.src.trading.utils.position_handler.constants import SL_DATA_KEY
 from shared.database.redis_patterns import RedisTimeout
 from shared.logging import get_logger
 from shared.utils.type_converters import safe_float
@@ -259,7 +260,7 @@ class StopLossService(BaseService):
             entry_price: 진입 가격 (선택)
         """
         try:
-            sl_key = f"user:{user_id}:position:{symbol}:{side}:sl_data"
+            sl_key = SL_DATA_KEY.format(user_id=user_id, symbol=symbol, side=side)
 
             sl_data = {
                 "trigger_price": str(trigger_price),
@@ -305,7 +306,7 @@ class StopLossService(BaseService):
             Optional[Dict[str, Any]]: 스탑로스 정보
         """
         try:
-            sl_key = f"user:{user_id}:position:{symbol}:{side}:sl_data"
+            sl_key = SL_DATA_KEY.format(user_id=user_id, symbol=symbol, side=side)
             sl_data = await asyncio.wait_for(
                 redis_client.hgetall(sl_key),
                 timeout=RedisTimeout.FAST_OPERATION
@@ -340,7 +341,7 @@ class StopLossService(BaseService):
             side: 포지션 사이드
         """
         try:
-            sl_key = f"user:{user_id}:position:{symbol}:{side}:sl_data"
+            sl_key = SL_DATA_KEY.format(user_id=user_id, symbol=symbol, side=side)
             await asyncio.wait_for(
                 redis_client.delete(sl_key),
                 timeout=RedisTimeout.FAST_OPERATION

@@ -124,13 +124,8 @@ echo -e "${BLUE}=============================================${NC}"
 # 사용자가 Ctrl+C를 누를 때까지 대기 (로그 스트리밍)
 trap "echo -e '\n${YELLOW}🛑 종료 신호 수신. 프로세스를 종료합니다...${NC}'; kill $worker_pid $beat_pid 2>/dev/null; exit 0" INT TERM
 
-# 프로세스가 종료될 때까지 대기하며 로그 실시간 출력
-tail -f "$worker_log" &
-tail_pid=$!
-
 # worker나 beat 중 하나라도 종료되면 스크립트 종료
 wait $worker_pid $beat_pid
-kill $tail_pid 2>/dev/null
 
 echo -e "${RED}⚠️ Celery 프로세스가 예기치 않게 종료되었습니다.${NC}"
-echo -e "${YELLOW}💡 로그 확인: tail -f $worker_log${NC}" 
+echo -e "${YELLOW}💡 종료된 프로세스의 로그를 확인하세요.${NC}" 

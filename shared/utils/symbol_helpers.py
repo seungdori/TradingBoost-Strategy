@@ -295,7 +295,7 @@ def convert_to_trading_symbol(symbol: str) -> str:
     일반 심볼(예: BTCUSDT)을 거래소 심볼 포맷(예: BTC-USDT-SWAP)으로 변환합니다.
 
     Args:
-        symbol: 입력 심볼 (BTCUSDT 형식 또는 BTC-USDT-SWAP 형식)
+        symbol: 입력 심볼 (BTCUSDT, BTC/USDT, BTC/USDT:USDT, BTC-USDT-SWAP 등)
 
     Returns:
         str: 거래소 심볼 포맷 (BTC-USDT-SWAP)
@@ -305,6 +305,10 @@ def convert_to_trading_symbol(symbol: str) -> str:
         'BTC-USDT-SWAP'
         >>> convert_to_trading_symbol("BTC-USDT-SWAP")
         'BTC-USDT-SWAP'
+        >>> convert_to_trading_symbol("BTC/USDT")
+        'BTC-USDT-SWAP'
+        >>> convert_to_trading_symbol("BTC/USDT:USDT")
+        'BTC-USDT-SWAP'
     """
     import logging
     logger = logging.getLogger(__name__)
@@ -313,7 +317,16 @@ def convert_to_trading_symbol(symbol: str) -> str:
     if "-" in symbol and symbol.endswith("-SWAP"):
         return symbol
 
-    # USDT를 기준으로 분리
+    # CCXT 형식 처리 (BTC/USDT:USDT 또는 BTC/USDT)
+    if "/" in symbol:
+        # 콜론 제거 (BTC/USDT:USDT → BTC/USDT)
+        if ":" in symbol:
+            symbol = symbol.split(":")[0]
+        # 슬래시를 하이픈으로 변환 (BTC/USDT → BTC-USDT)
+        base_quote = symbol.replace("/", "-")
+        return f"{base_quote}-SWAP"
+
+    # 일반 형식 (BTCUSDT)에서 USDT를 기준으로 분리
     if "USDT" in symbol:
         base = symbol.replace("USDT", "")
         return f"{base}-USDT-SWAP"

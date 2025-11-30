@@ -41,6 +41,9 @@ from shared.logging import get_logger
 # shared 모듈에서 공통 함수 import
 from shared.utils.type_converters import safe_decimal, safe_float
 
+# Position key constants
+from HYPERRSI.src.trading.utils.position_handler.constants import POSITION_KEY
+
 from .constants import ALGO_ORDERS_CHUNK_SIZE, API_ENDPOINTS, REGULAR_ORDERS_CHUNK_SIZE
 
 # order 모듈 내부 import
@@ -1930,7 +1933,7 @@ async def update_stop_loss_order_redis(
     side: str,
     new_sl_price: float,
 ) -> Dict[str, Any]:
-    position_key = f"user:{user_id}:position:{symbol}:{side}"
+    position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side)
 
     # Use context manager for proper connection management and timeout protection
     async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:

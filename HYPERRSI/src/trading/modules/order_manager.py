@@ -233,7 +233,8 @@ class OrderManager:
         price: float = None,
         trigger_price: float = None,
         direction: Optional[str] = None,
-        pos_side: Optional[str] = None
+        pos_side: Optional[str] = None,
+        order_concept: Optional[str] = None
     ) -> OrderStatus:
         """주문 전송"""
         # pos_side와 direction 중 하나를 direction으로 사용
@@ -248,11 +249,24 @@ class OrderManager:
             'order_type': order_type,
             'price': price,
             'trigger_price': trigger_price,
-            'direction': direction
+            'direction': direction,
+            'order_concept': order_concept
         }
         try:
             exchange = self.trading_service.client
-            order_status = await try_send_order(user_id=user_id, symbol=symbol, side=side, size=size, leverage=leverage, order_type=order_type, price=price, trigger_price=trigger_price, direction=direction, exchange=exchange)
+            order_status = await try_send_order(
+                user_id=user_id,
+                symbol=symbol,
+                side=side,
+                size=size,
+                leverage=leverage,
+                order_type=order_type,
+                price=price,
+                trigger_price=trigger_price,
+                direction=direction,
+                exchange=exchange,
+                order_concept=order_concept
+            )
             return order_status
         except Exception as e:
             logger.error(f"Failed to send order: {str(e)}")

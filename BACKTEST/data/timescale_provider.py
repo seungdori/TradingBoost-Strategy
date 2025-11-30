@@ -182,6 +182,7 @@ class TimescaleProvider(DataProvider):
         try:
             # Build query for candlesdb schema
             # Note: candlesdb uses rsi14, ema7, ma20 column names
+            # Added: cycle_bull, cycle_bear, bb_state columns for PineScript indicators
             query_str = f"""
                 SELECT
                     time as timestamp,
@@ -192,6 +193,9 @@ class TimescaleProvider(DataProvider):
                     ma20 as sma,
                     trend_state,
                     auto_trend_state,
+                    cycle_bull,
+                    cycle_bear,
+                    bb_state,
                     timeframe
                 FROM {table_name}
                 WHERE timeframe = :timeframe
@@ -230,10 +234,10 @@ class TimescaleProvider(DataProvider):
                     sma=float(row.sma) if row.sma is not None else None,
                     trend_state=int(row.trend_state) if row.trend_state is not None else None,
                     auto_trend_state=int(row.auto_trend_state) if row.auto_trend_state is not None else None,
-                    # PineScript components - not available in candlesdb schema
-                    CYCLE_Bull=None,
-                    CYCLE_Bear=None,
-                    BB_State=None,
+                    # PineScript components from candlesdb
+                    CYCLE_Bull=bool(row.cycle_bull) if row.cycle_bull is not None else None,
+                    CYCLE_Bear=bool(row.cycle_bear) if row.cycle_bear is not None else None,
+                    BB_State=int(row.bb_state) if row.bb_state is not None else None,
                     bollinger_upper=None,
                     bollinger_middle=None,
                     bollinger_lower=None,
@@ -463,13 +467,16 @@ class TimescaleProvider(DataProvider):
 
         try:
             # Use INSERT ... ON CONFLICT DO UPDATE for candlesdb schema
+            # Includes PineScript indicator columns: cycle_bull, cycle_bear, bb_state
             insert_query = f"""
                 INSERT INTO {table_name} (
                     time, timeframe, open, high, low, close, volume,
-                    rsi14, atr, ema7, ma20, trend_state
+                    rsi14, atr, ema7, ma20, trend_state, auto_trend_state,
+                    cycle_bull, cycle_bear, bb_state
                 ) VALUES (
                     :time, :timeframe, :open, :high, :low, :close, :volume,
-                    :rsi14, :atr, :ema7, :ma20, :trend_state
+                    :rsi14, :atr, :ema7, :ma20, :trend_state, :auto_trend_state,
+                    :cycle_bull, :cycle_bear, :bb_state
                 )
                 ON CONFLICT (time, timeframe) DO UPDATE SET
                     open = EXCLUDED.open,
@@ -481,7 +488,11 @@ class TimescaleProvider(DataProvider):
                     atr = EXCLUDED.atr,
                     ema7 = EXCLUDED.ema7,
                     ma20 = EXCLUDED.ma20,
-                    trend_state = EXCLUDED.trend_state
+                    trend_state = EXCLUDED.trend_state,
+                    auto_trend_state = EXCLUDED.auto_trend_state,
+                    cycle_bull = EXCLUDED.cycle_bull,
+                    cycle_bear = EXCLUDED.cycle_bear,
+                    bb_state = EXCLUDED.bb_state
             """
 
             total = len(candles)
@@ -503,7 +514,11 @@ class TimescaleProvider(DataProvider):
                         'atr': candle.atr,
                         'ema7': candle.ema,
                         'ma20': candle.sma,
-                        'trend_state': candle.trend_state
+                        'trend_state': candle.trend_state,
+                        'auto_trend_state': getattr(candle, 'auto_trend_state', None),
+                        'cycle_bull': candle.CYCLE_Bull,
+                        'cycle_bear': candle.CYCLE_Bear,
+                        'bb_state': candle.BB_State
                     })
 
                 # Progress logging
@@ -883,7 +898,7 @@ class TimescaleProvider(DataProvider):
 
         try:
             # Prepare bulk update values for candlesdb schema
-            # Note: candlesdb doesn't have cycle_bull, cycle_bear, bb_state columns
+            # Includes PineScript indicator columns: cycle_bull, cycle_bear, bb_state
             update_values = []
             for candle in candles:
                 update_values.append({
@@ -892,7 +907,10 @@ class TimescaleProvider(DataProvider):
                     'atr': candle.atr,
                     'ema7': candle.ema,  # JMA5 stored as ema7
                     'ma20': candle.sma,  # SMA20 stored as ma20
-                    'trend_state': candle.trend_state
+                    'trend_state': candle.trend_state,
+                    'cycle_bull': candle.CYCLE_Bull,
+                    'cycle_bear': candle.CYCLE_Bear,
+                    'bb_state': candle.BB_State
                 })
 
             # Execute bulk update with progress logging
@@ -906,7 +924,10 @@ class TimescaleProvider(DataProvider):
                     atr = :atr,
                     ema7 = :ema7,
                     ma20 = :ma20,
-                    trend_state = :trend_state
+                    trend_state = :trend_state,
+                    cycle_bull = :cycle_bull,
+                    cycle_bear = :cycle_bear,
+                    bb_state = :bb_state
                 WHERE timeframe = :timeframe
                     AND time = :timestamp
             """
@@ -922,7 +943,10 @@ class TimescaleProvider(DataProvider):
                         'atr': val['atr'],
                         'ema7': val['ema7'],
                         'ma20': val['ma20'],
-                        'trend_state': val['trend_state']
+                        'trend_state': val['trend_state'],
+                        'cycle_bull': val['cycle_bull'],
+                        'cycle_bear': val['cycle_bear'],
+                        'bb_state': val['bb_state']
                     })
 
                 # Progress logging

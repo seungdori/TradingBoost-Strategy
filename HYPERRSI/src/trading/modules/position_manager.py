@@ -586,10 +586,13 @@ class PositionManager:
                 order_concept="close_position"  # 청산 주문임을 명시 (마진 체크 건너뛰기 위함)
             )
 
-            if order_state.status not in ["open", "closed"]:
-                # OrderStatus has no 'message' attribute - use status and order_id instead
+            # 실패 상태 체크 (rejected, canceled, expired 등)
+            if order_state.status in ["rejected", "canceled", "expired", "failed"]:
                 error_detail = f"status={order_state.status}, order_id={order_state.order_id}"
                 raise ValueError(f"청산 주문 실패: {error_detail}")
+
+            # 성공 상태: open, closed, filled 모두 허용
+            logger.info(f"[{user_id}] 청산 주문 상태: {order_state.status}, order_id={order_state.order_id}")
 
             # 6) PnL 계산 및 통계 업데이트
             exit_price = safe_float(order_state.avg_fill_price)

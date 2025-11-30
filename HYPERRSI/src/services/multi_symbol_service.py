@@ -26,6 +26,14 @@ REDIS_KEY_SYMBOL_STARTED_AT = "user:{okx_uid}:symbol:{symbol}:started_at"
 REDIS_KEY_SYMBOL_STATUS = "user:{okx_uid}:symbol:{symbol}:status"
 # REDIS_KEY_TRADING_STATUS 제거 - 심볼별 상태 관리로 완전히 전환
 
+# Signal Bot 모드용 Redis 키 상수 (signal_token별 관리)
+REDIS_KEY_SIGNAL_BOT_ACTIVE = "user:{okx_uid}:signal_bots"  # SET: 활성 signal_token 목록
+REDIS_KEY_SIGNAL_BOT_TASK_ID = "user:{okx_uid}:signal_bot:{signal_token}:task_id"
+REDIS_KEY_SIGNAL_BOT_SYMBOL = "user:{okx_uid}:signal_bot:{signal_token}:symbol"
+REDIS_KEY_SIGNAL_BOT_TIMEFRAME = "user:{okx_uid}:signal_bot:{signal_token}:timeframe"
+REDIS_KEY_SIGNAL_BOT_STATUS = "user:{okx_uid}:signal_bot:{signal_token}:status"
+REDIS_KEY_SIGNAL_BOT_STARTED_AT = "user:{okx_uid}:signal_bot:{signal_token}:started_at"
+
 
 class MaxSymbolsReachedError(Exception):
     """최대 심볼 수 초과 예외"""
@@ -356,6 +364,227 @@ class MultiSymbolService:
 
         logger.info(f"[{okx_uid}] 모든 심볼 중지: {stopped_symbols}")
         return stopped_symbols
+
+    # ==================== Signal Bot 모드 메서드 ====================
+
+    async def can_add_signal_bot(
+        self,
+        okx_uid: str,
+        signal_token: str
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Signal Bot 추가 가능 여부 확인
+
+        Signal Bot 모드에서는:
+        - 같은 signal_token이 이미 실행 중인지만 확인
+        - 한 종목에 여러 signal_token 동시 실행 가능
+
+        Args:
+            okx_uid: 사용자 OKX UID
+            signal_token: Signal Bot 토큰
+
+        Returns:
+            (추가 가능 여부, 오류 메시지 또는 None)
+        """
+        async with redis_context(timeout=RedisTimeout.FAST_OPERATION) as redis:
+            # 해당 signal_token이 이미 활성화되어 있는지 확인
+            active_key = REDIS_KEY_SIGNAL_BOT_ACTIVE.format(okx_uid=okx_uid)
+            is_active = await redis.sismember(active_key, signal_token)
+
+            if is_active:
+                return False, "SIGNAL_BOT_ALREADY_ACTIVE"
+
+            return True, None
+
+    async def add_signal_bot(
+        self,
+        okx_uid: str,
+        signal_token: str,
+        symbol: str,
+        timeframe: str,
+        task_id: Optional[str] = None
+    ) -> bool:
+        """
+        Signal Bot 등록
+
+        Args:
+            okx_uid: 사용자 OKX UID
+            signal_token: Signal Bot 토큰
+            symbol: 거래 심볼
+            timeframe: 타임프레임
+            task_id: Celery Task ID
+
+        Returns:
+            성공 여부
+        """
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 활성 signal_bot 목록에 추가
+            active_key = REDIS_KEY_SIGNAL_BOT_ACTIVE.format(okx_uid=okx_uid)
+            await redis.sadd(active_key, signal_token)
+
+            # Signal Bot 상세 정보 저장
+            await redis.set(
+                REDIS_KEY_SIGNAL_BOT_SYMBOL.format(okx_uid=okx_uid, signal_token=signal_token),
+                symbol
+            )
+            await redis.set(
+                REDIS_KEY_SIGNAL_BOT_TIMEFRAME.format(okx_uid=okx_uid, signal_token=signal_token),
+                timeframe
+            )
+            await redis.set(
+                REDIS_KEY_SIGNAL_BOT_STATUS.format(okx_uid=okx_uid, signal_token=signal_token),
+                "running"
+            )
+            await redis.set(
+                REDIS_KEY_SIGNAL_BOT_STARTED_AT.format(okx_uid=okx_uid, signal_token=signal_token),
+                str(datetime.now().timestamp())
+            )
+
+            if task_id:
+                await redis.set(
+                    REDIS_KEY_SIGNAL_BOT_TASK_ID.format(okx_uid=okx_uid, signal_token=signal_token),
+                    task_id
+                )
+
+            logger.info(f"[{okx_uid}] Signal Bot 등록: token={signal_token[:8]}..., symbol={symbol}")
+            return True
+
+    async def remove_signal_bot(self, okx_uid: str, signal_token: str) -> bool:
+        """
+        Signal Bot 제거
+
+        Args:
+            okx_uid: 사용자 OKX UID
+            signal_token: Signal Bot 토큰
+
+        Returns:
+            성공 여부
+        """
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            # 활성 목록에서 제거
+            active_key = REDIS_KEY_SIGNAL_BOT_ACTIVE.format(okx_uid=okx_uid)
+            await redis.srem(active_key, signal_token)
+
+            # 관련 키 삭제
+            keys_to_delete = [
+                REDIS_KEY_SIGNAL_BOT_SYMBOL.format(okx_uid=okx_uid, signal_token=signal_token),
+                REDIS_KEY_SIGNAL_BOT_TIMEFRAME.format(okx_uid=okx_uid, signal_token=signal_token),
+                REDIS_KEY_SIGNAL_BOT_STATUS.format(okx_uid=okx_uid, signal_token=signal_token),
+                REDIS_KEY_SIGNAL_BOT_STARTED_AT.format(okx_uid=okx_uid, signal_token=signal_token),
+                REDIS_KEY_SIGNAL_BOT_TASK_ID.format(okx_uid=okx_uid, signal_token=signal_token),
+            ]
+
+            for key in keys_to_delete:
+                try:
+                    await redis.delete(key)
+                except Exception as e:
+                    logger.warning(f"[{okx_uid}] Signal Bot 키 삭제 중 오류 (무시됨): {key}, {e}")
+
+            logger.info(f"[{okx_uid}] Signal Bot 제거: token={signal_token[:8]}...")
+            return True
+
+    async def get_active_signal_bots(self, okx_uid: str) -> List[str]:
+        """
+        사용자의 활성 Signal Bot 토큰 목록 조회
+
+        Args:
+            okx_uid: 사용자 OKX UID
+
+        Returns:
+            활성 signal_token 리스트
+        """
+        async with redis_context(timeout=RedisTimeout.FAST_OPERATION) as redis:
+            active_key = REDIS_KEY_SIGNAL_BOT_ACTIVE.format(okx_uid=okx_uid)
+            tokens = await redis.smembers(active_key)
+
+            result = []
+            for token in tokens:
+                if isinstance(token, bytes):
+                    token = token.decode('utf-8')
+                result.append(token)
+
+            return result
+
+    async def get_signal_bot_info(self, okx_uid: str, signal_token: str) -> Optional[Dict[str, Any]]:
+        """
+        Signal Bot 상세 정보 조회
+
+        Args:
+            okx_uid: 사용자 OKX UID
+            signal_token: Signal Bot 토큰
+
+        Returns:
+            Signal Bot 정보 딕셔너리 또는 None
+        """
+        async with redis_context(timeout=RedisTimeout.FAST_OPERATION) as redis:
+            active_key = REDIS_KEY_SIGNAL_BOT_ACTIVE.format(okx_uid=okx_uid)
+
+            # 활성 Signal Bot인지 확인
+            is_active = await redis.sismember(active_key, signal_token)
+            if not is_active:
+                return None
+
+            # 정보 조회
+            symbol = await redis.get(
+                REDIS_KEY_SIGNAL_BOT_SYMBOL.format(okx_uid=okx_uid, signal_token=signal_token)
+            )
+            timeframe = await redis.get(
+                REDIS_KEY_SIGNAL_BOT_TIMEFRAME.format(okx_uid=okx_uid, signal_token=signal_token)
+            )
+            status = await redis.get(
+                REDIS_KEY_SIGNAL_BOT_STATUS.format(okx_uid=okx_uid, signal_token=signal_token)
+            )
+            task_id = await redis.get(
+                REDIS_KEY_SIGNAL_BOT_TASK_ID.format(okx_uid=okx_uid, signal_token=signal_token)
+            )
+            started_at = await redis.get(
+                REDIS_KEY_SIGNAL_BOT_STARTED_AT.format(okx_uid=okx_uid, signal_token=signal_token)
+            )
+
+            def decode(val):
+                if isinstance(val, bytes):
+                    return val.decode('utf-8')
+                return val
+
+            return {
+                "signal_token": signal_token,
+                "symbol": decode(symbol),
+                "timeframe": decode(timeframe),
+                "status": decode(status),
+                "task_id": decode(task_id),
+                "started_at": decode(started_at),
+                "execution_mode": "signal_bot"
+            }
+
+    async def get_signal_bot_task_id(self, okx_uid: str, signal_token: str) -> Optional[str]:
+        """Signal Bot의 Task ID 조회"""
+        async with redis_context(timeout=RedisTimeout.FAST_OPERATION) as redis:
+            task_id = await redis.get(
+                REDIS_KEY_SIGNAL_BOT_TASK_ID.format(okx_uid=okx_uid, signal_token=signal_token)
+            )
+            if isinstance(task_id, bytes):
+                task_id = task_id.decode('utf-8')
+            return task_id
+
+    async def stop_all_signal_bots(self, okx_uid: str) -> List[str]:
+        """
+        사용자의 모든 Signal Bot 중지
+
+        Args:
+            okx_uid: 사용자 OKX UID
+
+        Returns:
+            중지된 signal_token 리스트
+        """
+        active_tokens = await self.get_active_signal_bots(okx_uid)
+
+        stopped_tokens = []
+        for token in active_tokens:
+            await self.remove_signal_bot(okx_uid, token)
+            stopped_tokens.append(token)
+
+        logger.info(f"[{okx_uid}] 모든 Signal Bot 중지: {len(stopped_tokens)}개")
+        return stopped_tokens
 
 
 # 싱글톤 인스턴스

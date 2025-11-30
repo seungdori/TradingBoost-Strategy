@@ -9,6 +9,7 @@ import pandas as pd
 
 from HYPERRSI.src.api.dependencies import get_exchange_context
 from HYPERRSI.src.trading.models import Position
+from HYPERRSI.src.trading.utils.position_handler.constants import COOLDOWN_KEY, POSITION_KEY
 from shared.database.redis_helper import get_redis_client  # Legacy - deprecated
 from shared.database.redis_patterns import scan_keys_pattern, redis_context, RedisTimeout
 from shared.database.redis_migration import get_redis_context
@@ -386,6 +387,7 @@ async def record_trade_entry(
             # Get cooldown_time from user settings
             settings_str = await redis.get(f"user:{user_id}:settings")
             cooldown_seconds = 300  # default
+            use_cooldown = True  # default
             if settings_str:
                 try:
                     user_settings = json.loads(settings_str)
@@ -395,11 +397,17 @@ async def record_trade_entry(
                     else:
                         cooldown_seconds = 0  # Skip cooldown if disabled
                 except (json.JSONDecodeError, ValueError):
-                    pass
-            cooldown_key = f"user:{user_id}:cooldown:{symbol}:{side}"
+                    logger.warning(f"[{user_id}][{symbol}] Settings JSON 파싱 실패, 기본값 사용")
+            else:
+                logger.warning(f"[{user_id}][{symbol}] Settings 없음, 기본값 사용 (cooldown={cooldown_seconds}초)")
+            cooldown_key = COOLDOWN_KEY.format(user_id=user_id, symbol=symbol, side=side)
             # DCA 진입 시마다 cooldown 타이머를 리셋해야 연속 진입 방지됨
+            logger.info(f"[{user_id}][{symbol}] Cooldown 설정 시도: key={cooldown_key}, seconds={cooldown_seconds}, use_cooldown={use_cooldown}")
             if cooldown_seconds > 0:
                 await redis.set(cooldown_key, "true", ex=cooldown_seconds)
+                logger.info(f"[{user_id}][{symbol}] ✅ Cooldown 설정 완료: {cooldown_seconds}초")
+            else:
+                logger.warning(f"[{user_id}][{symbol}] ⚠️ Cooldown 설정 스킵됨: cooldown_seconds={cooldown_seconds}")
 
     except Exception as e:
         logger.error(f"거래 정보 조회 실패: {str(e)}")
@@ -466,7 +474,7 @@ async def record_trade_exit(user_id: str, symbol: str, position: Position, excha
                         cooldown_seconds = 0  # Skip cooldown if disabled
                 except (json.JSONDecodeError, ValueError):
                     pass
-            cooldown_key = f"user:{user_id}:cooldown:{symbol}:{side}"
+            cooldown_key = COOLDOWN_KEY.format(user_id=user_id, symbol=symbol, side=side)
             # 청산 후에도 cooldown 타이머를 리셋해야 즉시 재진입 방지됨
             if cooldown_seconds > 0:
                 await redis.set(cooldown_key, "true", ex=cooldown_seconds)
@@ -710,7 +718,7 @@ async def get_user_trading_statistics(user_id: str) -> Dict[str, Any]:
                             entry_price = float(entry_price_str) if entry_price_str != 'None' else 0.0
                         else:
                             # 기존 방식으로 포지션 데이터에서 조회 (within same context)
-                            position_key = f"user:{user_id}:position:{symbol}:{position_side}"
+                            position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=position_side)
                             position_data = await redis.hgetall(position_key)
                             if position_data and 'entry_price' in position_data:
                                 entry_price_str = position_data['entry_price']
@@ -827,7 +835,7 @@ async def get_pnl_history(user_id: str, limit: int = 10) -> List[Dict[str, Any]]
                         entry_price = float(entry_price_str) if entry_price_str != 'None' else 0.0
                     else:
                         # 기존 방식으로 포지션 데이터에서 조회 시도 (within same context)
-                        position_key = f"user:{user_id}:position:{symbol}:{position_side}"
+                        position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=position_side)
                         position_data = await redis.hgetall(position_key)
                         if position_data and 'entry_price' in position_data:
                             entry_price_str = position_data.get('entry_price', '0')
@@ -942,7 +950,7 @@ async def generate_pnl_statistics_image(user_id: str) -> Optional[str]:
                             entry_price = float(entry_price_str) if entry_price_str != 'None' else 0.0
                         else:
                             # 기존 방식으로 포지션 데이터에서 조회 시도 (within same context)
-                            position_key = f"user:{user_id}:position:{symbol}:{position_side}"
+                            position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=position_side)
                             position_data = await redis.hgetall(position_key)
                             if position_data and 'entry_price' in position_data:
                                 entry_price_str = position_data.get('entry_price', '0')

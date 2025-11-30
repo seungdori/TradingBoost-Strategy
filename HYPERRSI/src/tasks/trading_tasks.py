@@ -148,9 +148,24 @@ async def trading_context(okx_uid: str, symbol: str) -> AsyncGenerator[None, Non
                 )
 
 # 트레이딩 래퍼 함수
-async def execute_trading_with_context(okx_uid: str, symbol: str, timeframe: str, restart: bool = False) -> None: # user_id -> okx_uid
+async def execute_trading_with_context(
+    okx_uid: str,
+    symbol: str,
+    timeframe: str,
+    restart: bool = False,
+    execution_mode: str = "api_direct",
+    signal_token: Optional[str] = None
+) -> None:
     """
     컨텍스트 매니저를 사용하여 트레이딩 로직을 실행하는 래퍼 함수
+
+    Args:
+        okx_uid: 사용자 OKX UID
+        symbol: 거래 심볼
+        timeframe: 타임프레임
+        restart: 재시작 여부
+        execution_mode: 실행 모드 ("api_direct" 또는 "signal_bot")
+        signal_token: Signal Bot 토큰 (signal_bot 모드일 때 필수)
     """
     async with trading_context(okx_uid, symbol):
         # 명시적인 try/except로 감싸 태스크 취소 적절히 처리
@@ -158,7 +173,8 @@ async def execute_trading_with_context(okx_uid: str, symbol: str, timeframe: str
             user_id = okx_uid # user_id -> okx_uid
             # execute_trading_logic 호출 시 okx_uid 전달 (가정)
             await execute_trading_logic(
-                user_id=user_id, symbol=symbol, timeframe=timeframe, restart=restart
+                user_id=user_id, symbol=symbol, timeframe=timeframe, restart=restart,
+                execution_mode=execution_mode, signal_token=signal_token
             )
         except asyncio.CancelledError:
             logger.warning(f"[{okx_uid}] 트레이딩 로직이 취소되었습니다: {symbol}")
@@ -1164,10 +1180,26 @@ def check_and_execute_trading():
         traceback.print_exc()
 
 @celery_app.task(name='trading_tasks.execute_trading_cycle', bind=True, max_retries=3, time_limit=120, soft_time_limit=90)
-def execute_trading_cycle(self: Any, okx_uid: str, symbol: str, timeframe: str, restart: bool = False) -> Dict[str, Any]: # user_id -> okx_uid
+def execute_trading_cycle(
+    self: Any,
+    okx_uid: str,
+    symbol: str,
+    timeframe: str,
+    restart: bool = False,
+    execution_mode: str = "api_direct",
+    signal_token: Optional[str] = None
+) -> Dict[str, Any]:
     """
     하나의 트레이딩 사이클 실행 태스크 (OKX UID 기반)
     time_limit과 soft_time_limit을 추가하여 무한 실행 방지
+
+    Args:
+        okx_uid: 사용자 OKX UID
+        symbol: 거래 심볼
+        timeframe: 타임프레임
+        restart: 재시작 여부
+        execution_mode: 실행 모드 ("api_direct" 또는 "signal_bot")
+        signal_token: Signal Bot 토큰 (signal_bot 모드일 때 필수)
 
     Time limits increased to accommodate:
     - Exchange API latency (especially OKX batch orders)
@@ -1177,7 +1209,8 @@ def execute_trading_cycle(self: Any, okx_uid: str, symbol: str, timeframe: str, 
     """
     # 태스크 시작 시 태스크 ID와 함께 명확한 로그 출력
     task_id = self.request.id
-    logger.debug(f"[{okx_uid}] execute_trading_cycle 태스크 실행 시작 (task_id: {task_id})")
+    mode_info = f"mode={execution_mode}" + (f", token={signal_token[:8]}..." if signal_token else "")
+    logger.debug(f"[{okx_uid}] execute_trading_cycle 태스크 실행 시작 (task_id: {task_id}, {mode_info})")
 
     start_time = time.time()
 
@@ -1187,7 +1220,10 @@ def execute_trading_cycle(self: Any, okx_uid: str, symbol: str, timeframe: str, 
             # 실제 비동기 로직 실행 - 타임아웃 90초 설정 (soft_time_limit과 동일)
             # 모든 비동기 작업을 _execute_trading_cycle 내에서 처리
             result: Dict[str, Any] = run_async(
-                _execute_trading_cycle(okx_uid, task_id, symbol, timeframe, restart),
+                _execute_trading_cycle(
+                    okx_uid, task_id, symbol, timeframe, restart,
+                    execution_mode=execution_mode, signal_token=signal_token
+                ),
                 timeout=90
             )
 
@@ -1238,12 +1274,27 @@ def execute_trading_cycle(self: Any, okx_uid: str, symbol: str, timeframe: str, 
             return {"status": "error", "error": error_message}
 
 async def _execute_trading_cycle(
-    okx_uid: str, task_id: str, symbol: str, timeframe: str, restart: bool = False # user_id -> okx_uid
+    okx_uid: str,
+    task_id: str,
+    symbol: str,
+    timeframe: str,
+    restart: bool = False,
+    execution_mode: str = "api_direct",
+    signal_token: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     실제 비동기 트레이딩 로직 (OKX UID 기반)
     컨텍스트 매니저 패턴 적용
     모든 async 작업을 단일 이벤트 루프에서 처리
+
+    Args:
+        okx_uid: 사용자 OKX UID
+        task_id: Celery Task ID
+        symbol: 거래 심볼
+        timeframe: 타임프레임
+        restart: 재시작 여부
+        execution_mode: 실행 모드 ("api_direct" 또는 "signal_bot")
+        signal_token: Signal Bot 토큰 (signal_bot 모드일 때 필수)
 
     세션 관리:
     - restart=True: 새 세션 시작 (PostgreSQL에 기록)
@@ -1348,7 +1399,8 @@ async def _execute_trading_cycle(
                     # 컨텍스트 매니저를 통한 실행으로 확실한 자원 정리 (okx_uid 사용)
                     # restart 파라미터를 그대로 전달하여 execute_trading_logic에서도 재시작 모드 인식
                     await execute_trading_with_context(
-                        okx_uid=okx_uid, symbol=symbol, timeframe=timeframe, restart=restart
+                        okx_uid=okx_uid, symbol=symbol, timeframe=timeframe, restart=restart,
+                        execution_mode=execution_mode, signal_token=signal_token
                     )
 
                     # 다음 사이클까지 작은 지연 추가

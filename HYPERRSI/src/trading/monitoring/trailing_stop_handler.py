@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, TYPE_CHECKING
 
 from HYPERRSI.src.api.dependencies import get_exchange_context
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
+from HYPERRSI.src.trading.utils.position_handler.constants import POSITION_KEY
 from shared.database.redis_helper import get_redis_client
 from shared.database.redis_migration import get_redis_context
 from shared.database.redis_patterns import RedisTimeout, scan_keys_pattern
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
     from .position_validator import check_position_exists
 
 from .telegram_service import get_identifier, send_telegram_message
-from .utils import get_user_settings, is_true_value
+from .utils import close_position_with_signal_bot_support, get_user_settings, is_true_value
 
 # PostgreSQL SSOT - State Change Logger
 from HYPERRSI.src.services.state_change_logger import get_state_change_logger
@@ -157,7 +158,7 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
         # 방향이 비어있으면 Redis 포지션 키를 스캔하여 채움
         if not norm_direction:
             for candidate in ("long", "short"):
-                candidate_key = f"user:{okx_uid}:position:{symbol}:{candidate}"
+                candidate_key = POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side=candidate)
                 candidate_data = await redis.hgetall(candidate_key)
                 if candidate_data:
                     norm_direction = candidate
@@ -283,7 +284,7 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
 
                 # 부족하면 Redis 포지션에서 보충
                 if contracts_amount <= 0 or entry_price <= 0:
-                    position_key = f"user:{okx_uid}:position:{symbol}:{direction}"
+                    position_key = POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side=direction)
                     redis_pos_data = _decode_hash(await redis.hgetall(position_key))
                     if contracts_amount <= 0:
                         contracts_amount = float(redis_pos_data.get("contracts_amount", 0) or 0)
@@ -327,7 +328,7 @@ async def activate_trailing_stop(user_id: str, symbol: str, direction: str, posi
                 await redis.expire(trailing_key, 60 * 60 * 24 * 7)
                 
                 # 기존 포지션 키에도 트레일링 활성화 정보 저장 (포지션이 남아있는 경우만)
-                position_key = f"user:{user_id}:position:{symbol}:{direction}"
+                position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=direction)
                 position_exists = await redis.exists(position_key)
                 
                 if position_exists:
@@ -447,7 +448,7 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
         # 트레일링 스탑 키가 존재하는지 확인
         if not await redis.exists(trailing_key):
             # 포지션 키에서 트레일링 스탑 활성화 정보 확인 (레거시 지원)
-            position_key = f"user:{okx_uid}:position:{symbol}:{direction}"
+            position_key = POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side=direction)
             
             try:
                 # 키 타입 확인
@@ -518,7 +519,7 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                 await redis.hset(trailing_key, "last_updated", str(int(datetime.now().timestamp())))
                 
                 # 포지션 키가 존재하면 함께 업데이트
-                position_key = f"user:{okx_uid}:position:{symbol}:{direction}"
+                position_key = POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side=direction)
                 if await redis.exists(position_key):
                     try:
                         # 키 타입 확인
@@ -605,9 +606,15 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                         await clear_trailing_stop(okx_uid, symbol, direction)
                         return False
 
-                    # 포지션이 존재하는 경우에만 종료 시도 (await로 결과 대기)
-                    close_request = ClosePositionRequest(close_type='market', price=current_price, close_percent=100.0)
-                    await close_position(symbol=symbol, close_request=close_request, user_id=okx_uid, side=direction)
+                    # 포지션이 존재하는 경우에만 종료 시도 (Signal Bot 모드 지원)
+                    await close_position_with_signal_bot_support(
+                        user_id=okx_uid,
+                        symbol=symbol,
+                        side=direction,
+                        current_price=current_price,
+                        close_percent=100,
+                        reason="trailing_stop"
+                    )
 
                     # tp_trigger_type이 existing_position인 경우 헷지도 종료
                     from HYPERRSI.src.trading.dual_side_entry import close_hedge_on_main_exit
@@ -651,7 +658,7 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
 
                 # 트레일링 스탑 실행 로깅
                 try:
-                    position_key = f"user:{okx_uid}:position:{symbol}:{direction}"
+                    position_key = POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side=direction)
                     position_data = await redis.hgetall(position_key)
                     position_size = float(position_data.get("size", "0")) if position_data else 0
 
@@ -690,7 +697,7 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                 await redis.hset(trailing_key, "last_updated", str(int(datetime.now().timestamp())))
                 
                 # 포지션 키가 존재하면 함께 업데이트
-                position_key = f"user:{okx_uid}:position:{symbol}:{direction}"
+                position_key = POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side=direction)
                 if await redis.exists(position_key):
                     try:
                         # 키 타입 확인
@@ -771,9 +778,15 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
                         await clear_trailing_stop(user_id, symbol, direction)
                         return False
 
-                    # 포지션이 존재하는 경우에만 종료 시도
-                    close_request = ClosePositionRequest(close_type='market', price=current_price, close_percent=100.0)
-                    await close_position(symbol=symbol, close_request=close_request, user_id=user_id, side=direction)
+                    # 포지션이 존재하는 경우에만 종료 시도 (Signal Bot 모드 지원)
+                    await close_position_with_signal_bot_support(
+                        user_id=user_id,
+                        symbol=symbol,
+                        side=direction,
+                        current_price=current_price,
+                        close_percent=100,
+                        reason="trailing_stop"
+                    )
 
                     # tp_trigger_type이 existing_position인 경우 헷지도 종료
                     from HYPERRSI.src.trading.dual_side_entry import close_hedge_on_main_exit
@@ -817,7 +830,7 @@ async def check_trailing_stop(user_id: str, symbol: str, direction: str, current
 
                 # 트레일링 스탑 실행 로깅
                 try:
-                    position_key = f"user:{user_id}:position:{symbol}:{direction}"
+                    position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=direction)
                     position_data = await redis.hgetall(position_key)
                     position_size = float(position_data.get("size", "0")) if position_data else 0
 
@@ -864,7 +877,7 @@ async def clear_trailing_stop(user_id: str, symbol: str, direction: str):
         deleted = await redis.delete(trailing_key)
 
         # 포지션 키가 있으면 트레일링 스탑 관련 필드도 리셋
-        position_key = f"user:{okx_uid}:position:{symbol}:{direction}"
+        position_key = POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side=direction)
         if await redis.exists(position_key):
             await redis.hset(position_key, "trailing_stop_active", "false")
             await redis.hdel(position_key, "trailing_stop_key")

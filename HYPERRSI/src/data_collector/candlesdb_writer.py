@@ -265,6 +265,10 @@ class CandlesDBWriter:
             Decimal(str(candle.get("sma20", 0))) if candle.get("sma20") else None,  # ma20
             int(candle.get("trend_state", 0)) if candle.get("trend_state") is not None else None,  # trend_state
             int(candle.get("auto_trend_state", 0)) if candle.get("auto_trend_state") is not None else None,  # auto_trend_state
+            # PineScript 지표 컬럼 추가 (대소문자 모두 체크 - _all_indicators.py는 대문자 사용)
+            bool(candle.get("cycle_bull") or candle.get("CYCLE_Bull")) if (candle.get("cycle_bull") is not None or candle.get("CYCLE_Bull") is not None) else None,  # cycle_bull
+            bool(candle.get("cycle_bear") or candle.get("CYCLE_Bear")) if (candle.get("cycle_bear") is not None or candle.get("CYCLE_Bear") is not None) else None,  # cycle_bear
+            int(candle.get("bb_state") or candle.get("BB_State") or 0) if (candle.get("bb_state") is not None or candle.get("BB_State") is not None) else None,  # bb_state
         )
 
     def _do_upsert(self, table_name: str, timeframe_str: str, rows: list[tuple]) -> bool:
@@ -288,7 +292,8 @@ class CandlesDBWriter:
             upsert_query = f"""
                 INSERT INTO {table_name} (
                     time, timeframe, open, high, low, close, volume,
-                    rsi14, atr, ema7, ma20, trend_state, auto_trend_state
+                    rsi14, atr, ema7, ma20, trend_state, auto_trend_state,
+                    cycle_bull, cycle_bear, bb_state
                 )
                 VALUES %s
                 ON CONFLICT (time, timeframe)
@@ -303,7 +308,10 @@ class CandlesDBWriter:
                     ema7 = EXCLUDED.ema7,
                     ma20 = EXCLUDED.ma20,
                     trend_state = EXCLUDED.trend_state,
-                    auto_trend_state = EXCLUDED.auto_trend_state;
+                    auto_trend_state = EXCLUDED.auto_trend_state,
+                    cycle_bull = EXCLUDED.cycle_bull,
+                    cycle_bear = EXCLUDED.cycle_bear,
+                    bb_state = EXCLUDED.bb_state;
             """
 
             # Execute batch upsert

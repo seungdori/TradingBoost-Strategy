@@ -8,7 +8,11 @@ Includes entry size calculation, long/short pyramiding execution, and DCA state 
 import asyncio
 import json
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+
+# Type checking imports (순환 import 방지)
+if TYPE_CHECKING:
+    from HYPERRSI.src.trading.trading_service import TradingService
 
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.logger import setup_error_logger
@@ -18,7 +22,6 @@ from HYPERRSI.src.trading.models import Position, get_timeframe
 from HYPERRSI.src.trading.position_manager import PositionStateManager
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 from HYPERRSI.src.trading.stats import record_trade_entry
-from HYPERRSI.src.trading.trading_service import TradingService
 from HYPERRSI.src.trading.utils.position_handler.constants import (
     DCA_COUNT_KEY,
     DCA_LEVELS_KEY,
@@ -64,7 +67,7 @@ error_logger = setup_error_logger()
 async def handle_pyramiding(
     user_id: str,
     settings: dict,
-    trading_service: TradingService,
+    trading_service: "TradingService",
     symbol: str,
     timeframe: str,
     current_position: Position,
@@ -116,9 +119,13 @@ async def handle_pyramiding(
 
     # Check cooldown and position lock
     is_cooldown, left_time = await check_cooldown(user_id, symbol, side)
+    logger.info(f"[{user_id}][{symbol}] Cooldown 체크 결과: is_cooldown={is_cooldown}, left_time={left_time}초, side={side}")
     if is_cooldown:
+        logger.warning(f"[{user_id}][{symbol}] 🚫 쿨다운 중 - {side}방향 DCA 진입 차단. 남은 시간: {left_time}초")
         print(f"[{user_id}] 쿨다운 중입니다. {symbol}의 {side}방향 종목에 대해서는 진입을 하지 않습니다. 남은 시간: {left_time}초")
         return current_position
+    else:
+        logger.info(f"[{user_id}][{symbol}] ✅ 쿨다운 통과 - {side}방향 DCA 진입 가능")
 
     is_locked, remaining_time = await check_position_lock(user_id, symbol, side, timeframe)
     if is_locked:
@@ -337,7 +344,7 @@ async def _calculate_dca_entry_size(
     dca_order_count: int,
     last_entry_size: float,
     settings: dict,
-    trading_service: TradingService,
+    trading_service: "TradingService",
     current_price: float,
     position_info: dict,
     redis_client: Any
@@ -431,7 +438,7 @@ async def _execute_long_pyramiding(
     dca_order_count: int,
     new_entry_contracts_amount: float,
     settings: dict,
-    trading_service: TradingService,
+    trading_service: "TradingService",
     current_price: float,
     current_state: int,
     rsi_signals: dict,
@@ -715,7 +722,7 @@ async def _execute_short_pyramiding(
     dca_order_count: int,
     new_entry_contracts_amount: float,
     settings: dict,
-    trading_service: TradingService,
+    trading_service: "TradingService",
     current_price: float,
     current_state: int,
     rsi_signals: dict,
@@ -1059,7 +1066,7 @@ async def _send_short_pyramiding_message(
     dca_order_count: int,
     current_price: float,
     new_position_qty: float,
-    trading_service: TradingService,
+    trading_service: "TradingService",
     settings: dict,
     redis_client: Any
 ) -> None:

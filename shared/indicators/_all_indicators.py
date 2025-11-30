@@ -526,13 +526,24 @@ def add_auto_trend_state_to_candles(
     """
     각 타임프레임의 캔들에 auto_trend_state 필드를 추가합니다.
 
-    Pine Script의 '자동' 로직을 구현:
-    - 차트 타임프레임에 따라 자동으로 결정된 트렌드 타임프레임의 캔들 데이터로 trend_state 계산
-    - 계산된 trend_state를 auto_trend_state 필드로 저장
+    Pine Script의 '자동' 로직을 정확하게 구현:
+    - 현재 타임프레임 캔들에서 trend_state 계산
+    - CYCLE_Bull/Bear는 res_ 타임프레임(auto_trend_candles)에서 계산 → forward fill
+    - BB_State_MTF는 bb_mtf 타임프레임에서 계산 → forward fill
+    - 이 둘을 조합하여 현재 타임프레임에서 trend_state 결정
+
+    Pine Script 로직 (Line 32, 355):
+    - res_ = ≤3분 → 15분, ≤30분 → 30분, <240분 → 60분, else → 480분
+    - bb_mtf = ≤3분 → 5분, ≤15분 → 15분, else → 60분
+
+    예: 1분 차트
+    - res_ = 15분 (CYCLE용)
+    - bb_mtf = 5분 (BB_State용)
+    - trend_state = 15분 CYCLE + 5분 BB_State_MTF 조합
 
     Args:
         candles: 현재 타임프레임의 캔들 데이터 (auto_trend_state를 추가할 대상)
-        auto_trend_candles: 자동 결정된 트렌드 타임프레임의 캔들 데이터
+        auto_trend_candles: CYCLE용 MTF 캔들 (res_ 타임프레임)
         current_timeframe_minutes: 현재 타임프레임 (분 단위)
         rq_lookback: Rational Quadratic lookback
         rq_rel_weight: Rational Quadratic relative weight
@@ -546,47 +557,51 @@ def add_auto_trend_state_to_candles(
     """
     from ._trend import compute_trend_state
 
-    if not auto_trend_candles or len(auto_trend_candles) < 30:
+    if not candles or len(candles) < 30:
         # 충분한 데이터가 없으면 auto_trend_state를 0으로 설정
         for i in range(len(candles)):
             candles[i]["auto_trend_state"] = 0
         return candles
 
-    # 자동 트렌드 타임프레임의 캔들로 trend_state 계산
-    # use_longer_trend=False (Pine Script의 자동 로직에서는 일반적으로 False)
+    if not auto_trend_candles or len(auto_trend_candles) < 30:
+        # CYCLE용 MTF 데이터가 부족하면 0으로 설정
+        for i in range(len(candles)):
+            candles[i]["auto_trend_state"] = 0
+        return candles
+
+    # Pine Script "자동" 로직을 정확하게 구현:
+    # - 현재 타임프레임 캔들(candles)에서 trend_state 계산
+    # - CYCLE_Bull/Bear는 auto_trend_candles (res_ 타임프레임)에서 계산
+    # - BB_State_MTF는 current_timeframe_minutes 기반으로 bb_mtf 결정 후 리샘플링
+    #
+    # compute_trend_state가 이미 이 로직을 구현하고 있음:
+    # - candles_higher_tf: CYCLE용 MTF (제공되면 리샘플링 건너뜀)
+    # - candles_bb_mtf: None이면 current_timeframe_minutes 기반으로 리샘플링
+    # - current_timeframe_minutes: res_와 bb_mtf 결정에 사용
     trend_result = compute_trend_state(
-        auto_trend_candles,
+        candles,  # 현재 타임프레임 캔들에서 계산
         use_longer_trend=False,
         use_custom_length=False,
         custom_length=10,
         lookback=rq_lookback,
         relative_weight=rq_rel_weight,
         start_at_bar=rq_start_bar,
-        candles_higher_tf=None,  # 자동 모드에서는 추가 MTF 사용 안 함
-        candles_4h=None,
-        candles_bb_mtf=None,
-        current_timeframe_minutes=None,  # 리샘플링 불필요
+        candles_higher_tf=auto_trend_candles,  # CYCLE용 MTF (res_ 타임프레임)
+        candles_4h=None,  # 4시간 데이터는 리샘플링
+        candles_bb_mtf=None,  # bb_mtf는 current_timeframe_minutes 기반으로 리샘플링
+        current_timeframe_minutes=current_timeframe_minutes,  # res_와 bb_mtf 결정에 사용
         is_confirmed_only=False,
     )
 
-    # trend_result에서 trend_state 추출 (trend_result는 candles 리스트)
-    auto_trend_state_list = [c["trend_state"] for c in trend_result]
-
-    # 현재 타임프레임 캔들에 auto_trend_state 매핑
-    # Forward-fill 로직: 상위 타임프레임의 값을 하위 타임프레임에 매핑
-    auto_trend_idx = 0
+    # trend_result는 candles와 동일한 길이 (각 캔들에 trend_state가 저장됨)
+    # 이미 compute_trend_state에서 forward fill이 수행됨
+    # CYCLE_Bull, CYCLE_Bear, BB_State도 함께 복사 (DB 저장용)
     for i in range(len(candles)):
-        candle_ts = candles[i]["timestamp"]
-
-        # 현재 캔들의 타임스탬프에 해당하는 auto_trend_candles의 인덱스 찾기
-        while (auto_trend_idx < len(auto_trend_candles) - 1 and
-               auto_trend_candles[auto_trend_idx + 1]["timestamp"] <= candle_ts):
-            auto_trend_idx += 1
-
-        # auto_trend_state 값 할당
-        if auto_trend_idx < len(auto_trend_state_list):
-            candles[i]["auto_trend_state"] = auto_trend_state_list[auto_trend_idx]
-        else:
-            candles[i]["auto_trend_state"] = 0
+        candles[i]["auto_trend_state"] = trend_result[i]["trend_state"]
+        # 중간 지표 값들도 복사 (DB 저장 및 검증용)
+        candles[i]["cycle_bull"] = trend_result[i].get("CYCLE_Bull", False)
+        candles[i]["cycle_bear"] = trend_result[i].get("CYCLE_Bear", False)
+        candles[i]["bb_state"] = trend_result[i].get("BB_State", 0)
+        candles[i]["bb_state_mtf"] = trend_result[i].get("BB_State_MTF", 0)
 
     return candles

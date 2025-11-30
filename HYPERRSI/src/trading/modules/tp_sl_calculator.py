@@ -200,8 +200,9 @@ class TPSLCalculator:
                     continue
 
                 if tp_option == 'ATR 기준':
-                    if not atr_value or atr_value <= current_price * 0.001:
-                        atr_value = current_price * 0.01 * 0.1
+                    # ATR이 없거나 너무 작으면 실제 ATR 값 그대로 사용 (단, 0이면 0.1% fallback)
+                    if not atr_value or atr_value == 0:
+                        atr_value = current_price * 0.001  # 0.1% fallback when ATR is 0
 
                     raw_tp_price = position_avg_price + (multiplier * atr_value * tp_value)
 

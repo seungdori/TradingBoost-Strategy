@@ -122,6 +122,113 @@ def should_log(log_key: str, interval_seconds: int = LOG_INTERVAL_SECONDS) -> bo
 
 
 # ============================================================================
+# Signal Bot 통합 청산 헬퍼 함수
+# ============================================================================
+
+async def close_position_with_signal_bot_support(
+    user_id: str,
+    symbol: str,
+    side: str,
+    current_price: float = 0.0,
+    close_percent: int = 100,
+    size: float | None = None,
+    reason: str = "monitoring"
+) -> bool:
+    """
+    Signal Bot 모드를 지원하는 통합 포지션 청산 함수.
+
+    execution_mode가 signal_bot이면 SignalBotExecutor를 통해 EXIT_LONG/EXIT_SHORT를 전송하고,
+    그렇지 않으면 기존 close_position API를 사용합니다.
+
+    Args:
+        user_id: 사용자 ID
+        symbol: 거래 심볼 (예: "BTC-USDT-SWAP")
+        side: 포지션 방향 ("long" | "short")
+        current_price: 현재 가격 (API Direct 마켓 주문 시 선택적, 기본값 0)
+        close_percent: 청산 비율 (기본 100%)
+        size: 청산할 계약 수량 (Signal Bot 모드에서 contract 기반 청산 시 사용)
+        reason: 청산 사유 (로깅용)
+
+    Returns:
+        bool: 청산 성공 여부
+    """
+    from HYPERRSI.src.trading.executors import ExecutorFactory
+    from HYPERRSI.src.bot.telegram_message import send_telegram_message
+
+    redis = await get_redis_client()
+
+    try:
+        # 1. 사용자 설정에서 execution_mode 확인
+        settings = await get_user_settings(user_id)
+        execution_mode = settings.get("execution_mode", "api_direct")
+        signal_token = settings.get("signal_bot_token")
+
+        # 2. Signal Bot 모드 분기
+        if execution_mode == "signal_bot" and signal_token:
+            logger.info(f"[{user_id}][SignalBot] Closing {side} position: {symbol} ({reason})")
+
+            # Signal Bot Executor 생성
+            executor = await ExecutorFactory.create_signal_bot_executor(
+                user_id=user_id,
+                signal_token=signal_token
+            )
+
+            try:
+                # EXIT_LONG 또는 EXIT_SHORT 전송
+                await executor.close_position(
+                    symbol=symbol,
+                    side=side,
+                    size=size,  # None이면 percentage_position 100% 청산
+                    close_percentage=close_percent if size is None else None
+                )
+
+                # 텔레그램 알림
+                side_kr = "롱" if side == "long" else "숏"
+                size_info = f"{size} contracts" if size else f"{close_percent}%"
+                await send_telegram_message(
+                    f"✅ [Signal Bot] {side_kr} 포지션 청산\n"
+                    f"📊 심볼: {symbol}\n"
+                    f"💰 수량: {size_info}\n"
+                    f"📝 사유: {reason}",
+                    user_id
+                )
+
+                logger.info(f"[{user_id}][SignalBot] Position closed: {symbol} {side} - {reason}")
+                return True
+
+            finally:
+                await executor.close()
+
+        # 3. API Direct 모드 (기존 로직)
+        else:
+            # Lazy import to avoid circular dependency
+            from HYPERRSI.src.api.routes.order.models import ClosePositionRequest
+            from HYPERRSI.src.api.routes.order.order import close_position
+
+            close_request = ClosePositionRequest(
+                close_type="market",
+                price=current_price,
+                close_percent=close_percent
+            )
+
+            await close_position(
+                symbol=symbol,
+                close_request=close_request,
+                user_id=user_id,
+                side=side
+            )
+
+            logger.info(f"[{user_id}][APIDirect] Position closed: {symbol} {side} - {reason}")
+            return True
+
+    except Exception as e:
+        logger.error(f"[{user_id}] Failed to close position: {symbol} {side} - {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+# ============================================================================
 # 모듈 exports
 # ============================================================================
 
@@ -150,4 +257,6 @@ __all__ = [
     'order_status_cache',
     'last_log_times',
     'should_log',
+    # Signal Bot support
+    'close_position_with_signal_bot_support',
 ]

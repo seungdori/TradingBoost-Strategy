@@ -69,6 +69,15 @@ class Settings(BaseSettings):
     MULTI_SYMBOL_ENABLED: bool = True   # Phase 2: 멀티심볼 지원 활성화
     MAX_SYMBOLS_PER_USER: int = 99      # 사용자당 최대 동시 트레이딩 심볼 수 (실질적 무제한)
 
+    # Signal Bot 설정
+    # OKX Signal Bot Webhook URL (https://www.okx.com/algo/signal/trigger)
+    SIGNAL_BOT_WEBHOOK_URL: str = os.environ.get(
+        "SIGNAL_BOT_WEBHOOK_URL",
+        "https://www.okx.com/algo/signal/trigger"
+    )
+    # Signal Bot 최대 지연 시간 (초) - 시그널 유효 시간
+    SIGNAL_BOT_MAX_LAG: int = int(os.environ.get("SIGNAL_BOT_MAX_LAG", "60"))
+
     def init_redis_url(self):
         if not self.REDIS_URL:
             if self.REDIS_PASSWORD:

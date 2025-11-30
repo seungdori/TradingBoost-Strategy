@@ -8,6 +8,8 @@ import traceback
 from datetime import datetime, timezone
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from HYPERRSI.src.api.dependencies import get_user_api_keys
 from shared.database.redis_helper import get_redis_client
@@ -33,6 +35,20 @@ class TriggerCancelClient:
         self.server_time_offset = None  # 서버 시간과 로컬 시간의 차이
         self.last_server_time_fetch = 0  # 마지막으로 서버 시간을 가져온 시간
         self.server_time_cache_duration = 300  # 캐시 유효 시간(초)
+        self.timeout = 10  # 요청 타임아웃 (초)
+
+        # 연결 풀링과 자동 재시도를 위한 세션 설정
+        self.session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "POST"],
+            raise_on_status=False
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=10)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
 
     def get_server_timestamp(self):
         """
@@ -53,11 +69,18 @@ class TriggerCancelClient:
         # 캐시된 오프셋이 없거나 캐시가 만료되었으면 서버에서 새로 가져옴
         max_retries = 3
         retry_delay = 2  # 초 단위 초기 지연 시간
-        
+
+        # 연결 오류로 재시도해야 할 예외 타입들
+        connection_errors = (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+        )
+
         for retry in range(max_retries):
             try:
-                response = requests.get(f'{self.base_url}/api/v5/public/time')
-                
+                response = self.session.get(f'{self.base_url}/api/v5/public/time', timeout=self.timeout)
+
                 # 요청 한도 초과 확인
                 if response.status_code == 429 or "Too Many Requests" in response.text:
                     if retry < max_retries - 1:  # 마지막 시도가 아니면 재시도
@@ -65,10 +88,10 @@ class TriggerCancelClient:
                         print(f"서버 시간 조회: API 요청 한도 초과. {wait_time}초 후 재시도 ({retry+1}/{max_retries})...")
                         time.sleep(wait_time)
                         continue
-                
+
                 if response.status_code == 200:
                     ts = response.json()['data'][0]['ts']
-                    
+
                     # ts가 문자열이고 "T"가 있으면 ISO8601 형식으로 간주
                     if isinstance(ts, str) and "T" in ts:
                         server_time_str = ts
@@ -81,15 +104,33 @@ class TriggerCancelClient:
                         server_time = ts / 1000  # 밀리초를 초로 변환
                         dt = datetime.fromtimestamp(server_time, tz=timezone.utc)
                         server_time_str = dt.isoformat("T", "milliseconds").replace("+00:00", "Z")
-                    
+
                     # 서버 시간과 로컬 시간의 차이(오프셋) 계산 및 저장
                     self.server_time_offset = server_time - current_time
                     self.last_server_time_fetch = current_time
                     #print(f"서버 시간 오프셋 업데이트: {self.server_time_offset:.3f}초")
-                    
+
                     return server_time_str
-                
+
                 raise Exception(f"Failed to get server time: {response.text}")
+            except connection_errors as e:
+                # 연결 오류는 재시도
+                if retry < max_retries - 1:
+                    wait_time = retry_delay * (2 ** retry)
+                    print(f"서버 시간 조회: 연결 오류 발생. {wait_time}초 후 재시도 ({retry+1}/{max_retries})... 오류: {type(e).__name__}")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"서버 시간 조회: 연결 오류 - 최대 재시도 횟수 초과: {e}")
+                    # 캐시된 오프셋이 있으면 로컬 시간 기반으로 서버 시간 계산 시도
+                    if self.server_time_offset is not None:
+                        print("캐시된 서버 시간 오프셋을 사용합니다.")
+                        dt = datetime.fromtimestamp(current_time + self.server_time_offset, tz=timezone.utc)
+                        return dt.isoformat("T", "milliseconds").replace("+00:00", "Z")
+                    # 캐시도 없으면 로컬 시간 기반으로 대체
+                    print("캐시된 오프셋 없음 - 로컬 시간을 서버 시간으로 사용합니다.")
+                    dt = datetime.fromtimestamp(current_time, tz=timezone.utc)
+                    return dt.isoformat("T", "milliseconds").replace("+00:00", "Z")
             except Exception as e:
                 if "Too Many Requests" in str(e) and retry < max_retries - 1:
                     wait_time = retry_delay * (2 ** retry)  # 지수 백오프
@@ -129,7 +170,14 @@ class TriggerCancelClient:
     async def fetch_algo_orders(self, inst_id, ord_type):
         max_retries = 3
         retry_delay = 2  # 초 단위 초기 지연 시간
-        
+
+        # 연결 오류로 재시도해야 할 예외 타입들
+        connection_errors = (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+        )
+
         for retry in range(max_retries):
             try:
                 method = "GET"
@@ -151,9 +199,9 @@ class TriggerCancelClient:
                     "OK-ACCESS-PASSPHRASE": self.passphrase
                 }
 
-                response = requests.get(url, headers=headers)
+                response = self.session.get(url, headers=headers, timeout=self.timeout)
                 response_data = response.json()
-                
+
                 # 요청 한도 초과 확인
                 if response_data.get('code') == '50011':  # Too Many Requests
                     if retry < max_retries - 1:  # 마지막 시도가 아니면 재시도
@@ -161,8 +209,28 @@ class TriggerCancelClient:
                         print(f"API 요청 한도 초과. {wait_time}초 후 재시도 ({retry+1}/{max_retries})...")
                         await asyncio.sleep(wait_time)
                         continue
-                
+
                 return response_data
+
+            except connection_errors as e:
+                # 연결 오류는 재시도
+                if retry < max_retries - 1:
+                    wait_time = retry_delay * (2 ** retry)
+                    print(f"fetch_algo_orders: 연결 오류 발생. {wait_time}초 후 재시도 ({retry+1}/{max_retries})... 오류: {type(e).__name__}")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    print(f"fetch_algo_orders: 연결 오류 - 최대 재시도 횟수 초과: {e}")
+                    # errordb 로깅
+                    from HYPERRSI.src.utils.error_logger import log_error_to_db
+                    log_error_to_db(
+                        error=e,
+                        error_type="AlgoOrderFetchConnectionError",
+                        severity="WARNING",
+                        symbol=inst_id,
+                        metadata={"ord_type": ord_type, "retry": retry, "component": "TriggerCancelClient.fetch_algo_orders", "error_type": type(e).__name__}
+                    )
+                    return None
 
             except Exception as e:
                 if "Too Many Requests" in str(e) and retry < max_retries - 1:
@@ -182,7 +250,7 @@ class TriggerCancelClient:
                         metadata={"ord_type": ord_type, "retry": retry, "component": "TriggerCancelClient.fetch_algo_orders"}
                     )
                     return None
-        
+
         print(f"최대 재시도 횟수({max_retries})를 초과했습니다.")
         return None
 
@@ -207,10 +275,14 @@ class TriggerCancelClient:
             elif side == "sell":
                 side = "sell"
                 order_side = "buy"
-            print(f"inst_id : {inst_id}, side : {side}, order_side : {order_side}, algo_type : {algo_type}")
             # Fetch active trigger orders
             active_orders = await self.fetch_algo_orders(inst_id=inst_id, ord_type=algo_type)
-            print("active_orders : ", active_orders)
+            if active_orders is not None:
+                print(f"inst_id : {inst_id}, side : {side}, order_side : {order_side}, algo_type : {algo_type}")
+                print("active_orders : ", active_orders)
+            else:
+                print(f"Failed to fetch active orders: API 요청 한도 초과 또는 연결 오류")
+                return
             
             # active_orders가 None인 경우 처리
             if active_orders is None:
@@ -264,29 +336,62 @@ class TriggerCancelClient:
                 await redis.delete(monitor_key)
 
 
-            # Send cancellation request
+            # Send cancellation request with retry logic
             method = "POST"
             request_path = "/api/v5/trade/cancel-algos"
             url = self.base_url + request_path
             body = json.dumps(cancel_requests)
-            timestamp = self.get_server_timestamp()
-            signature = self._generate_signature(timestamp, method, request_path, body)
 
-            headers = {
-                "Content-Type": "application/json",
-                "OK-ACCESS-KEY": self.api_key,
-                "OK-ACCESS-SIGN": signature,
-                "OK-ACCESS-TIMESTAMP": timestamp,
-                "OK-ACCESS-PASSPHRASE": self.passphrase
-            }
+            # 연결 오류로 재시도해야 할 예외 타입들
+            connection_errors = (
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+                requests.exceptions.ChunkedEncodingError,
+            )
 
-            #print(f"Server timestamp: {timestamp}")
-            #print(f"Request URL: {url}")
-            #print(f"Request Headers: {headers}")
-            #print(f"Request Body: {body}")
+            max_retries = 3
+            retry_delay = 2
+            response_data = None
 
-            response = requests.post(url, headers=headers, data=body)
-            response_data = response.json()
+            for retry in range(max_retries):
+                try:
+                    timestamp = self.get_server_timestamp()
+                    signature = self._generate_signature(timestamp, method, request_path, body)
+
+                    headers = {
+                        "Content-Type": "application/json",
+                        "OK-ACCESS-KEY": self.api_key,
+                        "OK-ACCESS-SIGN": signature,
+                        "OK-ACCESS-TIMESTAMP": timestamp,
+                        "OK-ACCESS-PASSPHRASE": self.passphrase
+                    }
+
+                    response = self.session.post(url, headers=headers, data=body, timeout=self.timeout)
+                    response_data = response.json()
+                    break  # 성공시 루프 종료
+
+                except connection_errors as e:
+                    if retry < max_retries - 1:
+                        wait_time = retry_delay * (2 ** retry)
+                        print(f"cancel_algos: 연결 오류 발생. {wait_time}초 후 재시도 ({retry+1}/{max_retries})... 오류: {type(e).__name__}")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    else:
+                        print(f"cancel_algos: 연결 오류 - 최대 재시도 횟수 초과: {e}")
+                        from HYPERRSI.src.utils.error_logger import log_error_to_db
+                        log_error_to_db(
+                            error=e,
+                            error_type="AlgoCancelConnectionError",
+                            user_id=user_id,
+                            severity="ERROR",
+                            symbol=inst_id,
+                            metadata={"algo_type": algo_type, "retry": retry, "error_type": type(e).__name__}
+                        )
+                        return None
+
+            if response_data is None:
+                print("cancel_algos: 응답 없음")
+                return None
 
             # 취소 결과 로깅
             print(f"[SL 취소 응답] {inst_id} user:{user_id} - code: {response_data.get('code')}, msg: {response_data.get('msg')}, 취소 대상: {len(cancel_requests)}건")

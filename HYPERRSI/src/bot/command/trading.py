@@ -19,6 +19,11 @@ from aiogram.exceptions import TelegramBadRequest
 from HYPERRSI.src.api.dependencies import get_user_api_keys
 from HYPERRSI.src.core.celery_task import celery_app
 from HYPERRSI.src.trading.trading_service import round_to_tick_size
+from HYPERRSI.src.trading.utils.position_handler.constants import (
+    DCA_COUNT_KEY,
+    MAIN_POSITION_DIRECTION_KEY,
+    POSITION_KEY,
+)
 from HYPERRSI.src.services.multi_symbol_service import multi_symbol_service
 from shared.config import settings as app_settings
 from shared.database.redis_helper import get_redis_client
@@ -1081,8 +1086,8 @@ async def status_command(message: types.Message) -> None:
                         active_positions = [pos for pos in positions if float(pos['contracts']) > 0]
 
                         for position in active_positions:
-                            position_key = f"user:{user_id}:position:{check_symbol}:{position['side']}"
-                            dca_count_key = f"user:{user_id}:position:{check_symbol}:{position['side']}:dca_count"
+                            position_key = POSITION_KEY.format(user_id=user_id, symbol=check_symbol, side=position['side'])
+                            dca_count_key = DCA_COUNT_KEY.format(user_id=user_id, symbol=check_symbol, side=position['side'])
 
                             key_type = await redis.type(position_key)
                             existing_data = {}
@@ -1202,10 +1207,10 @@ async def status_command(message: types.Message) -> None:
 
             position_info_list = all_positions_by_symbol.get(symbol, [])
             for pos in position_info_list:
-                main_position_side_key = f"user:{user_id}:position:{symbol}:main_position_direction"
+                main_position_side_key = MAIN_POSITION_DIRECTION_KEY.format(user_id=user_id, symbol=symbol)
                 main_position_side = await redis.get(main_position_side_key)
                 unrealized_pnl = float(pos['unrealized_pnl'])
-                dca_key = f"user:{user_id}:position:{symbol}:{pos['side']}:dca_count"
+                dca_key = DCA_COUNT_KEY.format(user_id=user_id, symbol=symbol, side=pos['side'])
                 dca_count = await redis.get(dca_key)
                 pnl_emoji = "📈" if unrealized_pnl > 0 else "📉"
 
@@ -1393,7 +1398,7 @@ async def sl_command(message: types.Message) -> None:
             sl_price = float(args[3])
             
             # 방향에 따라 SL 가격 검증
-            position_key = f"user:{user_id}:position:{symbol}:{direction}"
+            position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=direction)
             position_data = await redis.hgetall(position_key)
             
             if not position_data:
@@ -1452,7 +1457,7 @@ async def sl_command(message: types.Message) -> None:
             await message.reply("❌ 방향은 'long' 또는 'short'만 가능합니다.")
             return
         
-        position_key = f"user:{user_id}:position:{symbol}:{direction}"
+        position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=direction)
         position_data = await redis.hgetall(position_key)
         
         if not position_data:
@@ -1514,7 +1519,7 @@ async def sl_command(message: types.Message) -> None:
             await message.reply("❌ 방향은 'long' 또는 'short'만 가능합니다.")
             return
         
-        position_key = f"user:{user_id}:position:{symbol}:{direction}"
+        position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=direction)
         position_data = await redis.hgetall(position_key)
         
         if not position_data:
@@ -1587,7 +1592,7 @@ async def tp_command(message: types.Message) -> None:
                 return
             
             # 방향에 따라 TP 가격 검증
-            position_key = f"user:{user_id}:position:{symbol}:{direction}"
+            position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=direction)
             position_data = await redis.hgetall(position_key)
             
             if not position_data:
@@ -1652,7 +1657,7 @@ async def tp_command(message: types.Message) -> None:
             await message.reply("❌ 방향은 'long' 또는 'short'만 가능합니다.")
             return
         
-        position_key = f"user:{user_id}:position:{symbol}:{direction}"
+        position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=direction)
         position_data = await redis.hgetall(position_key)
         
         if not position_data:
@@ -1717,7 +1722,7 @@ async def tp_command(message: types.Message) -> None:
             await message.reply("❌ 방향은 'long' 또는 'short'만 가능합니다.")
             return
         
-        position_key = f"user:{user_id}:position:{symbol}:{direction}"
+        position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=direction)
         position_data = await redis.hgetall(position_key)
         
         if not position_data:

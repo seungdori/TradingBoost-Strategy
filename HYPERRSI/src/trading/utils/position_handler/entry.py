@@ -14,16 +14,17 @@ from typing import Any, Dict, TYPE_CHECKING
 # Lazy import to avoid circular dependency
 if TYPE_CHECKING:
     from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
+    from HYPERRSI.src.trading.trading_service import TradingService
 
 from HYPERRSI.src.api.trading.Calculate_signal import TrendStateCalculator
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.logger import setup_error_logger
 from HYPERRSI.src.trading.error_message import map_exchange_error
+from HYPERRSI.src.trading.executors import ExecutorFactory
 from HYPERRSI.src.trading.models import Position, get_timeframe
 from HYPERRSI.src.trading.position_manager import PositionStateManager
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
 from HYPERRSI.src.trading.stats import record_trade_entry
-from HYPERRSI.src.trading.trading_service import TradingService
 from HYPERRSI.src.trading.utils.message_builder import create_position_message
 from HYPERRSI.src.trading.utils.position_handler.constants import (
     DCA_COUNT_KEY,
@@ -70,7 +71,7 @@ error_logger = setup_error_logger()
 async def handle_no_position(
     user_id: str,
     settings: dict,
-    trading_service: TradingService,
+    trading_service: "TradingService",
     calculator: TrendStateCalculator,
     symbol: str,
     timeframe: str,
@@ -317,6 +318,157 @@ async def handle_no_position(
         )
 
 
+async def _execute_signal_bot_entry(
+    user_id: str,
+    symbol: str,
+    side: str,
+    contracts_amount: float,
+    signal_token: str,
+    redis_client: Any,
+    timeframe: str,
+    timeframe_str: str,
+    settings: dict,
+    current_price: float,
+    position_manager: PositionStateManager,
+    trading_service: "TradingService",
+    atr_value: float
+) -> bool:
+    """
+    Signal Bot 모드로 포지션 진입 실행
+
+    OKX Signal Bot Webhook을 통해 ENTER_LONG 또는 ENTER_SHORT 시그널 전송
+
+    Args:
+        user_id: 사용자 ID
+        symbol: 거래 심볼 (예: 'BTC-USDT-SWAP')
+        side: 포지션 방향 ('long' 또는 'short')
+        contracts_amount: 계약 수량
+        signal_token: Signal Bot 토큰
+        redis_client: Redis 클라이언트
+        timeframe: 타임프레임 문자열
+        timeframe_str: 포맷된 타임프레임 문자열
+        settings: 사용자 설정
+        current_price: 현재 시장가
+        position_manager: 포지션 매니저 인스턴스
+        trading_service: 트레이딩 서비스 인스턴스
+        atr_value: ATR 값
+
+    Returns:
+        True if entry successful, False otherwise
+    """
+    try:
+        # Signal Bot Executor 생성
+        executor = await ExecutorFactory.create_signal_bot_executor(
+            user_id=user_id,
+            signal_token=signal_token
+        )
+
+        try:
+            # 심볼 변환: BTC-USDT-SWAP → BTC/USDT:USDT (CCXT 형식)
+            ccxt_symbol = symbol.replace("-SWAP", "").replace("-", "/") + ":USDT"
+
+            # Signal Bot을 통해 진입 주문 실행
+            order_side = "buy" if side == "long" else "sell"
+            order_result = await executor.create_order(
+                symbol=ccxt_symbol,
+                side=order_side,
+                size=contracts_amount,
+            )
+
+            logger.info(
+                f"[{user_id}][SignalBot] {side.upper()} entry success: "
+                f"{symbol} {contracts_amount} contracts"
+            )
+
+            # Redis 상태 업데이트
+            other_side = "short" if side == "long" else "long"
+            other_side_dca_key = DCA_LEVELS_KEY.format(user_id=user_id, symbol=symbol, side=other_side)
+            dca_count_key = DCA_COUNT_KEY.format(user_id=user_id, symbol=symbol, side=side)
+            dual_side_count_key = DUAL_SIDE_COUNT_KEY.format(user_id=user_id, symbol=symbol)
+
+            await redis_client.set(dca_count_key, "1")
+            await redis_client.delete(other_side_dca_key)
+            await redis_client.set(dual_side_count_key, "0")
+
+            same_side_dca_key = DCA_LEVELS_KEY.format(user_id=user_id, symbol=symbol, side=side)
+            await redis_client.delete(same_side_dca_key)
+
+            # initial_size 및 last_entry_size 설정
+            position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side)
+            await redis_client.hset(position_key, "initial_size", contracts_amount)
+            await redis_client.hset(position_key, "last_entry_size", contracts_amount)
+
+            # 포지션 잠금 설정
+            await set_position_lock(user_id, symbol, side, timeframe)
+
+            # 포지션 상태 업데이트
+            try:
+                await position_manager.update_position_state(
+                    user_id=user_id,
+                    symbol=symbol,
+                    entry_price=current_price,  # Signal Bot은 실제 체결가 모름, 현재가 사용
+                    contracts_amount_delta=contracts_amount,
+                    side=side,
+                    operation_type="new_position"
+                )
+            except Exception as e:
+                logger.error(f"포지션 정보 업데이트 실패: {str(e)}")
+
+            # 텔레그램 알림 전송
+            side_kr = "롱" if side == "long" else "숏"
+            message = (
+                f"✅ [Signal Bot] {side_kr} 포지션 진입 완료\n"
+                f"\n"
+                f"📊 심볼: {symbol}\n"
+                f"📈 방향: {side_kr}\n"
+                f"💰 수량: {contracts_amount} contracts\n"
+                f"⏰ 타임프레임: {timeframe_str}\n"
+                f"\n"
+                f"ℹ️ Signal Bot 모드: TP/SL은 모니터링으로 처리됩니다."
+            )
+            await send_telegram_message(message, user_id)
+
+            # 거래 기록
+            await record_trade_entry(
+                user_id=user_id,
+                symbol=symbol,
+                entry_price=current_price,
+                current_price=current_price,
+                size=contracts_amount,
+                side=side,
+                is_DCA=False
+            )
+
+            # TP 데이터 저장 (Signal Bot은 TP 없음, 빈 리스트)
+            tp_data_key = TP_DATA_KEY.format(user_id=user_id, symbol=symbol, side=side)
+            await redis_client.set(tp_data_key, json.dumps([]))
+
+            return True
+
+        finally:
+            # Executor 정리
+            await executor.close()
+
+    except Exception as e:
+        if "직전 주문 종료 후 쿨다운 시간이 지나지 않았습니다." in str(e):
+            pass
+        else:
+            error_logger.error(f"[SignalBot] {side} 포지션 진입 실패", exc_info=True)
+            traceback.print_exc()
+            error_msg = map_exchange_error(e)
+            side_kr = "롱" if side == "long" else "숏"
+            await send_telegram_message(
+                f"[{user_id}]⚠️ [Signal Bot] {side_kr} 포지션 주문 실패\n"
+                f"📊 심볼: {symbol}\n"
+                f"\n"
+                f"{error_msg}",
+                user_id,
+                debug=True,
+                immediate=True
+            )
+        return False
+
+
 async def _execute_long_entry(
     user_id: str,
     symbol: str,
@@ -326,7 +478,7 @@ async def _execute_long_entry(
     settings: dict,
     current_price: float,
     position_manager: PositionStateManager,
-    trading_service: TradingService,
+    trading_service: "TradingService",
     atr_value: float,
     redis_client: Any
 ) -> bool:
@@ -349,6 +501,44 @@ async def _execute_long_entry(
     Returns:
         True if entry successful, False otherwise
     """
+    # Check if position is locked for this timeframe (공통 체크)
+    is_locked, locked_direction, remaining = await check_any_direction_locked(
+        user_id=user_id,
+        symbol=symbol,
+        timeframe=timeframe
+    )
+
+    if is_locked:
+        logger.info(
+            f"[{user_id}] Position is locked for {symbol} with timeframe {timeframe_str}. "
+            f"Remaining time: {remaining}s"
+        )
+        return False
+
+    # ============================================================
+    # Signal Bot 모드 분기
+    # ============================================================
+    if trading_service.execution_mode == "signal_bot" and trading_service.signal_token:
+        logger.info(f"[{user_id}] Using Signal Bot mode for LONG entry")
+        return await _execute_signal_bot_entry(
+            user_id=user_id,
+            symbol=symbol,
+            side="long",
+            contracts_amount=contracts_amount,
+            signal_token=trading_service.signal_token,
+            redis_client=redis_client,
+            timeframe=timeframe,
+            timeframe_str=timeframe_str,
+            settings=settings,
+            current_price=current_price,
+            position_manager=position_manager,
+            trading_service=trading_service,
+            atr_value=atr_value
+        )
+
+    # ============================================================
+    # API Direct 모드 (기존 로직)
+    # ============================================================
     try:
         # Runtime import to avoid circular dependency
         from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint
@@ -379,20 +569,6 @@ async def _execute_long_entry(
             hedge_tp_price=None,
             hedge_sl_price=None
         )
-
-        # Check if position is locked for this timeframe
-        is_locked, locked_direction, remaining = await check_any_direction_locked(
-            user_id=user_id,
-            symbol=symbol,
-            timeframe=timeframe
-        )
-
-        if is_locked:
-            logger.info(
-                f"[{user_id}] Position is locked for {symbol} with timeframe {timeframe_str}. "
-                f"Remaining time: {remaining}s"
-            )
-            return False
 
         # Open position via API
         position = await open_position_endpoint(request)
@@ -494,7 +670,7 @@ async def _execute_short_entry(
     settings: dict,
     current_price: float,
     position_manager: PositionStateManager,
-    trading_service: TradingService,
+    trading_service: "TradingService",
     atr_value: float,
     redis_client: Any
 ) -> bool:
@@ -517,6 +693,30 @@ async def _execute_short_entry(
     Returns:
         True if entry successful, False otherwise
     """
+    # ============================================================
+    # Signal Bot 모드 분기
+    # ============================================================
+    if trading_service.execution_mode == "signal_bot" and trading_service.signal_token:
+        logger.info(f"[{user_id}] Using Signal Bot mode for SHORT entry")
+        return await _execute_signal_bot_entry(
+            user_id=user_id,
+            symbol=symbol,
+            side="short",
+            contracts_amount=contracts_amount,
+            signal_token=trading_service.signal_token,
+            redis_client=redis_client,
+            timeframe=timeframe,
+            timeframe_str=timeframe_str,
+            settings=settings,
+            current_price=current_price,
+            position_manager=position_manager,
+            trading_service=trading_service,
+            atr_value=atr_value
+        )
+
+    # ============================================================
+    # API Direct 모드 (기존 로직)
+    # ============================================================
     try:
         # Runtime import to avoid circular dependency
         from HYPERRSI.src.api.routes.position import OpenPositionRequest, open_position_endpoint

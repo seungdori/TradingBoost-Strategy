@@ -12,12 +12,16 @@ from typing import TYPE_CHECKING
 
 from HYPERRSI.src.core.error_handler import log_error
 from HYPERRSI.src.trading.dual_side_entry import get_user_dual_side_settings
+from HYPERRSI.src.trading.utils.position_handler.constants import (
+    DUAL_SIDE_POSITION_KEY,
+    POSITION_KEY,
+)
 from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger, log_order
 
 from .telegram_service import get_identifier, send_telegram_message
 from .trailing_stop_handler import activate_trailing_stop
-from .utils import get_user_settings, is_true_value
+from .utils import close_position_with_signal_bot_support, get_user_settings, is_true_value
 
 # PostgreSQL SSOT - State Change Logger
 from HYPERRSI.src.services.state_change_logger import get_state_change_logger
@@ -129,7 +133,7 @@ async def move_sl_to_break_even(user_id: str, symbol: str, side: str, break_even
                         if dual_side_sl_type == 'existing_position':
 
                             if int(dual_side_sl_value) > tp_index:
-                                dual_side_key = f"user:{okx_uid}:{symbol}:dual_side_position"
+                                dual_side_key = DUAL_SIDE_POSITION_KEY.format(user_id=okx_uid, symbol=symbol)
                                 await redis.hset(dual_side_key, "stop_loss", break_even_price)
                                 telegram_message += f"🔒 양방향 포지션 SL 업데이트: {break_even_price:.2f}$\n"
                                 
@@ -144,7 +148,7 @@ async def move_sl_to_break_even(user_id: str, symbol: str, side: str, break_even
                     telegram_message,
                     okx_uid
                 ))
-        position_key = f"user:{okx_uid}:position:{symbol}:{side}"
+        position_key = POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side=side)
         await redis.hset(position_key, "sl_price", break_even_price)
         
         # 브레이크이븐 이동 로깅
@@ -186,7 +190,7 @@ async def move_sl_to_break_even(user_id: str, symbol: str, side: str, break_even
             logger.warning(f"[{okx_uid}] 브레이크이븐 로깅 실패 (무시됨): {log_err}")
             
         # dual_side_position이 있는지 확인
-        dual_side_key = f"user:{okx_uid}:{symbol}:dual_side_position"
+        dual_side_key = DUAL_SIDE_POSITION_KEY.format(user_id=okx_uid, symbol=symbol)
         dual_side_position_exists = await redis.exists(dual_side_key)
         
         if dual_side_position_exists:
@@ -206,19 +210,15 @@ async def move_sl_to_break_even(user_id: str, symbol: str, side: str, break_even
                 
                 # 반대 방향 포지션 종료
                 if int(dual_side_sl_value) == tp_index:
-                    
-                    close_request = ClosePositionRequest(
-                        close_type="market",
-                        close_percent=100
-                    )
-                    
                     try:
                         logger.info(f"dual_side_position 종료 시도: {symbol}, {opposite_side}")
-                        response = await close_position(
-                            symbol=symbol, 
-                            close_request=close_request, 
-                            user_id=okx_uid, 
-                            side=opposite_side
+                        # Signal Bot 모드 지원 청산 함수 사용
+                        await close_position_with_signal_bot_support(
+                            user_id=okx_uid,
+                            symbol=symbol,
+                            side=opposite_side,
+                            close_percent=100,
+                            reason=f"dual_side_tp{tp_index}_trigger"
                         )
                         
                         # 양방향 포지션 익절 시 메인 포지션도 종료 설정이 있는지 확인
@@ -226,15 +226,12 @@ async def move_sl_to_break_even(user_id: str, symbol: str, side: str, break_even
                         if close_main_on_hedge_tp:
                             # 메인 포지션 종료
                             try:
-                                main_close_request = ClosePositionRequest(
-                                    close_type="market",
-                                    close_percent=100
-                                )
-                                await close_position(
-                                    symbol=symbol,
-                                    close_request=main_close_request,
+                                await close_position_with_signal_bot_support(
                                     user_id=okx_uid,
-                                    side=side  # 메인 포지션 방향
+                                    symbol=symbol,
+                                    side=side,  # 메인 포지션 방향
+                                    close_percent=100,
+                                    reason=f"main_close_on_hedge_tp{tp_index}"
                                 )
                                 await send_telegram_message(f"✅양방향 포지션 익절로 메인 포지션도 종료\n" +f"━━━━━━━━━━━━━━━━\n" +f"메인 포지션의 TP{tp_index} 체결로 모든 포지션 종료\n" +f"• 메인 방향: {side}\n" +f"• 양방향 방향: {opposite_side}\n" +f"━━━━━━━━━━━━━━━━\n",okx_uid)
                             except Exception as e:
@@ -373,13 +370,13 @@ async def process_break_even_settings(user_id: str, symbol: str, order_type: str
         entry_price_from_data = float(position_data.get('avgPrice', position_data.get('entry_price', '0') or 0))
         full_position_data = {}
         if position_side:
-            position_key = f"user:{okx_uid}:position:{symbol}:{position_side}"
+            position_key = POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side=position_side)
             full_position_data = _decode_hash(await redis.hgetall(position_key))
 
         # 포지션 방향을 찾지 못했거나 데이터가 비어있으면 양방향 키 모두 확인
         if (not position_side) or not full_position_data:
             for candidate_side in ("long", "short"):
-                candidate_key = f"user:{okx_uid}:position:{symbol}:{candidate_side}"
+                candidate_key = POSITION_KEY.format(user_id=okx_uid, symbol=symbol, side=candidate_side)
                 candidate_data = await redis.hgetall(candidate_key)
                 if candidate_data:
                     position_side = position_side or candidate_side
@@ -441,45 +438,34 @@ async def process_break_even_settings(user_id: str, symbol: str, order_type: str
         # TP 레벨에 따른 브레이크이븐 적용
         
         try:
-            
-            try:
-                dual_side_key = f"user:{okx_uid}:{symbol}:dual_side_position"
-                
-                dual_side_key = f"user:{user_id}:{symbol}:dual_side_position"
-            except Exception as e:
-                logger.error(f"양방향 포지션 키 오류: {str(e)}")
-                dual_side_key =f"user:{user_id}:{symbol}:dual_side_position"
-            
+            # okx_uid를 우선 사용 (없으면 user_id 사용)
+            uid = okx_uid if okx_uid else user_id
+            dual_side_key = DUAL_SIDE_POSITION_KEY.format(user_id=uid, symbol=symbol)
             dual_side_position_exists = await redis.exists(dual_side_key)
 
             if dual_side_position_exists:
                 if dual_side_tp_type == 'existing_position':
                     if int(dual_side_tp_value) == tp_level:
-                        close_request = ClosePositionRequest(
-                            close_type="market",
-                            close_percent=100
-                        )
-                        await close_position(
-                            symbol=symbol,
-                            close_request=close_request,
+                        # Signal Bot 모드 지원 청산 함수 사용
+                        await close_position_with_signal_bot_support(
                             user_id=user_id,
-                            side=dual_side_position_side
+                            symbol=symbol,
+                            side=dual_side_position_side,
+                            close_percent=100,
+                            reason=f"dual_side_tp{tp_level}_trigger"
                         )
-                        
+
                         # 양방향 포지션 익절 시 메인 포지션도 종료 설정이 있는지 확인
                         close_main_on_hedge_tp = dual_side_settings.get('close_main_on_hedge_tp', False)
                         if close_main_on_hedge_tp:
                             # 메인 포지션 종료
                             try:
-                                main_close_request = ClosePositionRequest(
-                                    close_type="market",
-                                    close_percent=100
-                                )
-                                await close_position(
-                                    symbol=symbol,
-                                    close_request=main_close_request,
+                                await close_position_with_signal_bot_support(
                                     user_id=user_id,
-                                    side=position_side  # 메인 포지션 방향
+                                    symbol=symbol,
+                                    side=position_side,  # 메인 포지션 방향
+                                    close_percent=100,
+                                    reason=f"main_close_on_hedge_tp{tp_level}"
                                 )
                                 await send_telegram_message(f"✅양방향 포지션 익절로 메인 포지션도 종료\n" +f"━━━━━━━━━━━━━━━━\n" +f"메인 포지션의 TP{tp_level} 체결로 모든 포지션 종료\n" +f"• 메인 방향: {position_side}\n" +f"• 양방향 방향: {dual_side_position_side}\n" +f"━━━━━━━━━━━━━━━━\n",user_id)
                             except Exception as e:
@@ -487,18 +473,16 @@ async def process_break_even_settings(user_id: str, symbol: str, order_type: str
                                 await send_telegram_message(f"메인 포지션 종료 실패: {str(e)}", user_id, debug=True)
                         else:
                             await send_telegram_message(f"✅양방향 포지션 종료\n" +f"━━━━━━━━━━━━━━━━\n" +f"메인 포지션의 TP{tp_level} 체결로 양방향 포지션 종료\n" +f"• 방향: {dual_side_position_side}\n" +f"━━━━━━━━━━━━━━━━\n",user_id)
-                        
+
                 if dual_side_sl_type == 'existing_position':
                     if int(dual_side_sl_value) == tp_level:
-                        close_request = ClosePositionRequest(
-                            close_type="market",
-                            close_percent=100
-                        )
-                        await close_position(
-                            symbol=symbol,
-                            close_request=close_request,
+                        # Signal Bot 모드 지원 청산 함수 사용
+                        await close_position_with_signal_bot_support(
                             user_id=user_id,
-                            side=dual_side_position_side
+                            symbol=symbol,
+                            side=dual_side_position_side,
+                            close_percent=100,
+                            reason=f"dual_side_sl{tp_level}_trigger"
                         )
                         await send_telegram_message(f"✅양방향 포지션 종료\n" +f"━━━━━━━━━━━━━━━━\n" +f"메인 포지션의 TP{tp_level} 체결로 양방향 포지션 종료\n" +f"• 방향: {dual_side_position_side}\n" +f"━━━━━━━━━━━━━━━━\n",user_id)
                         
@@ -525,7 +509,7 @@ async def process_break_even_settings(user_id: str, symbol: str, order_type: str
                 else:
                     logger.warning(f"⚠️ 브레이크이븐 조건 미충족 - entry_price: {entry_price}, contracts_amount: {contracts_amount}")
                     await send_telegram_message(
-                        f"⚠️ 브레이크이븐 실행 실패\n"
+                        f"⚠️[DEBUG] 브레이크이븐 실행 실패\n"
                         f"진입가: {entry_price}\n"
                         f"수량: {contracts_amount}\n"
                         f"포지션이 없거나 데이터가 유효하지 않습니다.",

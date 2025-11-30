@@ -27,17 +27,23 @@ class SignalBotExecutor(BaseExecutor):
     """
     OKX Signal Bot Webhook 방식 주문 실행
 
-    Webhook Payload Format (OKX 공식):
+    OKX Signal Bot 공식 규격:
+    https://www.okx.com/help/signal-bot-alert-message-specifications
+
+    Webhook Payload Format (Universally Compatible Format):
     {
         "action": "ENTER_LONG" | "ENTER_SHORT" | "EXIT_LONG" | "EXIT_SHORT",
-        "instrument": "BTCUSDT.P",  # Perpetual은 .P suffix 필수
+        "instrument": "BTC-USDT-SWAP",  # OKX instId 형식
         "signalToken": "your_token",
-        "timestamp": "2025-01-15T12:00:00.000Z",
-        "maxLag": "60",  # 60초 이내만 유효
-        "orderType": "market",
-        "investmentType": "base",
-        "amount": "0.1"
+        "timestamp": "2025-01-15T12:00:00.000Z",  # ISO 8601 형식
+        "maxLag": "60",  # 1-3600초, 기본 60초
+        "orderType": "market",  # "market" 또는 "limit"
+        "investmentType": "base" | "margin" | "contract" | "percentage_balance",
+        "amount": "0.1"  # investmentType에 맞는 수량
     }
+
+    Exit 시 추가 옵션:
+    - investmentType: "percentage_position" + amount: "100" → 전체 청산
     """
 
     def __init__(
@@ -153,6 +159,7 @@ class SignalBotExecutor(BaseExecutor):
         symbol: str,
         side: str,
         size: Optional[float] = None,
+        close_percentage: Optional[float] = None,
         **kwargs
     ) -> PositionResult:
         """
@@ -161,10 +168,25 @@ class SignalBotExecutor(BaseExecutor):
         Args:
             symbol: 거래 심볼
             side: 포지션 방향 ('long' | 'short')
-            size: 무시됨 (Signal Bot은 전체 청산)
+            size: 청산할 계약 수량 (contracts). 지정 시 해당 수량만 청산
+            close_percentage: 청산 비율 (1-100). size가 없을 때 사용, 기본값 100
 
         Returns:
             PositionResult: 청산 결과
+
+        OKX Signal Bot Exit 규격:
+        - size 지정 시: investmentType="contract", amount=size
+        - size 미지정 시: investmentType="percentage_position", amount=100 (전체)
+
+        Examples:
+            # 전체 청산 (100%)
+            await executor.close_position(symbol, side="long")
+
+            # 50% 청산
+            await executor.close_position(symbol, side="long", close_percentage=50)
+
+            # 특정 수량 청산 (10 contracts)
+            await executor.close_position(symbol, side="long", size=10)
         """
         # 1. Symbol 변환
         instrument = self._convert_to_okx_format(symbol)
@@ -172,7 +194,7 @@ class SignalBotExecutor(BaseExecutor):
         # 2. Action 결정
         action = "EXIT_LONG" if side == "long" else "EXIT_SHORT"
 
-        # 3. Payload 구성 (EXIT는 수량 지정 안 함)
+        # 3. Payload 구성 - size 또는 percentage 기반으로 분기
         payload = {
             "action": action,
             "instrument": instrument,
@@ -181,10 +203,23 @@ class SignalBotExecutor(BaseExecutor):
             "maxLag": str(self.max_lag),
         }
 
+        # 청산 방식 결정
+        if size is not None and size > 0:
+            # 특정 수량(contracts) 청산
+            payload["investmentType"] = "contract"
+            payload["amount"] = str(size)
+            close_info = f"{size} contracts"
+        else:
+            # 비율 기반 청산 (기본값: 100% 전체 청산)
+            pct = close_percentage if close_percentage is not None else 100.0
+            payload["investmentType"] = "percentage_position"
+            payload["amount"] = str(pct)
+            close_info = f"{pct}%"
+
         # 4. Webhook 전송
         try:
             logger.info(
-                f"[SignalBot][{self.user_id}] Sending {action}: {instrument}"
+                f"[SignalBot][{self.user_id}] Sending {action}: {instrument} ({close_info})"
             )
 
             response = await self.client.post(
@@ -197,13 +232,13 @@ class SignalBotExecutor(BaseExecutor):
             result = response.json()
 
             logger.info(
-                f"[SignalBot][{self.user_id}] Position closed: {action} {symbol}"
+                f"[SignalBot][{self.user_id}] Position closed: {action} {symbol} ({close_info})"
             )
 
             return PositionResult(
                 symbol=symbol,
                 side=side,
-                size=size or 0.0,
+                size=size if size is not None else 0.0,
                 close_price=0.0,  # Signal Bot은 가격 정보 없음
                 realized_pnl=None,
                 status="closed",
@@ -230,16 +265,38 @@ class SignalBotExecutor(BaseExecutor):
 
     def _convert_to_okx_format(self, symbol: str) -> str:
         """
-        심볼 변환: BTC/USDT:USDT -> BTCUSDT.P
+        심볼 변환: 다양한 형식 → OKX instId 형식 (BTC-USDT-SWAP)
 
-        ⚠️ 중요: Perpetual contract는 반드시 .P suffix 필요
+        OKX Signal Bot은 instId 형식을 사용함:
+        - Perpetual: BTC-USDT-SWAP
+        - Spot: BTC-USDT (지원하지 않음)
 
         Examples:
-            'BTC/USDT:USDT' -> 'BTCUSDT.P'
-            'ETH/USDT:USDT' -> 'ETHUSDT.P'
+            'BTC/USDT:USDT' -> 'BTC-USDT-SWAP'  (CCXT 형식)
+            'BTC-USDT-SWAP' -> 'BTC-USDT-SWAP'  (이미 OKX 형식)
+            'BTCUSDT' -> 'BTC-USDT-SWAP'        (Binance 형식)
         """
-        # BTC/USDT:USDT -> BTCUSDT
-        base = symbol.replace("/", "").replace(":USDT", "")
+        # 이미 OKX 형식인 경우
+        if "-SWAP" in symbol:
+            return symbol
 
-        # Perpetual suffix 추가
-        return f"{base}.P"
+        # CCXT 형식: BTC/USDT:USDT -> BTC-USDT-SWAP
+        if "/" in symbol:
+            # BTC/USDT:USDT -> BTC-USDT
+            base = symbol.split("/")[0]
+            quote = symbol.split("/")[1].split(":")[0]
+            return f"{base}-{quote}-SWAP"
+
+        # Binance 형식: BTCUSDT -> BTC-USDT-SWAP
+        # 일반적인 quote currencies
+        for quote in ["USDT", "USDC", "BUSD", "USD"]:
+            if symbol.endswith(quote):
+                base = symbol[:-len(quote)]
+                return f"{base}-{quote}-SWAP"
+
+        # 알 수 없는 형식 - 그대로 반환하고 경고
+        logger.warning(
+            f"[SignalBot] Unknown symbol format: {symbol}. "
+            f"Returning as-is. Expected OKX instId format like 'BTC-USDT-SWAP'"
+        )
+        return symbol

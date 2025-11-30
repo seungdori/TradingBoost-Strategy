@@ -8,6 +8,24 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from HYPERRSI.src.api.routes.settings import ApiKeyService, get_api_keys_from_timescale
+from HYPERRSI.src.api.routes.trading_docs import (
+    START_TRADING_DESCRIPTION,
+    START_TRADING_RESPONSES,
+    START_ALL_USERS_DESCRIPTION,
+    START_ALL_USERS_RESPONSES,
+    STOP_TRADING_DESCRIPTION,
+    STOP_TRADING_RESPONSES,
+    GET_ACTIVE_SYMBOLS_DESCRIPTION,
+    GET_ACTIVE_SYMBOLS_RESPONSES,
+    GET_RUNNING_USERS_DESCRIPTION,
+    GET_RUNNING_USERS_RESPONSES,
+    STOP_ALL_RUNNING_USERS_DESCRIPTION,
+    RESTART_ALL_RUNNING_USERS_DESCRIPTION,
+    GET_USER_STATUS_DESCRIPTION,
+    GET_USER_STATUS_RESPONSES,
+    GET_USER_SYMBOL_STATUS_DESCRIPTION,
+    GET_USER_SYMBOL_STATUS_RESPONSES,
+)
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.celery_task import celery_app
 from HYPERRSI.src.core.error_handler import ErrorCategory, handle_critical_error
@@ -42,6 +60,8 @@ class TradingTaskRequest(BaseModel):
     symbol: Optional[str] = "SOL-USDT-SWAP"
     timeframe: str = "1m"
     preset_id: Optional[str] = None  # 멀티심볼 모드에서 프리셋 지정
+    execution_mode: Optional[str] = "api_direct"  # "api_direct" 또는 "signal_bot"
+    signal_token: Optional[str] = None  # Signal Bot 모드일 때 토큰
 
     model_config = {
         "json_schema_extra": {
@@ -49,7 +69,9 @@ class TradingTaskRequest(BaseModel):
                 "user_id": "1709556958", # user_id -> okx_uid
                 "symbol": "SOL-USDT-SWAP",
                 "timeframe": "1m",
-                "preset_id": "a1b2c3d4"  # optional
+                "preset_id": "a1b2c3d4",  # optional
+                "execution_mode": "api_direct",  # or "signal_bot"
+                "signal_token": None  # required for signal_bot mode
             }
         }
     }
@@ -57,170 +79,8 @@ class TradingTaskRequest(BaseModel):
 @router.post(
     "/start",
     summary="트레이딩 태스크 시작 (OKX UID 기준)",
-    description="""
-# 트레이딩 태스크 시작
-
-특정 사용자의 자동 트레이딩을 시작합니다. OKX UID 또는 텔레그램 ID를 사용하여 사용자를 식별합니다.
-
-## 요청 본문 (TradingTaskRequest)
-
-- **user_id** (string, required): 사용자 식별자
-  - OKX UID (18자리 숫자) 또는 텔레그램 ID
-  - 텔레그램 ID인 경우 자동으로 OKX UID로 변환 시도
-- **symbol** (string, optional): 거래 심볼
-  - 형식: "SOL-USDT-SWAP", "BTC-USDT-SWAP" 등
-  - 기본값: "SOL-USDT-SWAP"
-- **timeframe** (string, optional): 차트 시간 프레임
-  - 지원: "1m", "5m", "15m", "1h", "4h"
-  - 기본값: "1m"
-
-## 쿼리 파라미터
-
-- **restart** (boolean, optional): 재시작 모드
-  - `true`: 실행 중인 태스크가 있어도 강제로 재시작
-  - `false`: 이미 실행 중이면 오류 반환 (기본값)
-
-## 동작 방식
-
-1. **사용자 식별**: OKX UID 또는 텔레그램 ID 확인 및 변환
-2. **Redis 연결 확인**: Redis 연결 상태 검증 (2초 타임아웃)
-3. **API 키 확인**: Redis에서 API 키 조회, 없으면 TimescaleDB에서 가져오기
-4. **상태 확인**: 현재 실행 중인 트레이딩 태스크 확인
-5. **기존 태스크 처리**: restart=true인 경우 기존 태스크 종료
-6. **락/쿨다운 정리**: 트레이딩 관련 Redis 키 초기화
-7. **Celery 태스크 시작**: 새로운 트레이딩 사이클 실행
-8. **상태 저장**: Redis에 실행 상태 및 태스크 ID 저장
-
-## 반환 정보
-
-- **status** (string): 요청 처리 상태 ("success")
-- **message** (string): 결과 메시지
-- **task_id** (string): Celery 태스크 ID
-  - 형식: UUID 형식의 고유 식별자
-  - 태스크 추적 및 취소에 사용
-
-## 사용 시나리오
-
--  **최초 트레이딩 시작**: 사용자의 첫 트레이딩 봇 가동
--  **재시작**: 서버 재시작 후 트레이딩 봇 복구
-- ⚙️ **설정 변경**: 심볼 또는 타임프레임 변경 시 재시작
--  **문제 해결**: 오류 상태에서 정상 상태로 복구
-
-## 보안 및 검증
-
-- **Redis 연결 확인**: 2초 타임아웃으로 연결 상태 검증
-- **API 키 암호화**: AES-256으로 암호화된 API 키 사용
-- **중복 실행 방지**: 이미 실행 중이면 오류 반환 (restart=false)
-- **에러 핸들링**: 모든 단계에서 에러 로깅 및 텔레그램 알림
-
-## 예시 요청
-
-```bash
-curl -X POST "http://localhost:8000/trading/start?restart=false" \\
-     -H "Content-Type: application/json" \\
-     -d '{
-           "user_id": "518796558012178692",
-           "symbol": "SOL-USDT-SWAP",
-           "timeframe": "1m"
-         }'
-```
-""",
-    responses={
-        200: {
-            "description": " 트레이딩 태스크 시작 성공",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "success": {
-                            "summary": "트레이딩 시작 성공",
-                            "value": {
-                                "status": "success",
-                                "message": "트레이딩 태스크가 시작되었습니다.",
-                                "task_id": "abc123-def456-ghi789-jkl012"
-                            }
-                        },
-                        "restart_success": {
-                            "summary": "재시작 성공",
-                            "value": {
-                                "status": "success",
-                                "message": "트레이딩 태스크가 시작되었습니다.",
-                                "task_id": "xyz789-uvw456-rst123-opq098"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        400: {
-            "description": " 잘못된 요청 - 이미 실행 중",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "already_running": {
-                            "summary": "이미 실행 중",
-                            "value": {
-                                "detail": "이미 트레이딩 태스크가 실행 중입니다."
-                            }
-                        },
-                        "invalid_symbol": {
-                            "summary": "잘못된 심볼",
-                            "value": {
-                                "detail": "Invalid symbol format"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        403: {
-            "description": " 권한 없음 - 허용되지 않은 사용자",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "unauthorized": {
-                            "summary": "권한 없음",
-                            "value": {
-                                "detail": "권한이 없는 사용자입니다."
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        500: {
-            "description": " 서버 오류",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "redis_error": {
-                            "summary": "Redis 연결 실패",
-                            "value": {
-                                "detail": "Redis 연결 오류: Connection refused"
-                            }
-                        },
-                        "redis_timeout": {
-                            "summary": "Redis 타임아웃",
-                            "value": {
-                                "detail": "Redis 연결 시간 초과"
-                            }
-                        },
-                        "task_start_error": {
-                            "summary": "태스크 시작 실패",
-                            "value": {
-                                "detail": "트레이딩 태스크 시작 실패: Celery worker not available"
-                            }
-                        },
-                        "api_key_error": {
-                            "summary": "API 키 오류",
-                            "value": {
-                                "detail": "트레이딩 시작 실패: API key not found"
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    description=START_TRADING_DESCRIPTION,
+    responses=START_TRADING_RESPONSES
 )
 async def start_trading(request: TradingTaskRequest, restart: bool = False):
     try:
@@ -292,35 +152,67 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
         symbol = request.symbol
         timeframe = request.timeframe
         preset_id = request.preset_id
+        execution_mode = request.execution_mode or "api_direct"
+        signal_token = request.signal_token
 
-        # === 멀티심볼 모드: 심볼 추가 가능 여부 확인 ===
-        if app_settings.MULTI_SYMBOL_ENABLED:
-            can_add, error_msg = await multi_symbol_service.can_add_symbol(okx_uid, symbol)
+        # Signal Bot 모드 검증
+        if execution_mode == "signal_bot":
+            if not signal_token:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "SIGNAL_TOKEN_REQUIRED",
+                        "message": "Signal Bot 모드에서는 signal_token이 필수입니다."
+                    }
+                )
+
+            # Signal Bot 추가 가능 여부 확인
+            can_add, error_msg = await multi_symbol_service.can_add_signal_bot(okx_uid, signal_token)
             if not can_add:
-                if error_msg and error_msg.startswith("MAX_SYMBOLS_REACHED:"):
-                    # 최대 심볼 수 도달 - 409 Conflict 반환
-                    active_symbols_str = error_msg.split(":", 1)[1]
-                    active_symbols = active_symbols_str.split(",") if active_symbols_str else []
-                    logger.warning(f"[{okx_uid}] 최대 심볼 수 도달. 활성 심볼: {active_symbols}")
+                if error_msg == "SIGNAL_BOT_ALREADY_ACTIVE":
                     raise HTTPException(
                         status_code=409,
                         detail={
-                            "error": "MAX_SYMBOLS_REACHED",
-                            "message": f"최대 {app_settings.MAX_SYMBOLS_PER_USER}개 심볼까지 동시 트레이딩 가능합니다.",
-                            "active_symbols": active_symbols,
-                            "requested_symbol": symbol,
-                            "hint": "기존 심볼 중 하나를 중지한 후 다시 시도해주세요."
+                            "error": "SIGNAL_BOT_ALREADY_ACTIVE",
+                            "message": "해당 Signal Bot이 이미 실행 중입니다.",
+                            "signal_token": signal_token[:8] + "..."
                         }
                     )
                 else:
-                    raise HTTPException(status_code=400, detail=error_msg or "심볼 추가 불가")
+                    raise HTTPException(status_code=400, detail=error_msg or "Signal Bot 추가 불가")
 
-        # 멀티심볼 모드: 심볼별 상태 확인
-        # can_add_symbol()에서 이미 symbol-level 체크 완료했으므로 여기서는 추가 검증 없음
-        # 심볼별 running 상태 확인
-        from HYPERRSI.src.utils.status_utils import get_symbol_status
-        symbol_status = await get_symbol_status(okx_uid, symbol)
-        is_running = symbol_status == "running"
+            # Signal Bot 모드: 심볼별 중복 체크 없음 (한 심볼에 여러 Signal Bot 가능)
+            is_running = False  # Signal Bot은 token별로 관리되므로 심볼 상태와 무관
+
+        else:
+            # === API Direct 모드: 기존 멀티심볼 로직 ===
+            if app_settings.MULTI_SYMBOL_ENABLED:
+                can_add, error_msg = await multi_symbol_service.can_add_symbol(okx_uid, symbol)
+                if not can_add:
+                    if error_msg and error_msg.startswith("MAX_SYMBOLS_REACHED:"):
+                        # 최대 심볼 수 도달 - 409 Conflict 반환
+                        active_symbols_str = error_msg.split(":", 1)[1]
+                        active_symbols = active_symbols_str.split(",") if active_symbols_str else []
+                        logger.warning(f"[{okx_uid}] 최대 심볼 수 도달. 활성 심볼: {active_symbols}")
+                        raise HTTPException(
+                            status_code=409,
+                            detail={
+                                "error": "MAX_SYMBOLS_REACHED",
+                                "message": f"최대 {app_settings.MAX_SYMBOLS_PER_USER}개 심볼까지 동시 트레이딩 가능합니다.",
+                                "active_symbols": active_symbols,
+                                "requested_symbol": symbol,
+                                "hint": "기존 심볼 중 하나를 중지한 후 다시 시도해주세요."
+                            }
+                        )
+                    else:
+                        raise HTTPException(status_code=400, detail=error_msg or "심볼 추가 불가")
+
+            # 멀티심볼 모드: 심볼별 상태 확인
+            # can_add_symbol()에서 이미 symbol-level 체크 완료했으므로 여기서는 추가 검증 없음
+            # 심볼별 running 상태 확인
+            from HYPERRSI.src.utils.status_utils import get_symbol_status
+            symbol_status = await get_symbol_status(okx_uid, symbol)
+            is_running = symbol_status == "running"
 
         # 태스크 ID 파악 (재시작 시에만 필요)
         task_id = None
@@ -403,72 +295,111 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
             symbol = request.symbol
             timeframe = request.timeframe
 
-            # 심볼별 상태를 'running'으로 설정
-            symbol_status_key = f"user:{okx_uid}:symbol:{symbol}:status"
-            await get_redis_client().set(symbol_status_key, "running")
+            # === Signal Bot 모드와 API Direct 모드 분기 ===
+            if execution_mode == "signal_bot":
+                # Signal Bot 모드: 심볼 상태는 건드리지 않음 (token별로 관리)
+                # Celery 태스크 실행 (execution_mode, signal_token 추가)
+                task = celery_app.send_task(
+                    'trading_tasks.execute_trading_cycle',
+                    args=[okx_uid, symbol, timeframe, True],
+                    kwargs={"execution_mode": execution_mode, "signal_token": signal_token}
+                )
+                logger.info(f"[{okx_uid}] Signal Bot 태스크 시작: {task.id} (symbol: {symbol}, token: {signal_token[:8]}...)")
 
-            # preferences 저장
-            await get_redis_client().hset(
-                f"user:{okx_uid}:preferences",
-                mapping={"symbol": symbol, "timeframe": timeframe}
-            )
+                # Signal Bot 등록
+                await multi_symbol_service.add_signal_bot(
+                    okx_uid=okx_uid,
+                    signal_token=signal_token,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    task_id=task.id
+                )
+                logger.info(f"[{okx_uid}] Signal Bot 등록 완료: {signal_token[:8]}...")
 
-            # Celery 태스크 실행 (okx_uid 전달)
-            # 🔧 FIX: API를 통한 시작은 항상 restart=True로 전달
-            # Race condition 방지: Task가 Redis 상태 확인을 건너뛰고 즉시 실행
-            task = celery_app.send_task(
-                'trading_tasks.execute_trading_cycle',
-                args=[okx_uid, symbol, timeframe, True]  # 항상 True로 전달
-            )
-            logger.info(f"[{okx_uid}] 새 트레이딩 태스크 시작: {task.id} (symbol: {symbol}, timeframe: {timeframe})")
+                # 응답 구성 (Signal Bot 모드)
+                active_signal_bots = await multi_symbol_service.get_active_signal_bots(okx_uid)
+                response_data = {
+                    "status": "success",
+                    "message": "Signal Bot 트레이딩이 시작되었습니다.",
+                    "task_id": task.id,
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "execution_mode": "signal_bot",
+                    "signal_token": signal_token[:8] + "...",
+                    "active_signal_bots": len(active_signal_bots)
+                }
+                return response_data
 
-            # task_id 저장 (telegram_id와 okx_uid 모두)
-            if telegram_id:
-                await get_redis_client().set(f"user:{telegram_id}:task_id", task.id)
-            await get_redis_client().set(f"user:{okx_uid}:task_id", task.id)
+            else:
+                # === API Direct 모드: 기존 로직 ===
+                # 심볼별 상태를 'running'으로 설정
+                symbol_status_key = f"user:{okx_uid}:symbol:{symbol}:status"
+                await get_redis_client().set(symbol_status_key, "running")
 
-            # === 멀티심볼 모드: 심볼 등록 ===
-            if app_settings.MULTI_SYMBOL_ENABLED:
-                try:
-                    await multi_symbol_service.add_symbol(
-                        okx_uid=okx_uid,
-                        symbol=symbol,
-                        timeframe=timeframe,
-                        preset_id=preset_id,
-                        task_id=task.id
-                    )
-                    logger.info(f"[{okx_uid}] 멀티심볼 등록 완료: {symbol}")
-                except MaxSymbolsReachedError as e:
-                    # 동시성 이슈로 등록 실패 시 태스크 취소
-                    logger.error(f"[{okx_uid}] 멀티심볼 등록 실패 (race condition): {e}")
-                    celery_app.control.revoke(task.id, terminate=True)
-                    raise HTTPException(
-                        status_code=409,
-                        detail={
-                            "error": "MAX_SYMBOLS_REACHED",
-                            "message": str(e),
-                            "active_symbols": e.active_symbols,
-                            "requested_symbol": symbol
-                        }
-                    )
+                # preferences 저장
+                await get_redis_client().hset(
+                    f"user:{okx_uid}:preferences",
+                    mapping={"symbol": symbol, "timeframe": timeframe}
+                )
 
-            # 응답 구성
-            response_data = {
-                "status": "success",
-                "message": "트레이딩 태스크가 시작되었습니다.",
-                "task_id": task.id,
-                "symbol": symbol,
-                "timeframe": timeframe
-            }
+                # Celery 태스크 실행 (okx_uid 전달)
+                # 🔧 FIX: API를 통한 시작은 항상 restart=True로 전달
+                # Race condition 방지: Task가 Redis 상태 확인을 건너뛰고 즉시 실행
+                task = celery_app.send_task(
+                    'trading_tasks.execute_trading_cycle',
+                    args=[okx_uid, symbol, timeframe, True],
+                    kwargs={"execution_mode": "api_direct", "signal_token": None}
+                )
+                logger.info(f"[{okx_uid}] 새 트레이딩 태스크 시작: {task.id} (symbol: {symbol}, timeframe: {timeframe})")
 
-            # 멀티심볼 모드에서 추가 정보 제공
-            if app_settings.MULTI_SYMBOL_ENABLED:
-                active_symbols = await multi_symbol_service.get_active_symbols(okx_uid)
-                response_data["multi_symbol_mode"] = True
-                response_data["active_symbols"] = active_symbols
-                response_data["remaining_slots"] = app_settings.MAX_SYMBOLS_PER_USER - len(active_symbols)
+                # task_id 저장 (telegram_id와 okx_uid 모두)
+                if telegram_id:
+                    await get_redis_client().set(f"user:{telegram_id}:task_id", task.id)
+                await get_redis_client().set(f"user:{okx_uid}:task_id", task.id)
 
-            return response_data
+                # === 멀티심볼 모드: 심볼 등록 ===
+                if app_settings.MULTI_SYMBOL_ENABLED:
+                    try:
+                        await multi_symbol_service.add_symbol(
+                            okx_uid=okx_uid,
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            preset_id=preset_id,
+                            task_id=task.id
+                        )
+                        logger.info(f"[{okx_uid}] 멀티심볼 등록 완료: {symbol}")
+                    except MaxSymbolsReachedError as e:
+                        # 동시성 이슈로 등록 실패 시 태스크 취소
+                        logger.error(f"[{okx_uid}] 멀티심볼 등록 실패 (race condition): {e}")
+                        celery_app.control.revoke(task.id, terminate=True)
+                        raise HTTPException(
+                            status_code=409,
+                            detail={
+                                "error": "MAX_SYMBOLS_REACHED",
+                                "message": str(e),
+                                "active_symbols": e.active_symbols,
+                                "requested_symbol": symbol
+                            }
+                        )
+
+                # 응답 구성
+                response_data = {
+                    "status": "success",
+                    "message": "트레이딩 태스크가 시작되었습니다.",
+                    "task_id": task.id,
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "execution_mode": "api_direct"
+                }
+
+                # 멀티심볼 모드에서 추가 정보 제공
+                if app_settings.MULTI_SYMBOL_ENABLED:
+                    active_symbols = await multi_symbol_service.get_active_symbols(okx_uid)
+                    response_data["multi_symbol_mode"] = True
+                    response_data["active_symbols"] = active_symbols
+                    response_data["remaining_slots"] = app_settings.MAX_SYMBOLS_PER_USER - len(active_symbols)
+
+                return response_data
         except Exception as task_error:
             logger.error(f"태스크 시작 오류 (okx_uid: {okx_uid}): {str(task_error)}", exc_info=True)
             await handle_critical_error(
@@ -480,8 +411,8 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
             # Redis 심볼별 상태 초기화
             if telegram_id:
                 await get_redis_client().set(f"user:{telegram_id}:symbol:{symbol}:status", "error")
-            # okx_status_key는 이미 symbol-level로 설정됨 (line 405-407)
-            await get_redis_client().set(okx_status_key, "error")
+            # okx_uid 기준 심볼별 상태를 error로 설정
+            await get_redis_client().set(f"user:{okx_uid}:symbol:{symbol}:status", "error")
             raise HTTPException(status_code=500, detail=f"트레이딩 태스크 시작 실패: {str(task_error)}")
             
     except HTTPException as he:
@@ -494,30 +425,8 @@ async def start_trading(request: TradingTaskRequest, restart: bool = False):
 
 @router.post("/start_all_users",
     summary="모든 실행 중인 트레이딩 태스크 재시작 (OKX UID 기준)",
-    description="""
-서버 재시작 등으로 다운 후, 기존에 실행 중이던 모든 사용자의 트레이딩 태스크를 재시작합니다 (OKX UID 기준).
-
-멀티심볼 모드에서는 각 사용자의 모든 활성 심볼을 재시작합니다.
-    """,
-    responses={
-        200: {
-            "description": "모든 실행 중인 트레이딩 태스크 재시작 성공",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "status": "success",
-                        "message": "모든 실행 중인 트레이딩 태스크에 재시작 명령을 보냈습니다.",
-                        "restarted_users": [
-                            {"okx_uid": "UID1", "task_id": "new_task_id_1"},
-                            {"okx_uid": "UID2", "task_id": "new_task_id_2"}
-                        ],
-                        "multi_symbol_mode": True
-                    }
-                }
-            }
-        },
-        500: {"description": "트레이딩 태스크 재시작 실패"}
-    })
+    description=START_ALL_USERS_DESCRIPTION,
+    responses=START_ALL_USERS_RESPONSES)
 async def start_all_users():
     try:
         # Redis 연결 확인
@@ -626,189 +535,127 @@ async def start_all_users():
         raise HTTPException(status_code=500, detail=f"start_all_users 실패: {str(e)}")
 
 
+async def _stop_signal_bot(okx_uid: str, signal_token: str, telegram_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Signal Bot 중지 헬퍼 함수
+
+    Args:
+        okx_uid: 사용자 OKX UID
+        signal_token: 중지할 Signal Bot 토큰
+        telegram_id: 텔레그램 ID (알림용)
+
+    Returns:
+        응답 딕셔너리
+    """
+    from HYPERRSI.src.services.multi_symbol_service import multi_symbol_service
+
+    # Signal Bot 정보 조회
+    signal_bot_info = await multi_symbol_service.get_signal_bot_info(okx_uid, signal_token)
+
+    if not signal_bot_info:
+        logger.warning(f"[{okx_uid}] Signal Bot을 찾을 수 없음: {signal_token[:8]}...")
+        return {
+            "status": "success",
+            "message": "해당 Signal Bot이 이미 중지되어 있거나 존재하지 않습니다.",
+            "execution_mode": "signal_bot"
+        }
+
+    symbol = signal_bot_info.get("symbol")
+    task_id = signal_bot_info.get("task_id")
+
+    logger.info(f"[{okx_uid}] Signal Bot 중지 시도: token={signal_token[:8]}..., symbol={symbol}")
+
+    # 1. Celery 태스크 취소
+    if task_id:
+        try:
+            logger.info(f"[{okx_uid}] Signal Bot 태스크 취소: {task_id}")
+            celery_app.control.revoke(task_id, terminate=True)
+            await asyncio.sleep(1)
+        except Exception as revoke_err:
+            logger.error(f"[{okx_uid}] Signal Bot 태스크 취소 오류: {revoke_err}")
+
+    # 2. Signal Bot 제거 (Redis 정리)
+    try:
+        await multi_symbol_service.remove_signal_bot(okx_uid, signal_token)
+        logger.info(f"[{okx_uid}] Signal Bot 제거 완료: {signal_token[:8]}...")
+    except Exception as remove_err:
+        logger.error(f"[{okx_uid}] Signal Bot 제거 오류: {remove_err}")
+
+    # 3. 텔레그램 알림 전송
+    try:
+        recipient_id = telegram_id if telegram_id else okx_uid
+        await send_telegram_message(
+            f"🛑 Signal Bot 트레이딩이 중지되었습니다.\n\n"
+            f"심볼: {symbol}\n"
+            f"토큰: {signal_token[:8]}...",
+            recipient_id
+        )
+    except Exception as msg_err:
+        logger.warning(f"[{okx_uid}] Signal Bot 중지 메시지 전송 실패: {msg_err}")
+
+    # 4. 남은 Signal Bot 정보 조회
+    remaining_signal_bots = await multi_symbol_service.get_active_signal_bots(okx_uid)
+
+    return {
+        "status": "success",
+        "message": "Signal Bot이 중지되었습니다.",
+        "execution_mode": "signal_bot",
+        "stopped_signal_token": signal_token[:8] + "...",
+        "stopped_symbol": symbol,
+        "remaining_signal_bots": len(remaining_signal_bots)
+    }
+
+
 @router.post(
     "/stop",
     summary="트레이딩 태스크 중지 (OKX UID 기준)",
-    description="""
-# 트레이딩 태스크 중지
-
-특정 사용자의 자동 트레이딩을 안전하게 중지합니다. 실행 중인 Celery 태스크를 종료하고 관련 Redis 상태를 정리합니다.
-
-## 요청 방식
-
-**쿼리 파라미터** 또는 **JSON 본문** 중 하나를 사용:
-
-### 방법 1: 쿼리 파라미터
-- **user_id** (string, required): 사용자 식별자
-  - OKX UID (18자리 숫자) 또는 텔레그램 ID
-
-### 방법 2: JSON 본문
-- **okx_uid** (string, required): OKX UID
-
-## 동작 방식
-
-1. **사용자 식별**: OKX UID 또는 텔레그램 ID 확인 및 변환
-2. **상태 확인**: 현재 트레이딩 상태 조회 (running 여부)
-3. **종료 신호 설정**: Redis에 stop_signal 설정
-4. **Celery 태스크 취소**: 실행 중인 태스크 종료 (SIGTERM)
-5. **락/쿨다운 해제**: 트레이딩 관련 Redis 키 삭제
-6. **열린 주문 취소** (선택): 활성 주문 취소 시도
-7. **상태 정리**: Redis 상태를 'stopped'로 변경
-8. **텔레그램 알림**: 사용자에게 중지 메시지 전송
-
-## 정리되는 Redis 키
-
-- `user:{okx_uid}:symbol:{symbol}:status` → "stopped" (심볼별 상태)
-- `user:{okx_uid}:symbol:{symbol}:task_id` → 삭제
-- `user:{okx_uid}:stop_signal` → 삭제
-- `user:{okx_uid}:task_running` → 삭제
-- `user:{okx_uid}:cooldown:{symbol}:long` → 삭제
-- `user:{okx_uid}:cooldown:{symbol}:short` → 삭제
-- `lock:user:{okx_uid}:{symbol}:{timeframe}` → 삭제
-
-## 반환 정보
-
-- **status** (string): 요청 처리 상태 ("success")
-- **message** (string): 결과 메시지
-  - "트레이딩 중지 신호가 보내졌습니다. 잠시 후 중지됩니다."
-  - "트레이딩이 이미 중지되어 있습니다."
-
-## 사용 시나리오
-
--  **수동 중지**: 사용자가 트레이딩을 직접 중지
--  **비상 중지**: 시장 급변 시 긴급 중지
--  **유지보수**: 설정 변경 또는 업데이트를 위한 중지
--  **전략 변경**: 새로운 전략 적용을 위한 중지
--  **손실 제한**: 일정 손실 도달 시 자동 중지
-
-## 예시 요청
-
-### 쿼리 파라미터 방식
-```bash
-curl -X POST "http://localhost:8000/trading/stop?user_id=518796558012178692"
-```
-
-### JSON 본문 방식
-```bash
-curl -X POST "http://localhost:8000/trading/stop" \\
-     -H "Content-Type: application/json" \\
-     -d '{"okx_uid": "518796558012178692"}'
-```
-""",
-    responses={
-        200: {
-            "description": " 트레이딩 태스크 중지 성공",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "stop_success": {
-                            "summary": "중지 성공",
-                            "value": {
-                                "status": "success",
-                                "message": "트레이딩 중지 신호가 보내졌습니다. 잠시 후 중지됩니다."
-                            }
-                        },
-                        "already_stopped": {
-                            "summary": "이미 중지됨",
-                            "value": {
-                                "status": "success",
-                                "message": "트레이딩이 이미 중지되어 있습니다."
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        400: {
-            "description": " 잘못된 요청 - 필수 파라미터 누락",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "missing_user_id": {
-                            "summary": "사용자 ID 누락",
-                            "value": {
-                                "detail": "user_id 또는 okx_uid가 필요합니다."
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        404: {
-            "description": " 사용자를 찾을 수 없음",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "user_not_found": {
-                            "summary": "존재하지 않는 사용자",
-                            "value": {
-                                "detail": "User not found"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        500: {
-            "description": " 서버 오류",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "redis_error": {
-                            "summary": "Redis 연결 실패",
-                            "value": {
-                                "detail": "Redis 연결 오류: Connection refused"
-                            }
-                        },
-                        "task_cancel_error": {
-                            "summary": "태스크 취소 실패",
-                            "value": {
-                                "detail": "트레이딩 중지 실패: Failed to cancel task"
-                            }
-                        },
-                        "cleanup_error": {
-                            "summary": "상태 정리 실패",
-                            "value": {
-                                "detail": "트레이딩 중지 실패: Cleanup operation failed"
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    description=STOP_TRADING_DESCRIPTION,
+    responses=STOP_TRADING_RESPONSES
 )
 async def stop_trading(
     request: Request,
     user_id: Optional[str] = Query(None, description="사용자 ID (OKX UID 또는 텔레그램 ID)"),
-    symbol: Optional[str] = Query(None, description="중지할 심볼 (멀티심볼 모드)")
+    symbol: Optional[str] = Query(None, description="중지할 심볼 (API Direct 모드)"),
+    signal_token: Optional[str] = Query(None, description="중지할 Signal Bot 토큰 (Signal Bot 모드)"),
+    bot_id: Optional[str] = Query(None, description="봇 ID (api_심볼 또는 signal_토큰앞8자)")
 ):
+    """
+    트레이딩 봇 중지
+
+    봇 종료 방법 (우선순위):
+    1. bot_id: "api_SOL-USDT-SWAP" 또는 "signal_KuZ5NAsq" 형식으로 자동 판단
+    2. signal_token: Signal Bot 직접 지정
+    3. symbol: API Direct 심볼 직접 지정
+    """
     try:
-        # symbol은 쿼리 파라미터로 받은 값 사용 (None일 수 있음)
-        target_symbol = symbol  # 쿼리 파라미터로 받은 심볼
+        target_symbol = symbol
+        target_signal_token = signal_token
+        target_bot_id = bot_id
         okx_uid = None
-        print(f"⭐️user_id: {user_id}, symbol: {symbol}")
+
         # 1. 쿼리 파라미터에서 user_id 확인
         if user_id:
             okx_uid = user_id
-            print("⭐️okx_uid222: ", okx_uid)
         else:
-            # 2. JSON 본문에서 okx_uid 확인 (기존 방식)
+            # 2. JSON 본문에서 파라미터 확인 (기존 방식)
             try:
                 request_body = await request.json()
                 if "okx_uid" in request_body:
                     okx_uid = request_body["okx_uid"]
-                    print("⭐️okx_uid333: ", okx_uid)
+                if not target_signal_token and "signal_token" in request_body:
+                    target_signal_token = request_body["signal_token"]
+                if not target_bot_id and "bot_id" in request_body:
+                    target_bot_id = request_body["bot_id"]
+                if not target_symbol and "symbol" in request_body:
+                    target_symbol = request_body["symbol"]
             except (json.JSONDecodeError, ValueError, AttributeError):
                 pass
-        
+
         # 3. 필수 파라미터 확인
         if not okx_uid:
             raise HTTPException(status_code=400, detail="user_id 또는 okx_uid가 필요합니다.")
-        logger.info(f"사용자 {okx_uid}의 트레이딩 태스크 중지 시도")
 
         # 통합 resolver를 사용하여 okx_uid로 변환
-        original_id = okx_uid
         okx_uid = await resolve_user_identifier(okx_uid)
 
         # telegram_id 조회 (알림 발송용)
@@ -817,32 +664,78 @@ async def stop_trading(
             telegram_id = await get_telegram_id_from_okx_uid(okx_uid, TimescaleUserService)
         except Exception as e:
             logger.debug(f"텔레그램 ID 조회 실패 (무시됨): {str(e)}")
-        
+
+        # === bot_id로 자동 판단 ===
+        if target_bot_id:
+            if target_bot_id.startswith("api_"):
+                # API Direct 모드: "api_SOL-USDT-SWAP" -> "SOL-USDT-SWAP"
+                target_symbol = target_bot_id[4:]
+                target_signal_token = None
+                logger.info(f"[{okx_uid}] bot_id로 API Direct 종료: {target_symbol}")
+            elif target_bot_id.startswith("signal_"):
+                # Signal Bot 모드: "signal_KuZ5NAsq" -> 전체 토큰 조회 필요
+                token_prefix = target_bot_id[7:]
+                # 해당 prefix로 시작하는 Signal Bot 찾기
+                from HYPERRSI.src.services.multi_symbol_service import multi_symbol_service
+                active_tokens = await multi_symbol_service.get_active_signal_bots(okx_uid)
+                matched_token = None
+                for token in active_tokens:
+                    if token.startswith(token_prefix):
+                        matched_token = token
+                        break
+
+                if matched_token:
+                    target_signal_token = matched_token
+                    logger.info(f"[{okx_uid}] bot_id로 Signal Bot 종료: {matched_token[:8]}...")
+                else:
+                    logger.warning(f"[{okx_uid}] bot_id에 해당하는 Signal Bot을 찾을 수 없음: {target_bot_id}")
+                    return {
+                        "status": "error",
+                        "message": f"해당 bot_id의 Signal Bot을 찾을 수 없습니다: {target_bot_id}"
+                    }
+
+        logger.info(f"[{okx_uid}] 트레이딩 중지 시도 (symbol: {target_symbol}, signal_token: {target_signal_token[:8] + '...' if target_signal_token else 'None'})")
+
+        # === Signal Bot 모드: signal_token이 지정된 경우 ===
+        if target_signal_token:
+            return await _stop_signal_bot(okx_uid, target_signal_token, telegram_id)
+
+        # === API Direct 모드: 기존 로직 ===
         # 멀티심볼 모드: 심볼별 상태 관리
         # target_symbol이 지정되면 해당 심볼만, 아니면 모든 심볼 중지
         from HYPERRSI.src.services.multi_symbol_service import multi_symbol_service
         active_symbols = await multi_symbol_service.get_active_symbols(okx_uid)
 
-        if not active_symbols:
-            logger.warning(f"사용자 {okx_uid}의 활성 심볼이 없습니다.")
-            return {
-                "status": "success",
-                "message": "트레이딩이 이미 중지되어 있습니다."
-            }
-
         # 중지할 심볼 결정: target_symbol이 지정되면 해당 심볼만, 아니면 모든 심볼
         if target_symbol:
-            # 특정 심볼만 중지
-            if target_symbol not in active_symbols:
+            # 특정 심볼 중지: active_symbols에 없어도 심볼 상태 키를 직접 확인
+            symbol_status_key = f"user:{okx_uid}:symbol:{target_symbol}:status"
+            current_status = await get_redis_client().get(symbol_status_key)
+            if isinstance(current_status, bytes):
+                current_status = current_status.decode('utf-8')
+
+            # active_symbols에 없고, 상태 키도 running이 아니면 이미 중지된 상태
+            if target_symbol not in active_symbols and current_status != "running":
                 logger.warning(f"사용자 {okx_uid}의 심볼 {target_symbol}이 활성 상태가 아닙니다.")
                 return {
                     "status": "success",
                     "message": f"{target_symbol}은(는) 이미 중지되어 있습니다."
                 }
+
             symbols_to_stop = [target_symbol]
-            logger.info(f"[{okx_uid}] 특정 심볼 중지 요청: {target_symbol}")
+            logger.info(f"[{okx_uid}] 특정 심볼 중지 요청: {target_symbol} (active_symbols: {target_symbol in active_symbols}, status: {current_status})")
+
+            # active_symbols와 실제 상태가 불일치하는 경우 동기화
+            if target_symbol not in active_symbols and current_status == "running":
+                logger.warning(f"[{okx_uid}] 상태 불일치 감지: {target_symbol}이 active_symbols에 없지만 상태는 running - 동기화 진행")
         else:
             # 모든 심볼 중지
+            if not active_symbols:
+                logger.warning(f"사용자 {okx_uid}의 활성 심볼이 없습니다.")
+                return {
+                    "status": "success",
+                    "message": "트레이딩이 이미 중지되어 있습니다."
+                }
             symbols_to_stop = active_symbols
             logger.info(f"[{okx_uid}] 전체 심볼 중지 요청: {active_symbols}")
 
@@ -1048,66 +941,63 @@ async def stop_trading(
 @router.get(
     "/active_symbols/{okx_uid}",
     summary="사용자의 활성 심볼 목록 조회",
-    description="""
-# 활성 심볼 목록 조회
-
-멀티심볼 모드에서 특정 사용자가 현재 트레이딩 중인 모든 심볼 목록과 상세 정보를 조회합니다.
-
-## 반환 정보
-
-- **okx_uid**: 사용자 OKX UID
-- **multi_symbol_enabled**: 멀티심볼 모드 활성화 여부
-- **max_symbols**: 최대 동시 트레이딩 가능 심볼 수
-- **active_count**: 현재 활성 심볼 수
-- **remaining_slots**: 추가 가능한 심볼 슬롯 수
-- **symbols**: 활성 심볼 상세 정보 배열
-    """,
-    responses={
-        200: {
-            "description": "활성 심볼 목록 조회 성공",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "okx_uid": "518796558012178692",
-                        "multi_symbol_enabled": True,
-                        "max_symbols": 3,
-                        "active_count": 2,
-                        "remaining_slots": 1,
-                        "symbols": [
-                            {
-                                "symbol": "BTC-USDT-SWAP",
-                                "timeframe": "1m",
-                                "status": "running",
-                                "preset_id": "a1b2c3d4",
-                                "started_at": "1700000000.0"
-                            },
-                            {
-                                "symbol": "ETH-USDT-SWAP",
-                                "timeframe": "5m",
-                                "status": "running",
-                                "preset_id": None,
-                                "started_at": "1700001000.0"
-                            }
-                        ]
-                    }
-                }
-            }
-        }
-    }
+    description=GET_ACTIVE_SYMBOLS_DESCRIPTION,
+    responses=GET_ACTIVE_SYMBOLS_RESPONSES
 )
 async def get_active_symbols(okx_uid: str):
-    """사용자의 활성 심볼 목록 조회"""
+    """
+    사용자의 활성 봇 목록 조회 (API Direct + Signal Bot 통합)
+
+    Returns:
+        bots: 실행 중인 모든 봇 목록 (execution_mode로 구분)
+        - execution_mode: "api_direct" 또는 "signal_bot"
+        - signal_token: Signal Bot인 경우에만 포함 (마스킹됨)
+    """
     try:
-        # 멀티심볼 모드 (레거시 모드 제거)
-        symbols_info = await multi_symbol_service.list_symbols_with_info(okx_uid)
+        # 1. API Direct 심볼 목록 조회
+        api_direct_symbols = await multi_symbol_service.list_symbols_with_info(okx_uid)
+
+        # API Direct 봇에 execution_mode 추가
+        api_direct_bots = []
+        for symbol_info in api_direct_symbols:
+            symbol_info["execution_mode"] = "api_direct"
+            symbol_info["bot_id"] = f"api_{symbol_info['symbol']}"  # 고유 ID
+            api_direct_bots.append(symbol_info)
+
+        # 2. Signal Bot 목록 조회
+        signal_bot_tokens = await multi_symbol_service.get_active_signal_bots(okx_uid)
+
+        signal_bots = []
+        for token in signal_bot_tokens:
+            bot_info = await multi_symbol_service.get_signal_bot_info(okx_uid, token)
+            if bot_info:
+                signal_bots.append({
+                    "symbol": bot_info.get("symbol"),
+                    "timeframe": bot_info.get("timeframe"),
+                    "status": bot_info.get("status"),
+                    "task_id": bot_info.get("task_id"),
+                    "started_at": bot_info.get("started_at"),
+                    "execution_mode": "signal_bot",
+                    "signal_token": token,  # 전체 토큰 (stop 시 필요)
+                    "signal_token_display": token[:8] + "...",  # 표시용 마스킹
+                    "bot_id": f"signal_{token[:8]}"  # 고유 ID (프론트엔드 key용)
+                })
+
+        # 3. 통합 봇 목록
+        all_bots = api_direct_bots + signal_bots
 
         return {
             "okx_uid": okx_uid,
             "multi_symbol_enabled": True,
             "max_symbols": app_settings.MAX_SYMBOLS_PER_USER,
-            "active_count": len(symbols_info),
-            "remaining_slots": app_settings.MAX_SYMBOLS_PER_USER - len(symbols_info),
-            "symbols": symbols_info
+            "api_direct_count": len(api_direct_bots),
+            "signal_bot_count": len(signal_bots),
+            "total_count": len(all_bots),
+            "remaining_api_slots": app_settings.MAX_SYMBOLS_PER_USER - len(api_direct_bots),
+            "bots": all_bots,
+            # 하위 호환성을 위해 기존 필드도 유지
+            "active_count": len(api_direct_bots),
+            "symbols": api_direct_symbols
         }
 
     except Exception as e:
@@ -1118,98 +1008,8 @@ async def get_active_symbols(okx_uid: str):
 @router.get(
     "/running_users",
     summary="실행 중인 모든 사용자 조회 (OKX UID 기준)",
-    description="""
-# 실행 중인 모든 사용자 조회
-
-Redis에서 트레이딩 상태가 'running'인 모든 사용자의 OKX UID 목록을 조회합니다.
-
-## 동작 방식
-
-1. **Redis 패턴 매칭**: `user:*:symbol:*:status` 패턴으로 모든 심볼별 상태 키 조회
-2. **상태 필터링**: 값이 'running'인 키만 선택
-3. **UID 추출**: 키에서 OKX UID 파싱
-4. **목록 반환**: 실행 중인 사용자 UID 배열 반환
-
-## 반환 정보
-
-- **status** (string): 요청 처리 상태 ("success")
-- **running_users** (array of string): 실행 중인 사용자 OKX UID 목록
-  - 빈 배열: 실행 중인 사용자 없음
-  - 각 요소: 18자리 OKX UID
-
-## 사용 시나리오
-
--  **시스템 모니터링**: 전체 활성 사용자 수 파악
--  **일괄 재시작**: 서버 재시작 시 복구할 사용자 목록 확인
--  **일괄 중지**: 긴급 상황 시 중지할 사용자 식별
--  **통계 분석**: 활성 사용자 통계 집계
--  **관리자 도구**: 관리자 대시보드에 활성 사용자 표시
-
-## 예시 URL
-
-```
-GET /trading/running_users
-```
-""",
-    responses={
-        200: {
-            "description": " 실행 중인 사용자 조회 성공",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "multiple_users": {
-                            "summary": "여러 사용자 실행 중",
-                            "value": {
-                                "status": "success",
-                                "running_users": [
-                                    "518796558012178692",
-                                    "549641376070615063",
-                                    "587662504768345929"
-                                ]
-                            }
-                        },
-                        "single_user": {
-                            "summary": "단일 사용자 실행 중",
-                            "value": {
-                                "status": "success",
-                                "running_users": [
-                                    "518796558012178692"
-                                ]
-                            }
-                        },
-                        "no_users": {
-                            "summary": "실행 중인 사용자 없음",
-                            "value": {
-                                "status": "success",
-                                "running_users": []
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        500: {
-            "description": " 서버 오류",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "redis_error": {
-                            "summary": "Redis 연결 실패",
-                            "value": {
-                                "detail": "Redis 연결 실패"
-                            }
-                        },
-                        "query_error": {
-                            "summary": "데이터 조회 실패",
-                            "value": {
-                                "detail": "running_users 조회 실패: Query failed"
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    description=GET_RUNNING_USERS_DESCRIPTION,
+    responses=GET_RUNNING_USERS_RESPONSES
 )
 async def get_all_running_users():
     """
@@ -1254,7 +1054,7 @@ async def get_all_running_users():
 
 @router.post("/stop_all_running_users",
     summary="실행 중(trading status=running)인 모든 사용자 중지 (OKX UID 기준)",
-    description="Redis에서 'running' 상태인 모든 OKX UID의 트레이딩을 중지합니다."
+    description=STOP_ALL_RUNNING_USERS_DESCRIPTION
 )
 async def stop_all_running_users():
     """
@@ -1410,14 +1210,75 @@ async def stop_all_running_users():
                             okx_uid=okx_uid
                         )
 
-            # 중지된 심볼 수 계산
+            # === Signal Bot 일괄 중지 ===
+            stopped_signal_bots = {}  # {okx_uid: [signal_tokens]} 형식
+            signal_bot_keys = await scan_keys_pattern("user:*:signal_bots", redis=redis)
+
+            for key in signal_bot_keys:
+                # key 구조: user:{okx_uid}:signal_bots
+                parts = key.split(":")
+                if len(parts) >= 2 and parts[0] == 'user':
+                    okx_uid = parts[1]
+                else:
+                    continue
+
+                try:
+                    # 해당 사용자의 모든 Signal Bot 토큰 조회
+                    signal_tokens = await redis.smembers(key)
+
+                    for token in signal_tokens:
+                        if isinstance(token, bytes):
+                            token = token.decode('utf-8')
+
+                        # Signal Bot task_id 조회 및 취소
+                        task_id_key = f"user:{okx_uid}:signal_bot:{token}:task_id"
+                        task_id = await redis.get(task_id_key)
+                        if task_id:
+                            if isinstance(task_id, bytes):
+                                task_id = task_id.decode('utf-8')
+                            try:
+                                celery_app.control.revoke(task_id, terminate=True)
+                                logger.info(f"[{okx_uid}] Signal Bot 태스크 취소: {task_id}")
+                            except Exception as revoke_err:
+                                logger.warning(f"[{okx_uid}] Signal Bot 태스크 취소 오류: {revoke_err}")
+
+                        # Signal Bot 관련 키 삭제
+                        signal_bot_keys_to_delete = [
+                            f"user:{okx_uid}:signal_bot:{token}:task_id",
+                            f"user:{okx_uid}:signal_bot:{token}:symbol",
+                            f"user:{okx_uid}:signal_bot:{token}:timeframe",
+                            f"user:{okx_uid}:signal_bot:{token}:status",
+                            f"user:{okx_uid}:signal_bot:{token}:started_at",
+                        ]
+                        for key_to_del in signal_bot_keys_to_delete:
+                            try:
+                                await redis.delete(key_to_del)
+                            except Exception:
+                                pass
+
+                        # stopped_signal_bots에 추가
+                        if okx_uid not in stopped_signal_bots:
+                            stopped_signal_bots[okx_uid] = []
+                        stopped_signal_bots[okx_uid].append(token[:8] + "...")
+
+                    # signal_bots SET 삭제
+                    await redis.delete(key)
+                    logger.info(f"[{okx_uid}] Signal Bot 일괄 중지 완료")
+
+                except Exception as sb_err:
+                    logger.error(f"[{okx_uid}] Signal Bot 중지 오류: {sb_err}")
+                    errors.append({"okx_uid": okx_uid, "type": "signal_bot", "error": str(sb_err)})
+
+            # 중지된 심볼 및 Signal Bot 수 계산
             total_stopped = sum(len(symbols) for symbols in stopped_users.values())
-            logger.info(f"중지 완료: {total_stopped}개 심볼 성공, {len(errors)}개 실패")
+            total_signal_bots_stopped = sum(len(tokens) for tokens in stopped_signal_bots.values())
+            logger.info(f"중지 완료: API Direct {total_stopped}개 심볼, Signal Bot {total_signal_bots_stopped}개, {len(errors)}개 실패")
 
             response = {
                 "status": "success",
-                "message": "running 상태인 모든 심볼에 대해 중지 신호를 전송했습니다. 잠시 후 모두 중지됩니다.",
-                "stopped_users": stopped_users  # {okx_uid: [symbols]} 형식
+                "message": "running 상태인 모든 심볼 및 Signal Bot에 대해 중지 신호를 전송했습니다.",
+                "stopped_users": stopped_users,  # {okx_uid: [symbols]} 형식 (API Direct)
+                "stopped_signal_bots": stopped_signal_bots  # {okx_uid: [tokens]} 형식
             }
             if errors:
                 response["errors"] = errors
@@ -1436,7 +1297,7 @@ async def stop_all_running_users():
 
 @router.post("/restart_all_running_users",
     summary="실행 중인 유저들을 모두 restart=true로 재시작 (OKX UID 기준)",
-    description="Redis에서 'running' 상태인 모든 OKX UID를 찾아, 기존 태스크 종료 후 restart=true로 다시 시작시킵니다."
+    description=RESTART_ALL_RUNNING_USERS_DESCRIPTION
 )
 async def restart_all_running_users():
     """
@@ -1564,154 +1425,8 @@ async def restart_all_running_users():
 @router.get(
     "/status/{okx_uid}",
     summary="특정 사용자의 트레이딩 상태 조회 (OKX UID 기준)",
-    description="""
-# 특정 사용자의 트레이딩 상태 조회
-
-특정 사용자의 트레이딩 상태 및 관련 정보를 종합적으로 조회합니다.
-
-## URL 파라미터
-
-- **okx_uid** (string, required): OKX UID
-  - 형식: 18자리 숫자 (예: "518796558012178692")
-
-## 반환 정보
-
-### 기본 정보
-- **trading_status** (string): 트레이딩 상태
-  - `running`: 실행 중
-  - `stopped`: 중지됨
-  - `error`: 오류 발생
-  - `restarting`: 재시작 중
-  - `not_found`: 정보 없음
-
-### 태스크 정보
-- **task_id** (string, optional): Celery 태스크 ID
-  - 형식: UUID 형식
-  - 실행 중인 태스크의 고유 식별자
-
-### 사용자 설정 (preferences)
-- **symbol** (string): 거래 심볼
-- **timeframe** (string): 차트 시간 프레임
-
-### 포지션 정보 (position_info)
-- **main_direction** (string): 주 포지션 방향
-  - `long`: 롱 포지션
-  - `short`: 숏 포지션
-- **position_state** (string): 포지션 상태
-  - `in_position`: 포지션 보유 중
-  - `no_position`: 포지션 없음
-  - `closing`: 청산 중
-
-### 기타 정보
-- **stop_signal** (string, optional): 중지 신호 여부
-  - `true`: 중지 신호 활성
-
-## 사용 시나리오
-
--  **상태 모니터링**: 실시간 트레이딩 상태 확인
--  **디버깅**: 트레이딩 문제 분석 및 해결
--  **대시보드**: 사용자 대시보드에 상태 표시
-- ⚙️ **설정 확인**: 현재 적용된 심볼/타임프레임 확인
-- 💼 **포지션 추적**: 현재 보유 포지션 현황 파악
-
-## 예시 URL
-
-```
-GET /trading/status/518796558012178692
-```
-""",
-    responses={
-        200: {
-            "description": " 트레이딩 상태 조회 성공",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "running_with_position": {
-                            "summary": "실행 중 (포지션 보유)",
-                            "value": {
-                                "status": "success",
-                                "data": {
-                                    "trading_status": "running",
-                                    "symbol": "SOL-USDT-SWAP",
-                                    "timeframe": "1m",
-                                    "task_id": "abc123-def456-ghi789-jkl012",
-                                    "preferences": {
-                                        "symbol": "SOL-USDT-SWAP",
-                                        "timeframe": "1m"
-                                    },
-                                    "position_info": {
-                                        "main_direction": "long",
-                                        "position_state": "in_position"
-                                    }
-                                }
-                            }
-                        },
-                        "stopped": {
-                            "summary": "중지됨",
-                            "value": {
-                                "status": "success",
-                                "data": {
-                                    "trading_status": "stopped",
-                                    "symbol": "BTC-USDT-SWAP",
-                                    "timeframe": "5m",
-                                    "preferences": {
-                                        "symbol": "BTC-USDT-SWAP",
-                                        "timeframe": "5m"
-                                    }
-                                }
-                            }
-                        },
-                        "not_found": {
-                            "summary": "정보 없음",
-                            "value": {
-                                "status": "success",
-                                "data": {
-                                    "trading_status": "not_found",
-                                    "message": "사용자의 트레이딩 정보가 없습니다."
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        404: {
-            "description": " 사용자 정보를 찾을 수 없음",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "user_not_found": {
-                            "summary": "존재하지 않는 사용자",
-                            "value": {
-                                "detail": "User not found"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        500: {
-            "description": " 서버 오류",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "redis_error": {
-                            "summary": "Redis 연결 실패",
-                            "value": {
-                                "detail": "Redis 연결 실패"
-                            }
-                        },
-                        "query_error": {
-                            "summary": "데이터 조회 실패",
-                            "value": {
-                                "detail": "트레이딩 상태 조회 실패: Query failed"
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    description=GET_USER_STATUS_DESCRIPTION,
+    responses=GET_USER_STATUS_RESPONSES
 )
 async def get_user_trading_status(okx_uid: str): # user_id -> okx_uid
     """
@@ -1826,37 +1541,8 @@ async def get_user_trading_status(okx_uid: str): # user_id -> okx_uid
 
 @router.get("/status/{okx_uid}/{symbol}", # user_id -> okx_uid
     summary="특정 사용자의 특정 심볼에 대한 트레이딩 상태 조회 (OKX UID 기준)",
-    description="특정 사용자의 특정 심볼에 대한 트레이딩 상태 및 관련 정보를 상세하게 조회합니다 (OKX UID 기준).",
-    responses={
-        200: {
-            "description": "심볼별 트레이딩 상태 조회 성공",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "status": "success",
-                        "data": {
-                            "symbol": "SOL-USDT-SWAP",
-                            "position_info": {
-                                "main_direction": "long",
-                                "position_state": "in_position",
-                                "long": {
-                                    "entry_price": "124.56",
-                                    "size": "0.5"
-                                },
-                                "short": None,
-                                "dca_levels": {
-                                    "long": ["level1", "level2"],
-                                    "short": []
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        404: {"description": "사용자 또는 심볼 정보를 찾을 수 없음"},
-        500: {"description": "서버 오류"}
-    })
+    description=GET_USER_SYMBOL_STATUS_DESCRIPTION,
+    responses=GET_USER_SYMBOL_STATUS_RESPONSES)
 async def get_user_symbol_status(okx_uid: str, symbol: str): # user_id -> okx_uid
     """
     특정 사용자의 특정 심볼에 대한 트레이딩 상태 상세 조회 (OKX UID 기준)
@@ -1961,10 +1647,167 @@ async def get_user_symbol_status(okx_uid: str, symbol: str): # user_id -> okx_ui
             "status": "success",
             "data": response_data
         }
-        
+
     except Exception as e:
         logger.error(f"사용자 심볼별 상태 조회 실패 (okx_uid: {okx_uid}, symbol: {symbol}): {str(e)}", exc_info=True) # 로그 변경
         raise HTTPException(
             status_code=500,
             detail=f"심볼별 상태 조회 실패: {str(e)}"
+        )
+
+
+@router.get(
+    "/signal_bots/{okx_uid}",
+    summary="사용자의 활성 Signal Bot 목록 조회"
+)
+async def get_active_signal_bots(okx_uid: str):
+    """
+    사용자의 활성 Signal Bot 목록 조회
+
+    Args:
+        okx_uid: 사용자 OKX UID
+
+    Returns:
+        활성 Signal Bot 정보 리스트
+    """
+    try:
+        from HYPERRSI.src.services.multi_symbol_service import multi_symbol_service
+
+        # 활성 Signal Bot 토큰 목록 조회
+        active_tokens = await multi_symbol_service.get_active_signal_bots(okx_uid)
+
+        # 각 Signal Bot의 상세 정보 조회
+        signal_bots_info = []
+        for token in active_tokens:
+            info = await multi_symbol_service.get_signal_bot_info(okx_uid, token)
+            if info:
+                # 토큰 마스킹 (보안)
+                info["signal_token"] = info["signal_token"][:8] + "..." if info.get("signal_token") else None
+                signal_bots_info.append(info)
+
+        # API Direct 활성 심볼도 함께 조회
+        active_symbols = await multi_symbol_service.get_active_symbols(okx_uid)
+
+        return {
+            "status": "success",
+            "okx_uid": okx_uid,
+            "signal_bots": {
+                "count": len(signal_bots_info),
+                "bots": signal_bots_info
+            },
+            "api_direct": {
+                "count": len(active_symbols),
+                "symbols": active_symbols
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Signal Bot 목록 조회 실패 (okx_uid: {okx_uid}): {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Signal Bot 목록 조회 실패: {str(e)}"
+        )
+
+
+@router.get(
+    "/running_summary",
+    summary="실행 중인 모든 트레이딩 요약 (API Direct + Signal Bot)"
+)
+async def get_running_summary():
+    """
+    실행 중인 모든 트레이딩 요약 정보 조회
+    API Direct 모드와 Signal Bot 모드를 구분하여 표시
+
+    Returns:
+        실행 중인 트레이딩 요약
+    """
+    try:
+        async with redis_context(timeout=RedisTimeout.NORMAL_OPERATION) as redis:
+            if not await safe_ping(redis):
+                raise HTTPException(status_code=500, detail="Redis 연결 실패")
+
+            # === API Direct 모드 조회 ===
+            api_direct_users = {}
+            status_keys = await scan_keys_pattern("user:*:symbol:*:status", redis=redis)
+
+            for key in status_keys:
+                status = await redis.get(key)
+                if isinstance(status, bytes):
+                    status = status.decode('utf-8')
+
+                if status == "running":
+                    parts = key.split(":")
+                    if len(parts) >= 4 and parts[0] == 'user' and parts[2] == 'symbol':
+                        okx_uid = parts[1]
+                        symbol = parts[3]
+
+                        if okx_uid not in api_direct_users:
+                            api_direct_users[okx_uid] = []
+                        api_direct_users[okx_uid].append(symbol)
+
+            # === Signal Bot 모드 조회 ===
+            signal_bot_users = {}
+            signal_bot_keys = await scan_keys_pattern("user:*:signal_bots", redis=redis)
+
+            for key in signal_bot_keys:
+                parts = key.split(":")
+                if len(parts) >= 2 and parts[0] == 'user':
+                    okx_uid = parts[1]
+                else:
+                    continue
+
+                tokens = await redis.smembers(key)
+                token_info_list = []
+
+                for token in tokens:
+                    if isinstance(token, bytes):
+                        token = token.decode('utf-8')
+
+                    # Signal Bot 상태 확인
+                    status_key = f"user:{okx_uid}:signal_bot:{token}:status"
+                    status = await redis.get(status_key)
+                    if isinstance(status, bytes):
+                        status = status.decode('utf-8')
+
+                    symbol_key = f"user:{okx_uid}:signal_bot:{token}:symbol"
+                    symbol = await redis.get(symbol_key)
+                    if isinstance(symbol, bytes):
+                        symbol = symbol.decode('utf-8')
+
+                    if status == "running":
+                        token_info_list.append({
+                            "token": token[:8] + "...",
+                            "symbol": symbol
+                        })
+
+                if token_info_list:
+                    signal_bot_users[okx_uid] = token_info_list
+
+            # 통계 계산
+            total_api_direct = sum(len(symbols) for symbols in api_direct_users.values())
+            total_signal_bots = sum(len(bots) for bots in signal_bot_users.values())
+
+            return {
+                "status": "success",
+                "summary": {
+                    "total_running": total_api_direct + total_signal_bots,
+                    "api_direct_count": total_api_direct,
+                    "signal_bot_count": total_signal_bots,
+                    "unique_users": len(set(api_direct_users.keys()) | set(signal_bot_users.keys()))
+                },
+                "api_direct": {
+                    "user_count": len(api_direct_users),
+                    "users": api_direct_users
+                },
+                "signal_bot": {
+                    "user_count": len(signal_bot_users),
+                    "users": signal_bot_users
+                }
+            }
+
+    except Exception as e:
+        logger.error(f"running_summary 조회 실패: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"running_summary 조회 실패: {str(e)}"
         )

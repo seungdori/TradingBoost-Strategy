@@ -16,6 +16,10 @@ import certifi
 
 from HYPERRSI.src.bot.telegram_message import send_telegram_message
 from HYPERRSI.src.core.logger import get_logger
+from HYPERRSI.src.trading.utils.position_handler.constants import (
+    COOLDOWN_KEY,
+    POSITION_KEY,
+)
 from shared.database.redis import get_redis
 from shared.database.redis_patterns import scan_keys_pattern
 
@@ -306,7 +310,7 @@ class OKXWebsocketManager:
                     
                     # 롱/숏 구분을 위한 방향 설정
                     direction = "long" if side == "long" else "short"
-                    position_key = f"user:{user_id}:position:{symbol}:{direction}"
+                    position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=direction)
                     
                     # 현재가 가져오기
                     current_price = float(position.get('markPx', '0'))
@@ -559,8 +563,8 @@ class OKXWebsocketManager:
                 f"🔒 TP{tp_index} 체결 후 SL을 브레이크이븐({break_even_price:.2f})으로 이동",
                 user_id
             ))
-            
-            position_key = f"user:{user_id}:position:{symbol}:{side}"
+
+            position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side)
             await redis.hset(position_key, "sl_price", break_even_price)
             return result
             
@@ -617,8 +621,8 @@ class OKXWebsocketManager:
                 pos_direction = "long"
             elif pos_direction == "sell":
                 pos_direction = "short"
-                
-            cooldown_key = f"user:{user_id}:cooldown:{symbol}:{pos_direction}"
+
+            cooldown_key = COOLDOWN_KEY.format(user_id=user_id, symbol=symbol, side=pos_direction)
             # Get cooldown_time from user settings (default 300 seconds)
             settings_str = await redis.get(f"user:{user_id}:settings")
             cooldown_seconds = 300  # default

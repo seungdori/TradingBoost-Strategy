@@ -128,14 +128,17 @@ def calc_vidya(series, smooth_period=9, momentum_source=None):
 
     for i in range(1, len(series)):
         # Chande Momentum Oscillator (CMO) 계산 - N=9 고정
+        # Pine Script: for k = 1 to 9, diff = close[k] - close[k-1]
+        # close[k] = k개 전 바, close[k-1] = k-1개 전 바 (close[0] = 현재)
         sum_up, sum_down = 0.0, 0.0
         for k in range(1, 10):
             if i - k < 0:
                 break
 
-            # momentum_source로 모멘텀 계산 (Pine의 vidya_pricc = close)
+            # Pine: close[k] - close[k-1] = (k개 전) - (k-1개 전)
+            # Python: momentum_source[i-k] - momentum_source[i-k+1] = (k개 전) - (k-1개 전)
             curr_val = momentum_source[i - k]
-            prev_val = momentum_source[i - k - 1] if (i - k - 1 >= 0) else momentum_source[0]
+            prev_val = momentum_source[i - k + 1]  # 수정: i-k-1 → i-k+1 (Pine의 close[k-1] = k-1개 전)
             diff = curr_val - prev_val
 
             if diff > 0:

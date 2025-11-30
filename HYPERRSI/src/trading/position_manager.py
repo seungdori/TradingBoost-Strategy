@@ -9,6 +9,7 @@ from redis import WatchError
 
 from HYPERRSI.src.trading.models import Position
 from HYPERRSI.src.trading.services.get_current_price import get_current_price
+from HYPERRSI.src.trading.utils.position_handler.constants import POSITION_KEY
 from HYPERRSI.telegram_message import send_telegram_message
 from shared.database.redis_helper import get_redis_client
 from shared.logging import get_logger
@@ -57,7 +58,7 @@ class PositionStateManager:
             side = "short"
         elif side == "buy":
             side = "long"
-        return f"user:{user_id}:position:{symbol}:{side}"
+        return POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side)
 
 
     async def cleanup_old_semaphores(self, max_age: int = 3600):
@@ -225,7 +226,7 @@ class PositionStateManager:
             side = "short"
         elif side == "buy":
             side = "long"
-        position_key = f"user:{user_id}:position:{symbol}:{side}"
+        position_key = POSITION_KEY.format(user_id=user_id, symbol=symbol, side=side)
         if position_qty_delta is None:
             position_qty_delta = contracts_amount_delta / 0.01
             
