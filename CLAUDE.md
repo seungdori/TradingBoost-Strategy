@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TradingBoost-Strategy is a cryptocurrency automated trading system monorepo implementing multiple trading strategies (HYPERRSI and GRID) with shared infrastructure components.
 
-**Tech Stack**: Python 3.9+, FastAPI, Celery, Redis, WebSockets, CCXT
+**Tech Stack**: Python 3.12+, FastAPI, Celery, Redis, WebSockets, CCXT
 
 **Supported Exchanges**: OKX (primary), Binance, Bitget, Upbit, Bybit
 
